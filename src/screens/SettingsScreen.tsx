@@ -8,12 +8,14 @@ import { TencentCOSProvider } from '../services/TencentCOSProvider'; // Import p
 
 export const SettingsScreen = () => {
     const { t } = useTranslation();
-    const { cosConfig, setCosConfig } = useSettingsStore();
+    const { cosConfig, setCosConfig, flashNoteConfig, setFlashNoteConfig } = useSettingsStore();
 
     const [secretId, setSecretId] = useState('');
     const [secretKey, setSecretKey] = useState('');
     const [bucket, setBucket] = useState(cosConfig.bucket);
     const [region, setRegion] = useState(cosConfig.region);
+    const [flashNotePath, setFlashNotePath] = useState(flashNoteConfig.path);
+    const [flashNoteFilename, setFlashNoteFilename] = useState(flashNoteConfig.filename);
     const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
@@ -43,7 +45,7 @@ export const SettingsScreen = () => {
         try {
             console.log('Validating new COS configuration...');
             const testProvider = new TencentCOSProvider(secretId, secretKey, bucket, region);
-            
+
             await new Promise((resolve, reject) => {
                 // @ts-ignore
                 testProvider.cos.getBucket({ Bucket: bucket, Region: region, MaxKeys: 0 }, (err, data) => {
@@ -55,7 +57,9 @@ export const SettingsScreen = () => {
             console.log('Validation successful.');
 
             await Keychain.setGenericPassword(secretId, secretKey);
+            await Keychain.setGenericPassword(secretId, secretKey);
             setCosConfig({ bucket, region });
+            setFlashNoteConfig({ path: flashNotePath, filename: flashNoteFilename });
 
             Alert.alert(t('settings.success'), t('settings.success'));
 
@@ -124,6 +128,30 @@ export const SettingsScreen = () => {
                     value={region}
                     onChangeText={setRegion}
                     placeholder="ap-guangzhou"
+                />
+            </View>
+
+            <View style={styles.divider} />
+
+            <Text style={styles.header}>{t('settings.flashNote')}</Text>
+
+            <View style={styles.inputGroup}>
+                <Text style={styles.label}>{t('settings.flashNotePath')}</Text>
+                <TextInput
+                    style={styles.input}
+                    value={flashNotePath}
+                    onChangeText={setFlashNotePath}
+                    placeholder="notes/"
+                />
+            </View>
+
+            <View style={styles.inputGroup}>
+                <Text style={styles.label}>{t('settings.flashNoteFilename')}</Text>
+                <TextInput
+                    style={styles.input}
+                    value={flashNoteFilename}
+                    onChangeText={setFlashNoteFilename}
+                    placeholder="flash_notes.md"
                 />
             </View>
 

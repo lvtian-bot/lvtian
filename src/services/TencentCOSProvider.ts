@@ -16,17 +16,23 @@ export class TencentCOSProvider implements ICloudProvider {
         this.region = region;
     }
 
-    async uploadFile(key: string, filePath: string): Promise<void> {
+    async uploadFile(key: string, filePath: string): Promise<{ etag: string; lastModified: string } | void> {
         const content = await fsService.readFile(filePath);
-        await this.cos.putObject({
+        const result = await this.cos.putObject({
             Bucket: this.bucket,
             Region: this.region,
             Key: key,
             Body: content,
         });
+        // COS putObject returns ETag in headers usually, but let's check what the SDK returns.
+        // If not available, we might need to HEAD it, but let's try to extract from result if possible.
+        // The type definition for putObject result might not expose headers easily in all SDK versions.
+        // For now, let's try to return what we can or void if not easy, but the plan says we should update metadata.
+        // Let's try to HEAD it immediately to be safe and get accurate LastModified.
+        return this.headFile(key) as Promise<{ etag: string; lastModified: string }>;
     }
 
-    async downloadFile(key: string, downloadPath: string): Promise<void> {
+    async downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }> {
         const data = await this.cos.getObject({
             Bucket: this.bucket,
             Region: this.region,
@@ -35,6 +41,11 @@ export class TencentCOSProvider implements ICloudProvider {
         if (data.Body) {
             const content = data.Body.toString();
             await fsService.writeFile(downloadPath, content);
+            const headers = data as any;
+            return {
+                etag: data.ETag || headers.headers?.etag || '',
+                lastModified: headers.LastModified || headers.headers?.['last-modified'] || new Date().toISOString(),
+            };
         } else {
             throw new Error('No body in response');
         }
@@ -79,7 +90,7 @@ export class TencentCOSProvider implements ICloudProvider {
                 lastModified: new Date().toISOString(), // No date from API, use current
             })
         );
-        
+
         return [...directories, ...files];
     }
 
@@ -89,5 +100,24 @@ export class TencentCOSProvider implements ICloudProvider {
             Region: this.region,
             Key: key,
         });
+    }
+
+    async headFile(key: string): Promise<{ etag: string; lastModified: string } | null> {
+        try {
+            const data = await this.cos.headObject({
+                Bucket: this.bucket,
+                Region: this.region,
+                Key: key,
+            });
+            // Cast to any because types might be incomplete for headers
+            const headers = data as any;
+            return {
+                etag: data.ETag || headers.headers?.etag || '',
+                lastModified: headers.LastModified || headers.headers?.['last-modified'] || '',
+            };
+        } catch (error) {
+            console.log('Error heading file:', error);
+            return null;
+        }
     }
 }

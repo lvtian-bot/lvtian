@@ -88,6 +88,23 @@ class FileSystemService {
         return await RNFS.exists(fullPath);
     }
 
+    async stat(path: string): Promise<FileItem | null> {
+        const fullPath = `${this.rootPath}/${path}`;
+        try {
+            const statResult = await RNFS.stat(fullPath);
+            return {
+                name: path.split('/').pop() || '',
+                path: statResult.path,
+                size: Number(statResult.size),
+                isDirectory: statResult.isDirectory(),
+                mtime: statResult.mtime ? new Date(statResult.mtime) : new Date(),
+            };
+        } catch (error) {
+            console.error('Error getting file stats:', error);
+            return null;
+        }
+    }
+
     getRootPath(): string {
         return this.rootPath;
     }

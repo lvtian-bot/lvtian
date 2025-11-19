@@ -12,6 +12,11 @@ interface SettingsState {
         region: string;
     };
     setCosConfig: (config: Partial<SettingsState['cosConfig']>) => void;
+    flashNoteConfig: {
+        path: string;
+        filename: string;
+    };
+    setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -27,6 +32,12 @@ export const useSettingsStore = create<SettingsState>()(
             },
             setCosConfig: (config) =>
                 set((state) => ({ cosConfig: { ...state.cosConfig, ...config } })),
+            flashNoteConfig: {
+                path: '',
+                filename: 'flash_notes.md',
+            },
+            setFlashNoteConfig: (config) =>
+                set((state) => ({ flashNoteConfig: { ...state.flashNoteConfig, ...config } })),
         }),
         {
             name: 'settings-storage',

@@ -5,11 +5,19 @@ import { fsService } from '../services/FileSystemService';
 import { syncService } from '../services/SyncService';
 import { theme } from '../utils/theme';
 
-const FLASH_NOTE_FILE = 'flash_notes.md';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { useTranslation } from 'react-i18next';
 
 export const NewFlashNoteScreen = () => {
     const [inputText, setInputText] = useState('');
     const navigation = useNavigation();
+    const { flashNoteConfig } = useSettingsStore();
+    const { t } = useTranslation();
+
+    const getFlashNotePath = () => {
+        const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
+        return path.replace(/\/+/g, '/');
+    };
 
     const handleSend = async () => {
         if (!inputText.trim()) return;
@@ -17,22 +25,23 @@ export const NewFlashNoteScreen = () => {
         const now = new Date();
         const timestamp = now.toISOString().replace('T', ' ').split('.')[0];
         const newEntry = `
-# ${timestamp}
+## ${timestamp}
 ${inputText}
 `;
 
         try {
+            const filePath = getFlashNotePath();
             let currentContent = '';
             try {
-                currentContent = await fsService.readFile(FLASH_NOTE_FILE);
+                currentContent = await fsService.readFile(filePath);
             } catch (e) {
                 // File doesn't exist, start empty
             }
 
             const newContent = currentContent + newEntry;
-            await fsService.writeFile(FLASH_NOTE_FILE, newContent);
+            await fsService.writeFile(filePath, newContent);
 
-            syncService.syncFile(FLASH_NOTE_FILE);
+            syncService.syncFile(filePath);
 
             setInputText('');
             Keyboard.dismiss();
@@ -44,17 +53,17 @@ ${inputText}
 
     return (
         <View style={styles.container}>
-            <Text style={styles.sheetTitle}>New Flash Note</Text>
+            <Text style={styles.sheetTitle}>{t('timeline.title')}</Text>
             <TextInput
                 style={styles.input}
                 multiline
-                placeholder="What's on your mind?"
+                placeholder={t('timeline.placeholder')}
                 value={inputText}
                 onChangeText={setInputText}
                 autoFocus
             />
             <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-                <Text style={styles.sendButtonText}>Send</Text>
+                <Text style={styles.sendButtonText}>{t('common.send')}</Text>
             </TouchableOpacity>
         </View>
     );

@@ -1,9 +1,10 @@
 export interface ICloudProvider {
-    uploadFile(key: string, filePath: string): Promise<void>;
-    downloadFile(key: string, downloadPath: string): Promise<void>;
+    uploadFile(key: string, filePath: string): Promise<{ etag: string; lastModified: string } | void>;
+    downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }>;
     getCloudFileContent(key: string): Promise<string>;
     listFiles(prefix?: string): Promise<CloudFileItem[]>;
     deleteFile(key: string): Promise<void>;
+    headFile(key: string): Promise<{ etag: string; lastModified: string } | null>;
 }
 
 export interface CloudFileItem {
@@ -23,12 +24,12 @@ class CloudService {
         return this.provider !== null;
     }
 
-    async uploadFile(key: string, filePath: string): Promise<void> {
+    async uploadFile(key: string, filePath: string): Promise<{ etag: string; lastModified: string } | void> {
         if (!this.provider) throw new Error('Cloud provider not configured');
         return this.provider.uploadFile(key, filePath);
     }
 
-    async downloadFile(key: string, downloadPath: string): Promise<void> {
+    async downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }> {
         if (!this.provider) throw new Error('Cloud provider not configured');
         return this.provider.downloadFile(key, downloadPath);
     }
@@ -46,6 +47,11 @@ class CloudService {
     async deleteFile(key: string): Promise<void> {
         if (!this.provider) throw new Error('Cloud provider not configured');
         return this.provider.deleteFile(key);
+    }
+
+    async headFile(key: string): Promise<{ etag: string; lastModified: string } | null> {
+        if (!this.provider) throw new Error('Cloud provider not configured');
+        return this.provider.headFile(key);
     }
 }
 

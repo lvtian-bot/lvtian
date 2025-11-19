@@ -24,9 +24,10 @@ class SyncService {
     }
 
     async syncFile(filePath: string) {
-        const fileName = filePath.split('/').pop() || 'untitled.md';
+        // Use filePath as key to maintain directory structure
+        const key = filePath;
         // Add to queue
-        useSyncStore.getState().addToQueue(filePath, fileName);
+        useSyncStore.getState().addToQueue(filePath, key);
         // Trigger processing
         this.processQueue();
     }
@@ -36,6 +37,7 @@ class SyncService {
         this.isSyncing = true;
 
         const { uploadQueue, updateItemStatus, removeFromQueue, incrementRetry } = useSyncStore.getState();
+        const { setMetadata } = require('../store/useFileMetadataStore').useFileMetadataStore.getState();
         const pendingItems = uploadQueue.filter(item => item.status === 'pending' || item.status === 'failed');
 
         for (const item of pendingItems) {
@@ -51,7 +53,10 @@ class SyncService {
                 // Conflict resolution is mostly on READ or if upload fails due to version mismatch (if we had versions).
                 // Here we just upload.
 
-                await cloudService.uploadFile(item.key, item.filePath);
+                const result = await cloudService.uploadFile(item.key, item.filePath);
+                if (result) {
+                    setMetadata(item.filePath, result.etag, result.lastModified);
+                }
                 removeFromQueue(item.id);
             } catch (error) {
                 console.error('Upload failed', error);
@@ -90,7 +95,9 @@ class SyncService {
         await fsService.moveFile(filePath, newPath);
 
         // Download new version
-        await cloudService.downloadFile(fileName, filePath);
+        const result = await cloudService.downloadFile(fileName, filePath);
+        const { setMetadata } = require('../store/useFileMetadataStore').useFileMetadataStore.getState();
+        setMetadata(filePath, result.etag, result.lastModified);
 
         // Upload the backup
         this.syncFile(newPath);

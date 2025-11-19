@@ -20,6 +20,18 @@
       "network": "Network error. Please check your internet connection."
     }
   },
+  "timeline": {
+    "title": "Flash Notes",
+    "add": "Add",
+    "placeholder": "What's on your mind?",
+    "updateAvailable": "New version available. Tap to update.",
+    "updating": "Updating..."
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "send": "Send"
+  },
   "settings": {
     "saveAndValidate": "Validate and Save",
     "success": "Configuration validated and saved successfully!",
@@ -30,7 +42,10 @@
       "bucket": "Validation failed: Incorrect Bucket name or Region.",
       "network": "Validation failed: Network error. Please check your internet connection.",
       "notEmpty": "All configuration fields are required."
-    }
+    },
+    "flashNote": "Flash Note Settings",
+    "flashNotePath": "Storage Path (e.g. notes/)",
+    "flashNoteFilename": "Filename (e.g. flash_notes.md)"
   },
   "fileItem": {
     "folder": "Folder",

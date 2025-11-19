@@ -1,6 +1,6 @@
 {
   "tabs": {
-    "timeline": "Flash Notes",
+    "timeline": "闪念笔记",
     "browser": "文件",
     "settings": "设置"
   },
@@ -20,6 +20,18 @@
       "network": "网络连接错误，请检查您的网络设置。"
     }
   },
+  "timeline": {
+    "title": "闪念笔记",
+    "add": "添加",
+    "placeholder": "有什么想法？",
+    "updateAvailable": "云端有新版本，点击更新",
+    "updating": "正在更新..."
+  },
+  "common": {
+    "save": "保存",
+    "cancel": "取消",
+    "send": "发送"
+  },
   "settings": {
     "saveAndValidate": "验证并保存配置",
     "success": "配置验证通过并已保存！",
@@ -30,7 +42,10 @@
       "bucket": "验证失败：存储桶 (Bucket) 名称或区域 (Region) 错误。",
       "network": "验证失败：网络错误，请检查你的网络连接。",
       "notEmpty": "所有配置项都不能为空"
-    }
+    },
+    "flashNote": "闪念笔记设置",
+    "flashNotePath": "存储路径 (例如: notes/)",
+    "flashNoteFilename": "文件名 (例如: flash_notes.md)"
   },
   "fileItem": {
     "folder": "文件夹",
