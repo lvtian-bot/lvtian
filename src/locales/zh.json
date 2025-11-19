@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "timeline": "Flash Notes",
+    "browser": "文件",
+    "settings": "设置"
+  },
+  "browser": {
+    "goBack": "返回",
+    "emptyTitle": "空空如也",
+    "emptyMessage": "您的云存储中还没有任何文件。",
+    "loadingFailedTitle": "加载失败",
+    "retry": "重试",
+    "unconfiguredTitle": "未配置云服务",
+    "unconfiguredMessage": "请先在“设置”页面中配置您的云存储服务，以便开始使用。",
+    "goToSettings": "前往设置",
+    "error": {
+      "default": "无法加载文件，请稍后重试。",
+      "auth": "云服务认证失败，请前往“设置”检查您的密钥。",
+      "bucket": "找不到指定的存储桶(Bucket)，请前往“设置”检查您的配置。",
+      "network": "网络连接错误，请检查您的网络设置。"
+    }
+  },
+  "settings": {
+    "saveAndValidate": "验证并保存配置",
+    "success": "配置验证通过并已保存！",
+    "failure": "保存失败",
+    "error": {
+      "validation": "验证失败，请检查你的网络和配置。",
+      "auth": "验证失败：Secret ID 或 Secret Key 错误，请仔细检查。",
+      "bucket": "验证失败：存储桶 (Bucket) 名称或区域 (Region) 错误。",
+      "network": "验证失败：网络错误，请检查你的网络连接。",
+      "notEmpty": "所有配置项都不能为空"
+    }
+  },
+  "fileItem": {
+    "folder": "文件夹",
+    "kb": "KB"
+  }
+}

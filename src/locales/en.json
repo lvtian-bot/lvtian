@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "timeline": "Flash Notes",
+    "browser": "Files",
+    "settings": "Settings"
+  },
+  "browser": {
+    "goBack": "Back",
+    "emptyTitle": "Empty",
+    "emptyMessage": "There are no files in your cloud storage yet.",
+    "loadingFailedTitle": "Failed to Load",
+    "retry": "Retry",
+    "unconfiguredTitle": "Cloud Service Not Configured",
+    "unconfiguredMessage": "Please configure your cloud storage service in the Settings page to get started.",
+    "goToSettings": "Go to Settings",
+    "error": {
+      "default": "Could not load files, please try again later.",
+      "auth": "Cloud service authentication failed. Please check your keys in Settings.",
+      "bucket": "The specified bucket was not found. Please check your configuration in Settings.",
+      "network": "Network error. Please check your internet connection."
+    }
+  },
+  "settings": {
+    "saveAndValidate": "Validate and Save",
+    "success": "Configuration validated and saved successfully!",
+    "failure": "Save Failed",
+    "error": {
+      "validation": "Validation failed. Please check your network and configuration.",
+      "auth": "Validation failed: Incorrect Secret ID or Secret Key. Please check carefully.",
+      "bucket": "Validation failed: Incorrect Bucket name or Region.",
+      "network": "Validation failed: Network error. Please check your internet connection.",
+      "notEmpty": "All configuration fields are required."
+    }
+  },
+  "fileItem": {
+    "folder": "Folder",
+    "kb": "KB"
+  }
+}

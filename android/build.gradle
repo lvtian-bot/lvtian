@@ -8,6 +8,9 @@ buildscript {
         kotlinVersion = "2.1.20"
     }
     repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
         google()
         mavenCentral()
     }
@@ -19,3 +22,46 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+subprojects {
+    buildscript {
+        repositories {
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+            google()
+            mavenCentral()
+        }
+    }
+}
+
+allprojects {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        google()
+        mavenCentral()
+    }
+}
+
+subprojects {
+    project.pluginManager.withPlugin('com.android.library') {
+        android {
+            ndkVersion = rootProject.ext.ndkVersion
+            
+            defaultConfig {
+                externalNativeBuild {
+                    cmake {
+                        arguments.add("-DHERMES_CMAKE_FILE_PATH=${project.rootProject.buildDir}/react-native-0.82.1/hermes-engine/hermes-config.cmake")
+                    }
+                }
+            }
+        }
+    }
+    project.pluginManager.withPlugin('com.android.application') {
+        android {
+            ndkVersion = rootProject.ext.ndkVersion
+        }
+    }
+}
