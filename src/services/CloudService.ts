@@ -11,6 +11,7 @@ export interface CloudFileItem {
     key: string;
     size: number;
     lastModified: string;
+    etag: string;
 }
 
 class CloudService {

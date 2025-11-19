@@ -1,16 +1,43 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
     <style>
-        body { margin: 0; padding: 0; }
-        .CodeMirror { height: 100vh; border: none; border-radius: 0; }
-        .editor-toolbar { border: none; border-bottom: 1px solid #ddd; border-radius: 0; }
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        .CodeMirror {
+            height: 100vh;
+            border: none;
+            border-radius: 0;
+            font-size: 16px;
+        }
+
+        /* 强制设置行高 */
+        .CodeMirror,
+        .CodeMirror-scroll,
+        .CodeMirror-sizer,
+        .CodeMirror-lines,
+        .CodeMirror-line,
+        .CodeMirror pre.CodeMirror-line,
+        .CodeMirror pre.CodeMirror-line-like {
+            line-height: 28px !important;
+        }
+
+        .editor-toolbar {
+            border: none;
+            border-bottom: 1px solid #ddd;
+            border-radius: 0;
+        }
     </style>
 </head>
+
 <body>
     <textarea id="editor"></textarea>
     <script>
@@ -21,6 +48,22 @@
             toolbar: ["bold", "italic", "heading", "|", "quote", "unordered-list", "ordered-list", "|", "link", "image", "|", "preview", "side-by-side", "fullscreen"],
         });
 
+        // 强制设置CodeMirror行高
+        easyMDE.codemirror.setOption('lineWrapping', true);
+        easyMDE.codemirror.refresh();
+
+        // 等待CodeMirror完全加载后再设置样式
+        setTimeout(() => {
+            const cmElement = document.querySelector('.CodeMirror');
+            if (cmElement) {
+                cmElement.style.setProperty('line-height', '28px', 'important');
+            }
+            const cmLines = document.querySelectorAll('.CodeMirror-line, .CodeMirror pre.CodeMirror-line');
+            cmLines.forEach(line => {
+                line.style.setProperty('line-height', '28px', 'important');
+            });
+        }, 100);
+
         // Communication with React Native
         // Receive content
         function setContent(content) {
@@ -29,10 +72,10 @@
             }
         }
 
-        document.addEventListener("message", function(event) {
+        document.addEventListener("message", function (event) {
             setContent(event.data);
         });
-        window.addEventListener("message", function(event) {
+        window.addEventListener("message", function (event) {
             setContent(event.data);
         });
 
@@ -43,20 +86,31 @@
             }
         }
 
-        easyMDE.codemirror.on("change", function(){
-            // Auto-save or just send on demand? 
-            // For now, let's send on every change or debounce?
-            // Let's just expose a function to get content, or send on change.
-            // Sending on every change might be heavy for the bridge.
-            // But we need it for "Copy on Write" or manual save.
-            // Let's send it.
-            // sendContent(); 
+        // 自动保存定时器
+        let autoSaveTimer;
+        easyMDE.codemirror.on("change", function () {
+            // 3秒无操作后自动保存到本地（不触发云同步）
+            clearTimeout(autoSaveTimer);
+            autoSaveTimer = setTimeout(() => {
+                if (window.ReactNativeWebView) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'autoSave',
+                        content: easyMDE.value()
+                    }));
+                }
+            }, 3000);
         });
-        
-        // Expose a global function to get content
-        window.getContent = function() {
-            sendContent();
+
+        // 手动保存（触发云同步）
+        window.getContent = function () {
+            if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'manualSave',
+                    content: easyMDE.value()
+                }));
+            }
         }
     </script>
 </body>
+
 </html>

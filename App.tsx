@@ -38,7 +38,7 @@ function App(): React.JSX.Element {
         cloudService.setProvider(null);
       }
     };
-    
+
     initializeCloud();
   }, [cosConfig]);
 

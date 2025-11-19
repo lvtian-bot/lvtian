@@ -20,6 +20,19 @@ interface SyncState {
     clearQueue: () => void;
 }
 
+// Counter for generating unique IDs
+let idCounter = 0;
+
+/**
+ * Generates a unique ID using timestamp + counter
+ * More reliable than Math.random() which could theoretically collide
+ */
+const generateUniqueId = (): string => {
+    const timestamp = Date.now();
+    const counter = idCounter++;
+    return `${timestamp}-${counter}`;
+};
+
 export const useSyncStore = create<SyncState>()(
     persist(
         (set) => ({
@@ -29,7 +42,7 @@ export const useSyncStore = create<SyncState>()(
                     uploadQueue: [
                         ...state.uploadQueue,
                         {
-                            id: Math.random().toString(36).substr(2, 9),
+                            id: generateUniqueId(),
                             filePath,
                             key,
                             status: 'pending',

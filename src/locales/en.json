@@ -1,7 +1,7 @@
 {
   "tabs": {
     "timeline": "Flash Notes",
-    "browser": "Files",
+    "browser": "Knowledge Base",
     "settings": "Settings"
   },
   "browser": {
@@ -13,6 +13,10 @@
     "unconfiguredTitle": "Cloud Service Not Configured",
     "unconfiguredMessage": "Please configure your cloud storage service in the Settings page to get started.",
     "goToSettings": "Go to Settings",
+    "confirmDelete": "Are you sure you want to delete {{fileName}}? This action cannot be undone.",
+    "deleteSuccess": "File deleted successfully!",
+    "deleteFailed": "Failed to delete file.",
+    "root": "Root",
     "error": {
       "default": "Could not load files, please try again later.",
       "auth": "Cloud service authentication failed. Please check your keys in Settings.",
@@ -25,12 +29,24 @@
     "add": "Add",
     "placeholder": "What's on your mind?",
     "updateAvailable": "New version available. Tap to update.",
-    "updating": "Updating..."
+    "updating": "Updating...",
+    "editTitle": "Edit Flash Note",
+    "newTitle": "New Flash Note",
+    "editError": "Edit failed: Could not find the original note file.",
+    "noteNotFound": "Note not found. The file may have been modified externally. Your edit will be appended as a new note.",
+    "saveError": "Failed to save flash note",
+    "emptyNoteError": "Note content cannot be empty!",
+    "deleteError": "Failed to delete flash note"
   },
   "common": {
+    "back": "Back",
     "save": "Save",
     "cancel": "Cancel",
-    "send": "Send"
+    "send": "Send",
+    "error": "Error",
+    "confirm": "Confirm",
+    "edit": "Edit",
+    "delete": "Delete"
   },
   "settings": {
     "saveAndValidate": "Validate and Save",
@@ -43,9 +59,19 @@
       "network": "Validation failed: Network error. Please check your internet connection.",
       "notEmpty": "All configuration fields are required."
     },
+    "cosConfig": "COS Configuration",
+    "saveCos": "Validate and Save COS Config",
+    "saveFlashNote": "Save Flash Note Config",
     "flashNote": "Flash Note Settings",
     "flashNotePath": "Storage Path (e.g. notes/)",
-    "flashNoteFilename": "Filename (e.g. flash_notes.md)"
+    "flashNoteFilename": "Filename (e.g. flash_notes.md)",
+    "markdownStyle": "Markdown Style",
+    "themes": {
+      "default": "Default",
+      "github": "GitHub",
+      "solarized": "Solarized",
+      "night": "Night Mode"
+    }
   },
   "fileItem": {
     "folder": "Folder",

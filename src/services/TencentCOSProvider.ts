@@ -43,7 +43,7 @@ export class TencentCOSProvider implements ICloudProvider {
             await fsService.writeFile(downloadPath, content);
             const headers = data as any;
             return {
-                etag: data.ETag || headers.headers?.etag || '',
+                etag: (data.ETag || headers.headers?.etag || '').replace(/"/g, ''),
                 lastModified: headers.LastModified || headers.headers?.['last-modified'] || new Date().toISOString(),
             };
         } else {
@@ -80,6 +80,7 @@ export class TencentCOSProvider implements ICloudProvider {
                 key: item.Key,
                 size: parseInt(item.Size),
                 lastModified: item.LastModified,
+                etag: (item.ETag || '').replace(/"/g, ''),
             }));
 
         // Map directories from CommonPrefixes
@@ -88,6 +89,7 @@ export class TencentCOSProvider implements ICloudProvider {
                 key: item.Prefix, // e.g., "notes/"
                 size: 0, // Directories have no size
                 lastModified: new Date().toISOString(), // No date from API, use current
+                etag: '', // Directories don't have etags
             })
         );
 
@@ -95,10 +97,60 @@ export class TencentCOSProvider implements ICloudProvider {
     }
 
     async deleteFile(key: string): Promise<void> {
-        await this.cos.deleteObject({
-            Bucket: this.bucket,
-            Region: this.region,
-            Key: key,
+        console.log('=== DELETE FILE DEBUG ===');
+        console.log('Key:', key);
+        console.log('Bucket:', this.bucket);
+        console.log('Region:', this.region);
+
+        // Workaround: cos-js-sdk-v5 has CORS issues with DELETE in React Native
+        // Use SDK to generate signed URL, then use native fetch to send DELETE request
+        return new Promise((resolve, reject) => {
+            try {
+                // Get signed URL from SDK
+                const url = this.cos.getObjectUrl({
+                    Bucket: this.bucket,
+                    Region: this.region,
+                    Key: key,
+                    Method: 'DELETE',
+                    Sign: true,
+                    Expires: 60, // URL valid for 60 seconds
+                }, (err: any, data: any) => {
+                    if (err) {
+                        console.error('Failed to generate signed URL:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    console.log('Signed URL generated:', data.Url);
+
+                    // Use native fetch to send DELETE request (works better in React Native)
+                    fetch(data.Url, {
+                        method: 'DELETE',
+                        headers: {
+                            'Accept': '*/*',
+                        }
+                    })
+                    .then(response => {
+                        console.log('Delete response status:', response.status);
+                        if (response.ok || response.status === 204) {
+                            console.log('Delete successful via fetch');
+                            resolve();
+                        } else {
+                            response.text().then(text => {
+                                console.error('Delete failed:', response.status, text);
+                                reject(new Error(`Delete failed with status ${response.status}: ${text}`));
+                            });
+                        }
+                    })
+                    .catch(fetchError => {
+                        console.error('Fetch error:', fetchError);
+                        reject(fetchError);
+                    });
+                });
+            } catch (error) {
+                console.error('Exception in deleteFile:', error);
+                reject(error);
+            }
         });
     }
 
@@ -112,7 +164,7 @@ export class TencentCOSProvider implements ICloudProvider {
             // Cast to any because types might be incomplete for headers
             const headers = data as any;
             return {
-                etag: data.ETag || headers.headers?.etag || '',
+                etag: (data.ETag || headers.headers?.etag || '').replace(/"/g, ''),
                 lastModified: headers.LastModified || headers.headers?.['last-modified'] || '',
             };
         } catch (error) {

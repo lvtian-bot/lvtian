@@ -1,29 +1,38 @@
 export const colors = {
-    primary: '#0066FF', // Vibrant Blue
-    secondary: '#6C757D',
-    success: '#28A745',
-    danger: '#DC3545',
+    background: '#F5F5F7',
+    surface: '#FFFFFF',
+    primary: '#60A5FA',
+    primaryDark: '#3B82F6',
+    secondary: '#FF9F1C',
+    text: '#1F2933',
+    textSecondary: '#6B7280',
+    mutedText: '#6B7280',
+    border: '#E5E7EB',
+    danger: '#EF4444',
+    success: '#10B981',
     warning: '#FFC107',
     info: '#17A2B8',
-    light: '#F8F9FA',
-    dark: '#343A40',
     white: '#FFFFFF',
     black: '#000000',
-    background: '#F0F2F5',
-    surface: '#FFFFFF',
-    text: '#212529',
-    textSecondary: '#6C757D',
-    border: '#DEE2E6',
-    orange: '#FD7E14', // For unsynced files
+    orange: '#FF9F1C',
 };
 
 export const spacing = {
     xs: 4,
-    s: 8,
-    m: 16,
-    l: 24,
+    sm: 8,
+    s: 8,  // Keep for backward compatibility
+    md: 16,
+    m: 16, // Keep for backward compatibility
+    lg: 24,
+    l: 24, // Keep for backward compatibility
     xl: 32,
     xxl: 48,
+};
+
+export const radius = {
+    sm: 8,
+    md: 16,
+    lg: 24,
 };
 
 export const typography = {
@@ -37,5 +46,6 @@ export const typography = {
 export const theme = {
     colors,
     spacing,
+    radius,
     typography,
 };

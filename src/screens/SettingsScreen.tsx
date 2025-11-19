@@ -4,11 +4,12 @@ import * as Keychain from 'react-native-keychain';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
+import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
 import { TencentCOSProvider } from '../services/TencentCOSProvider'; // Import provider for testing
 
 export const SettingsScreen = () => {
     const { t } = useTranslation();
-    const { cosConfig, setCosConfig, flashNoteConfig, setFlashNoteConfig } = useSettingsStore();
+    const { cosConfig, setCosConfig, flashNoteConfig, setFlashNoteConfig, markdownTheme, setMarkdownTheme } = useSettingsStore();
 
     const [secretId, setSecretId] = useState('');
     const [secretKey, setSecretKey] = useState('');
@@ -16,7 +17,8 @@ export const SettingsScreen = () => {
     const [region, setRegion] = useState(cosConfig.region);
     const [flashNotePath, setFlashNotePath] = useState(flashNoteConfig.path);
     const [flashNoteFilename, setFlashNoteFilename] = useState(flashNoteConfig.filename);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isCosLoading, setIsCosLoading] = useState(false);
+    const [isFlashNoteLoading, setIsFlashNoteLoading] = useState(false);
 
     useEffect(() => {
         loadCredentials();
@@ -34,13 +36,13 @@ export const SettingsScreen = () => {
         }
     };
 
-    const handleSave = async () => {
+    const handleSaveCosConfig = async () => {
         if (!secretId || !secretKey || !bucket || !region) {
             Alert.alert(t('settings.failure'), t('settings.error.notEmpty'));
             return;
         }
 
-        setIsLoading(true);
+        setIsCosLoading(true);
 
         try {
             console.log('Validating new COS configuration...');
@@ -57,9 +59,7 @@ export const SettingsScreen = () => {
             console.log('Validation successful.');
 
             await Keychain.setGenericPassword(secretId, secretKey);
-            await Keychain.setGenericPassword(secretId, secretKey);
             setCosConfig({ bucket, region });
-            setFlashNoteConfig({ path: flashNotePath, filename: flashNoteFilename });
 
             Alert.alert(t('settings.success'), t('settings.success'));
 
@@ -81,13 +81,25 @@ export const SettingsScreen = () => {
             }
             Alert.alert(t('settings.failure'), errorMessage);
         } finally {
-            setIsLoading(false);
+            setIsCosLoading(false);
         }
+    };
+
+    const handleSaveFlashNoteConfig = () => {
+        if (!flashNotePath || !flashNoteFilename) {
+            Alert.alert(t('settings.failure'), t('settings.error.notEmpty'));
+            return;
+        }
+        setIsFlashNoteLoading(true);
+        // No validation needed for local paths for now, or simple check
+        setFlashNoteConfig({ path: flashNotePath, filename: flashNoteFilename });
+        setIsFlashNoteLoading(false);
+        Alert.alert(t('settings.success'), t('settings.success'));
     };
 
     return (
         <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
-            <Text style={styles.header}>COS Configuration</Text>
+            <Text style={styles.header}>{t('settings.cosConfig')}</Text>
 
             <View style={styles.inputGroup}>
                 <Text style={styles.label}>Secret ID</Text>
@@ -131,6 +143,14 @@ export const SettingsScreen = () => {
                 />
             </View>
 
+            <TouchableOpacity style={styles.button} onPress={handleSaveCosConfig} disabled={isCosLoading}>
+                {isCosLoading ? (
+                    <ActivityIndicator color={theme.colors.white} />
+                ) : (
+                    <Text style={styles.buttonText}>{t('settings.saveCos')}</Text>
+                )}
+            </TouchableOpacity>
+
             <View style={styles.divider} />
 
             <Text style={styles.header}>{t('settings.flashNote')}</Text>
@@ -155,13 +175,38 @@ export const SettingsScreen = () => {
                 />
             </View>
 
-            <TouchableOpacity style={styles.button} onPress={handleSave} disabled={isLoading}>
-                {isLoading ? (
+            <TouchableOpacity style={styles.button} onPress={handleSaveFlashNoteConfig} disabled={isFlashNoteLoading}>
+                {isFlashNoteLoading ? (
                     <ActivityIndicator color={theme.colors.white} />
                 ) : (
-                    <Text style={styles.buttonText}>{t('settings.saveAndValidate')}</Text>
+                    <Text style={styles.buttonText}>{t('settings.saveFlashNote')}</Text>
                 )}
             </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <Text style={styles.header}>{t('settings.markdownStyle')}</Text>
+            <View style={styles.themeContainer}>
+                {(Object.keys(markdownThemes) as MarkdownThemeKey[]).map((themeKey) => (
+                    <TouchableOpacity
+                        key={themeKey}
+                        style={[
+                            styles.themeButton,
+                            markdownTheme === themeKey && styles.themeButtonActive,
+                        ]}
+                        onPress={() => setMarkdownTheme(themeKey)}
+                    >
+                        <Text
+                            style={[
+                                styles.themeButtonText,
+                                markdownTheme === themeKey && styles.themeButtonTextActive,
+                            ]}
+                        >
+                            {t(`settings.themes.${themeKey}`)}
+                        </Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
 
             <View style={styles.divider} />
 
@@ -214,5 +259,30 @@ const styles = StyleSheet.create({
         height: 1,
         backgroundColor: theme.colors.border,
         marginVertical: theme.spacing.l,
+    },
+    themeContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: theme.spacing.s,
+    },
+    themeButton: {
+        paddingVertical: theme.spacing.s,
+        paddingHorizontal: theme.spacing.m,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+    },
+    themeButtonActive: {
+        backgroundColor: theme.colors.primary,
+        borderColor: theme.colors.primary,
+    },
+    themeButtonText: {
+        color: theme.colors.text,
+        fontSize: 14,
+    },
+    themeButtonTextActive: {
+        color: theme.colors.white,
+        fontWeight: 'bold',
     },
 });

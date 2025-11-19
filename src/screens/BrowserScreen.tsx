@@ -8,6 +8,7 @@ import {
     ActivityIndicator,
     TouchableOpacity,
     Alert,
+    BackHandler,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -19,6 +20,9 @@ import { RootStackParamList } from '../types/navigation';
 import { FileItem, fsService } from '../services/FileSystemService';
 import { cloudService } from '../services/CloudService';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useFileMetadataStore } from '../store/useFileMetadataStore';
+
+import { Breadcrumb } from '../components/Breadcrumb';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type Status = 'idle' | 'loading' | 'success' | 'error' | 'unconfigured';
@@ -85,27 +89,93 @@ export const BrowserScreen = () => {
         }
     }, [cosConfig, prefix, t]);
 
-    const handleGoBack = () => {
-        if (!prefix) return;
-        const parts = prefix.split('/').filter(Boolean);
-        parts.pop();
-        const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : '';
-        setPrefix(parentPrefix);
+    const handlePathPress = (newPath: string) => {
+        setPrefix(newPath);
     };
 
+    // Set a static title once
     useEffect(() => {
         navigation.setOptions({
-            title: prefix ? prefix.split('/').slice(-2, -1)[0] : t('tabs.browser'),
-            headerLeft: () =>
-                prefix ? (
-                    <TouchableOpacity onPress={handleGoBack} style={styles.headerBackButton}>
-                        <Text style={styles.headerBackButtonText}>{t('browser.goBack')}</Text>
-                    </TouchableOpacity>
-                ) : undefined,
+            title: t('tabs.browser'),
         });
-    }, [navigation, prefix, t]);
+    }, [navigation, t]);
+
+    // This effect will handle the hardware back button
+    useFocusEffect(
+        useCallback(() => {
+            const onBackPress = () => {
+                if (prefix) {
+                    const parts = prefix.split('/').filter(Boolean);
+                    parts.pop();
+                    const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : '';
+                    setPrefix(parentPrefix);
+                    return true; // Prevent default action
+                }
+                return false; // Allow default action
+            };
+
+            const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+            return () => subscription.remove();
+        }, [prefix])
+    );
 
     useFocusEffect(useCallback(() => { loadFiles(); }, [loadFiles]));
+
+    const handleDeleteFile = async (fileToDelete: FileItem) => {
+        console.log('=== handleDeleteFile called ===');
+        console.log('File to delete:', fileToDelete.name);
+
+        try {
+            Alert.alert(
+                t('common.confirm'),
+                t('browser.confirmDelete', { fileName: fileToDelete.name }),
+                [
+                    { text: t('common.cancel'), style: 'cancel' },
+                    {
+                        text: t('common.confirm'),
+                        onPress: async () => {
+                        try {
+                            console.log('=== Starting delete operation ===');
+                            console.log('File to delete:', fileToDelete.name);
+                            console.log('File path:', fileToDelete.path);
+
+                            // Step 1: Delete from local file system first (safer - can recover from cloud)
+                            const localFileExists = await fsService.exists(fileToDelete.path);
+                            console.log('Local file exists:', localFileExists);
+
+                            if (localFileExists) {
+                                await fsService.deleteFile(fileToDelete.path);
+                                console.log('Local file deleted');
+                            }
+
+                            // Step 2: Delete from the cloud
+                            console.log('Starting cloud delete...');
+                            await cloudService.deleteFile(fileToDelete.path);
+                            console.log('Cloud delete successful!');
+
+                            // Temporarily remove Alert to avoid Android Activity issue
+                            console.log('Delete completed successfully');
+                            loadFiles(); // Refresh the list
+                        } catch (error) {
+                            console.error('Failed to delete file:', error);
+                            console.error('Error type:', typeof error);
+                            console.error('Error message:', error instanceof Error ? error.message : String(error));
+
+                            // Show error alert with delay to ensure Activity is ready
+                            setTimeout(() => {
+                                Alert.alert(t('common.error'), t('browser.deleteFailed') + '\n' + (error instanceof Error ? error.message : String(error)));
+                            }, 500);
+                        }
+                    },
+                },
+            ],
+                { cancelable: true }
+            );
+        } catch (error) {
+            console.error('Error showing delete confirmation:', error);
+        }
+    };
 
     const handleFilePress = async (item: FileItem) => {
         if (item.isDirectory) {
@@ -118,7 +188,12 @@ export const BrowserScreen = () => {
                         navigation.navigate('Editor', { filePath: item.path });
                     } else {
                         setStatus('loading');
-                        await cloudService.downloadFile(item.path, item.path);
+                        const result = await cloudService.downloadFile(item.path, item.path);
+                        
+                        // Set the metadata for the newly downloaded file
+                        const { setMetadata } = useFileMetadataStore.getState();
+                        setMetadata(item.path, result.etag, result.lastModified);
+                        
                         setStatus('success');
                         navigation.navigate('Editor', { filePath: item.path });
                     }
@@ -147,7 +222,13 @@ export const BrowserScreen = () => {
                 return (
                     <FlatList
                         data={files}
-                        renderItem={({ item }) => <FileListItem item={item} onPress={handleFilePress} />}
+                        renderItem={({ item }) => (
+                            <FileListItem
+                                item={item}
+                                onPress={handleFilePress}
+                                onDelete={handleDeleteFile} // Pass the delete handler
+                            />
+                        )}
                         keyExtractor={(item) => item.path}
                         refreshControl={<RefreshControl refreshing={false} onRefresh={loadFiles} />}
                         ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
@@ -156,7 +237,12 @@ export const BrowserScreen = () => {
         }
     };
 
-    return <View style={styles.container}>{renderContent()}</View>;
+    return (
+        <View style={styles.container}>
+            <Breadcrumb path={prefix} onPathPress={handlePathPress} />
+            {renderContent()}
+        </View>
+    );
 };
 
 const styles = StyleSheet.create({

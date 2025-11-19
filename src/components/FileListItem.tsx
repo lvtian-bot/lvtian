@@ -8,15 +8,27 @@ import { theme } from '../utils/theme';
 interface FileListItemProps {
     item: FileItem;
     onPress: (item: FileItem) => void;
+    onDelete?: (item: FileItem) => void; // Now will be triggered by long press
 }
 
-export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress }) => {
+export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onDelete }) => {
     const { t } = useTranslation();
     const iconName = item.isDirectory ? 'folder' : 'description';
     const iconColor = item.isDirectory ? theme.colors.primary : theme.colors.textSecondary;
 
+    const handleLongPress = () => {
+        if (onDelete && !item.isDirectory) { // Only call onDelete for files
+            onDelete(item);
+        }
+    };
+
     return (
-        <TouchableOpacity style={styles.container} onPress={() => onPress(item)}>
+        <TouchableOpacity
+            style={styles.container}
+            onPress={() => onPress(item)}
+            onLongPress={handleLongPress}
+            delayLongPress={500} // Optional: Add a delay for long press
+        >
             <View style={styles.iconContainer}>
                 <Icon name={iconName} size={28} color={iconColor} />
             </View>
@@ -31,6 +43,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress }) => 
                     • {new Date(item.mtime).toLocaleDateString()}
                 </Text>
             </View>
+            {/* The explicit delete button is removed */}
         </TouchableOpacity>
     );
 };

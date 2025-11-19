@@ -7,21 +7,8 @@ import { Alert } from 'react-native';
 class SyncService {
     private isSyncing = false;
 
-    async init() {
-        // Initialize cloud provider with settings
-        const { cosConfig } = useSettingsStore.getState();
-        if (cosConfig.secretId && cosConfig.secretKey) {
-            const { TencentCOSProvider } = require('./TencentCOSProvider');
-            const provider = new TencentCOSProvider(
-                cosConfig.secretId,
-                cosConfig.secretKey,
-                cosConfig.bucket,
-                cosConfig.region
-            );
-            cloudService.setProvider(provider);
-        }
-        this.processQueue();
-    }
+    // Note: Cloud provider initialization is handled in App.tsx
+    // Credentials are stored in react-native-keychain and loaded on app start
 
     async syncFile(filePath: string) {
         // Use filePath as key to maintain directory structure
@@ -41,7 +28,8 @@ class SyncService {
         const pendingItems = uploadQueue.filter(item => item.status === 'pending' || item.status === 'failed');
 
         for (const item of pendingItems) {
-            if (item.retryCount > 3) {
+            // Max 3 retries: attempt on retryCount 0, 1, 2. Stop at 3.
+            if (item.retryCount >= 3) {
                 updateItemStatus(item.id, 'failed');
                 continue;
             }
@@ -85,7 +73,7 @@ class SyncService {
     }
 
     async resolveConflict(filePath: string) {
-        // Rename local file
+        // Rename local file (like "Save As" in Office apps)
         const fileName = filePath.split('/').pop() || '';
         const dir = filePath.replace(fileName, '');
         const timestamp = new Date().getTime();
@@ -94,14 +82,15 @@ class SyncService {
 
         await fsService.moveFile(filePath, newPath);
 
-        // Download new version
-        const result = await cloudService.downloadFile(fileName, filePath);
+        // Set temporary metadata to prevent conflict detection before upload completes
         const { setMetadata } = require('../store/useFileMetadataStore').useFileMetadataStore.getState();
-        setMetadata(filePath, result.etag, result.lastModified);
+        setMetadata(newPath, 'uploading', new Date().toISOString());
 
-        // Upload the backup
+        // Upload the renamed file to cloud
         this.syncFile(newPath);
 
+        // Return new path so caller can navigate to the renamed file
+        // Note: Cloud version is NOT downloaded. User can manually open it from file list if needed.
         return newPath;
     }
 }

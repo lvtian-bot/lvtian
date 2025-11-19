@@ -1,7 +1,7 @@
 {
   "tabs": {
     "timeline": "闪念笔记",
-    "browser": "文件",
+    "browser": "知识库",
     "settings": "设置"
   },
   "browser": {
@@ -13,6 +13,10 @@
     "unconfiguredTitle": "未配置云服务",
     "unconfiguredMessage": "请先在“设置”页面中配置您的云存储服务，以便开始使用。",
     "goToSettings": "前往设置",
+    "confirmDelete": "确定要删除 {{fileName}} 吗？此操作不可撤销。",
+    "deleteSuccess": "文件删除成功！",
+    "deleteFailed": "文件删除失败。",
+    "root": "根目录",
     "error": {
       "default": "无法加载文件，请稍后重试。",
       "auth": "云服务认证失败，请前往“设置”检查您的密钥。",
@@ -25,12 +29,24 @@
     "add": "添加",
     "placeholder": "有什么想法？",
     "updateAvailable": "云端有新版本，点击更新",
-    "updating": "正在更新..."
+    "updating": "正在更新...",
+    "editTitle": "编辑闪念",
+    "newTitle": "新建闪念",
+    "editError": "编辑失败：找不到原始笔记文件。",
+    "noteNotFound": "未找到笔记。可能文件已被外部修改。您的编辑将作为新笔记追加。",
+    "saveError": "保存闪念笔记失败",
+    "emptyNoteError": "笔记内容不能为空！",
+    "deleteError": "删除闪念笔记失败"
   },
   "common": {
+    "back": "返回",
     "save": "保存",
     "cancel": "取消",
-    "send": "发送"
+    "send": "发送",
+    "error": "错误",
+    "confirm": "确认",
+    "edit": "编辑",
+    "delete": "删除"
   },
   "settings": {
     "saveAndValidate": "验证并保存配置",
@@ -43,9 +59,19 @@
       "network": "验证失败：网络错误，请检查你的网络连接。",
       "notEmpty": "所有配置项都不能为空"
     },
+    "cosConfig": "COS 设置",
+    "saveCos": "验证并保存 COS 配置",
+    "saveFlashNote": "保存闪念笔记配置",
     "flashNote": "闪念笔记设置",
     "flashNotePath": "存储路径 (例如: notes/)",
-    "flashNoteFilename": "文件名 (例如: flash_notes.md)"
+    "flashNoteFilename": "文件名 (例如: flash_notes.md)",
+    "markdownStyle": "Markdown 样式",
+    "themes": {
+      "default": "默认",
+      "github": "GitHub",
+      "solarized": "Solarized",
+      "night": "夜间模式"
+    }
   },
   "fileItem": {
     "folder": "文件夹",

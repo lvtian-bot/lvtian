@@ -1,13 +1,14 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MarkdownThemeKey } from '../utils/markdownThemes';
 
 interface SettingsState {
     themeMode: 'light' | 'dark' | 'system';
     setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
     cosConfig: {
-        secretId: string;
-        secretKey: string;
+        // Note: secretId and secretKey are stored in react-native-keychain (encrypted)
+        // Only non-sensitive config is stored here
         bucket: string;
         region: string;
     };
@@ -17,6 +18,8 @@ interface SettingsState {
         filename: string;
     };
     setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
+    markdownTheme: MarkdownThemeKey;
+    setMarkdownTheme: (theme: MarkdownThemeKey) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -25,8 +28,6 @@ export const useSettingsStore = create<SettingsState>()(
             themeMode: 'system',
             setThemeMode: (mode) => set({ themeMode: mode }),
             cosConfig: {
-                secretId: '',
-                secretKey: '',
                 bucket: '',
                 region: '',
             },
@@ -38,6 +39,8 @@ export const useSettingsStore = create<SettingsState>()(
             },
             setFlashNoteConfig: (config) =>
                 set((state) => ({ flashNoteConfig: { ...state.flashNoteConfig, ...config } })),
+            markdownTheme: 'default',
+            setMarkdownTheme: (theme) => set({ markdownTheme: theme }),
         }),
         {
             name: 'settings-storage',

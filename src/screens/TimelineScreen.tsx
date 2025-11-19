@@ -10,6 +10,8 @@ import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { FlashNoteInputModal } from '../components/FlashNoteInputModal'; // Import the new modal
+import { flashNoteService } from '../services/FlashNoteService';
 
 interface FlashNote {
     id: string;
@@ -19,7 +21,7 @@ interface FlashNote {
 
 const FLASH_NOTE_FILE = 'flash_notes.md';
 
-type TimelineScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'MainTabs'>;
+type TimelineScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error';
 type ConflictType = 'cloudNewer' | 'localNewer' | null;
@@ -32,92 +34,24 @@ export const TimelineScreen = () => {
     const navigation = useNavigation<TimelineScreenNavigationProp>();
     const { flashNoteConfig } = useSettingsStore();
     const { t } = useTranslation();
-    const { getMetadata, setMetadata, invalidateMetadata } = useFileMetadataStore();
+    const { getMetadata, setMetadata } = useFileMetadataStore();
 
-    const getFlashNotePath = () => {
+    // State for the flash note input modal
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [editingNoteId, setEditingNoteId] = useState<string | undefined>(undefined);
+    const [editingNoteContent, setEditingNoteContent] = useState<string | undefined>(undefined);
+
+    const getFlashNotePath = useCallback(() => {
         const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
         return path.replace(/\/+/g, '/'); // Normalize slashes
-    };
+    }, [flashNoteConfig]);
 
-    const loadNotes = async () => {
-        try {
-            const filePath = getFlashNotePath();
-            const exists = await fsService.exists(filePath);
-
-            if (exists) {
-                const content = await fsService.readFile(filePath);
-                parseAndSetNotes(content);
-                checkSyncStatus(filePath);
-            } else {
-                // Local file missing, try to restore from cloud
-                await tryRestoreFromCloud(filePath);
-            }
-        } catch (error) {
-            console.error('Failed to load flash notes', error);
-        }
-    };
-
-    const tryRestoreFromCloud = async (filePath: string) => {
-        try {
-            setIsUpdating(true);
-            const { cloudService } = require('../services/CloudService');
-            const key = filePath;
-
-            const metadata = await cloudService.headFile(key);
-            if (metadata) {
-                await cloudService.downloadFile(key, filePath);
-                const content = await fsService.readFile(filePath);
-                parseAndSetNotes(content);
-                setMetadata(filePath, metadata.etag, metadata.lastModified);
-                setSyncStatus('synced');
-            } else {
-                setSyncStatus('error'); // Or just empty if not in cloud either
-            }
-        } catch (error) {
-            console.log('Cloud restore failed', error);
-            setSyncStatus('error');
-        } finally {
-            setIsUpdating(false);
-        }
-    };
-
-    const parseAndSetNotes = (content: string) => {
-        const lines = content.split('\n');
-        const parsedNotes: FlashNote[] = [];
-        let currentNote: Partial<FlashNote> = {};
-
-        // Regex to match lines starting with # or ## followed by a date-like string (starting with 20)
-        // Matches: "# 2023...", "## 2023..."
-        const headerRegex = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
-
-        lines.forEach(line => {
-            const match = line.match(headerRegex);
-            if (match) {
-                if (currentNote.id) {
-                    parsedNotes.push(currentNote as FlashNote);
-                }
-                // match[2] is the timestamp part
-                const timestamp = match[2].trim();
-                currentNote = {
-                    id: timestamp, // Use timestamp as ID
-                    timestamp: timestamp,
-                    content: '',
-                };
-            } else {
-                if (currentNote.id) {
-                    currentNote.content += line + '\n';
-                }
-            }
-        });
-        if (currentNote.id) {
-            parsedNotes.push(currentNote as FlashNote);
-        }
-
-        parsedNotes.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    const parseAndSetNotes = useCallback((content: string) => {
+        const parsedNotes = flashNoteService.parseNotes(content);
         setNotes(parsedNotes);
-    };
+    }, []);
 
-    const checkSyncStatus = async (filePath: string) => {
+    const checkSyncStatus = useCallback(async (filePath: string) => {
         setSyncStatus('checking');
         try {
             const { cloudService } = require('../services/CloudService');
@@ -125,8 +59,14 @@ export const TimelineScreen = () => {
             const localMetadata = getMetadata(filePath);
             const cloudMetadata = await cloudService.headFile(key);
 
+            // Check if file is currently uploading (temporary state after "Save As")
+            if (localMetadata?.etag === 'uploading') {
+                setSyncStatus('synced'); // Show as synced while uploading
+                setConflictType(null);
+                return;
+            }
+
             if (!cloudMetadata) {
-                // Not in cloud
                 if (await fsService.exists(filePath)) {
                     setSyncStatus('conflict');
                     setConflictType('localNewer');
@@ -142,18 +82,54 @@ export const TimelineScreen = () => {
                 const localFileStat = await fsService.stat(filePath);
                 const localMtime = localFileStat?.mtime || new Date(0);
                 const cloudMtime = new Date(cloudMetadata.lastModified);
-
-                if (cloudMtime > localMtime) {
-                    setConflictType('cloudNewer');
-                } else {
-                    setConflictType('localNewer');
-                }
+                setConflictType(cloudMtime > localMtime ? 'cloudNewer' : 'localNewer');
             }
         } catch (error) {
             console.error('Error checking sync status:', error);
             setSyncStatus('error');
         }
-    };
+    }, [getMetadata]);
+
+    const tryRestoreFromCloud = useCallback(async (filePath: string) => {
+        try {
+            setIsUpdating(true);
+            const { cloudService } = require('../services/CloudService');
+            const key = filePath;
+
+            const metadata = await cloudService.headFile(key);
+            if (metadata) {
+                await cloudService.downloadFile(key, filePath);
+                const content = await fsService.readFile(filePath);
+                parseAndSetNotes(content);
+                setMetadata(filePath, metadata.etag, metadata.lastModified);
+                setSyncStatus('synced');
+            } else {
+                setSyncStatus('error');
+            }
+        } catch (error) {
+            console.log('Cloud restore failed', error);
+            setSyncStatus('error');
+        } finally {
+            setIsUpdating(false);
+        }
+    }, [parseAndSetNotes, setMetadata]);
+
+    const loadNotes = useCallback(async () => {
+        try {
+            const filePath = getFlashNotePath();
+            const exists = await fsService.exists(filePath);
+
+            if (exists) {
+                const content = await fsService.readFile(filePath);
+                parseAndSetNotes(content);
+                checkSyncStatus(filePath);
+            } else {
+                await tryRestoreFromCloud(filePath);
+            }
+        } catch (error) {
+            console.error('Failed to load flash notes', error);
+        }
+    }, [getFlashNotePath, parseAndSetNotes, checkSyncStatus, tryRestoreFromCloud]);
 
     const handleOverwriteLocal = async () => {
         try {
@@ -180,7 +156,6 @@ export const TimelineScreen = () => {
             setIsUpdating(true);
             const filePath = getFlashNotePath();
             await syncService.syncFile(filePath);
-            // Wait a bit for sync to process (simplified)
             setTimeout(() => {
                 checkSyncStatus(filePath);
                 setIsUpdating(false);
@@ -195,13 +170,25 @@ export const TimelineScreen = () => {
         try {
             setIsUpdating(true);
             const filePath = getFlashNotePath();
-            await syncService.resolveConflict(filePath);
-            // resolveConflict downloads the cloud version to filePath
-            // So we should reload
-            const content = await fsService.readFile(filePath);
+            // Rename local file and upload as copy (like "Save As" in Office apps)
+            const newPath = await syncService.resolveConflict(filePath);
+
+            // Read and display the renamed file content
+            const content = await fsService.readFile(newPath);
             parseAndSetNotes(content);
-            // And update status (resolveConflict should have updated metadata via SyncService, but let's recheck)
-            checkSyncStatus(filePath);
+
+            // Update flash note config to point to the new file
+            const newFileName = newPath.split('/').pop() || 'flash_notes.md';
+            const { setFlashNoteConfig } = useSettingsStore.getState();
+            setFlashNoteConfig({ filename: newFileName });
+
+            checkSyncStatus(newPath);
+
+            // Notify user about the file rename
+            Alert.alert(
+                t('common.success'),
+                t('timeline.savedAsCopy', { fileName: newFileName }) || `副本已保存为: ${newFileName}`
+            );
         } catch (error) {
             Alert.alert('Error', 'Failed to save copy');
         } finally {
@@ -209,11 +196,78 @@ export const TimelineScreen = () => {
         }
     };
 
-    useFocusEffect(
-        useCallback(() => {
+    const handleSaveFlashNote = async (id: string | undefined, content: string) => {
+        try {
+            if (id) {
+                await flashNoteService.updateNote(id, content);
+            } else {
+                await flashNoteService.addNote(content);
+            }
             loadNotes();
-        }, [])
-    );
+            setIsModalVisible(false);
+        } catch (error) {
+            console.error('Failed to save flash note', error);
+            Alert.alert(t('common.error'), t('timeline.saveError'));
+        }
+    };
+
+    const handleCancelFlashNote = () => {
+        setIsModalVisible(false);
+        setEditingNoteId(undefined);
+        setEditingNoteContent(undefined);
+    };
+
+    const handleDeleteFlashNote = async (noteToDelete: FlashNote) => {
+        Alert.alert(
+            t('common.confirm'),
+            t('browser.confirmDelete', { fileName: noteToDelete.id }), // Re-using browser string for now
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('common.confirm'),
+                    onPress: async () => {
+                        try {
+                            await flashNoteService.deleteNote(noteToDelete.id);
+                            loadNotes();
+                        } catch (error) {
+                            console.error('Failed to delete flash note:', error);
+                            Alert.alert(t('common.error'), t('timeline.deleteError'));
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
+    const handleNoteLongPress = (item: FlashNote) => {
+        Alert.alert(
+            item.id, // Use note ID as title
+            undefined, // No message
+            [
+                {
+                    text: t('common.delete'), // Delete first
+                    onPress: () => handleDeleteFlashNote(item),
+                    style: 'destructive',
+                },
+                {
+                    text: t('common.edit'), // Then Edit
+                    onPress: () => {
+                        setEditingNoteId(item.id);
+                        setEditingNoteContent(item.content.trim());
+                        setIsModalVisible(true);
+                    },
+                },
+                {
+                    text: t('common.cancel'), // Then Cancel
+                    style: 'cancel',
+                },
+            ]
+        );
+    };
+
+    useFocusEffect(useCallback(() => {
+        loadNotes();
+    }, [loadNotes]));
 
     React.useLayoutEffect(() => {
         navigation.setOptions({
@@ -229,10 +283,14 @@ export const TimelineScreen = () => {
     }, [navigation, t, syncStatus, isUpdating]);
 
     const renderItem = ({ item }: { item: FlashNote }) => (
-        <View style={styles.card}>
-            <Text style={styles.timestamp}>{item.timestamp}</Text>
-            <Text style={styles.content}>{item.content.trim()}</Text>
-        </View>
+        <TouchableOpacity
+            onLongPress={() => handleNoteLongPress(item)}
+        >
+            <View style={styles.card}>
+                <Text style={styles.timestamp}>{item.timestamp}</Text>
+                <Text style={styles.content}>{item.content.trim()}</Text>
+            </View>
+        </TouchableOpacity>
     );
 
     return (
@@ -273,10 +331,18 @@ export const TimelineScreen = () => {
             />
             <TouchableOpacity
                 style={styles.fab}
-                onPress={() => navigation.navigate('NewFlashNote')}
+                onPress={() => { setEditingNoteId(undefined); setEditingNoteContent(undefined); setIsModalVisible(true); }}
             >
                 <Icon name="add" size={24} color={theme.colors.white} />
             </TouchableOpacity>
+
+            <FlashNoteInputModal
+                visible={isModalVisible}
+                initialId={editingNoteId}
+                initialContent={editingNoteContent}
+                onSave={handleSaveFlashNote}
+                onCancel={handleCancelFlashNote}
+            />
         </View>
     );
 };
@@ -295,8 +361,6 @@ const styles = StyleSheet.create({
         padding: theme.spacing.m,
         borderRadius: 8,
         marginBottom: theme.spacing.m,
-        borderLeftWidth: 4,
-        borderLeftColor: theme.colors.primary,
     },
     timestamp: {
         fontSize: theme.typography.caption.fontSize,

@@ -14,14 +14,18 @@ export const TabNavigator = () => {
     const { t } = useTranslation();
 
     return (
-        <Tab.Navigator>
+        <Tab.Navigator
+            screenOptions={{
+                headerTitleAlign: 'center',
+                headerShadowVisible: false,
+            }}
+        >
             <Tab.Screen
                 name="Timeline"
                 component={TimelineScreen}
                 options={{
                     headerShown: true,
                     title: t('tabs.timeline'),
-                    headerTitleAlign: 'left',
                     tabBarIcon: ({ color, size }) => (
                         <Icon name="timeline" color={color} size={size} />
                     ),
@@ -33,7 +37,6 @@ export const TabNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('tabs.browser'),
-                    headerTitleAlign: 'left',
                     tabBarIcon: ({ color, size }) => (
                         <Icon name="folder" color={color} size={size} />
                     ),
@@ -45,7 +48,6 @@ export const TabNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('tabs.settings'),
-                    headerTitleAlign: 'left',
                     tabBarIcon: ({ color, size }) => (
                         <Icon name="settings" color={color} size={size} />
                     ),

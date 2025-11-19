@@ -2,6 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 import Markdown from 'react-native-markdown-display';
 import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../types/navigation';
@@ -9,7 +11,9 @@ import { fsService } from '../services/FileSystemService';
 import { cloudService } from '../services/CloudService';
 import { syncService } from '../services/SyncService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
+import { markdownThemes } from '../utils/markdownThemes';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -18,7 +22,9 @@ type ConflictType = 'cloudNewer' | 'localNewer' | null;
 
 export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
-    const navigation = useNavigation();
+    const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+    const { t } = useTranslation();
+    const { markdownTheme } = useSettingsStore();
     const { filePath, isNew } = route.params;
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
@@ -59,6 +65,13 @@ export const EditorScreen = () => {
             const localMetadata = getMetadata(filePath);
             const cloudMetadata = await cloudService.headFile(key);
 
+            // Check if file is currently uploading (temporary state after "Save As")
+            if (localMetadata?.etag === 'uploading') {
+                setSyncStatus('synced'); // Show as synced while uploading
+                setConflictType(null);
+                return;
+            }
+
             if (!cloudMetadata) {
                 // File might not exist in cloud yet
                 setSyncStatus('error'); // Or 'localNewer' if we assume it's a new file?
@@ -91,21 +104,48 @@ export const EditorScreen = () => {
         }
     };
 
-    const handleSave = async (newContent: string) => {
+    const handleAutoSave = async (newContent: string) => {
         try {
+            // 自动保存：只写本地，不触发云同步，不退出编辑模式
+            await fsService.writeFile(filePath, newContent);
+            setContent(newContent);
+            // 不调用 syncService.syncFile
+            // 不调用 setIsEditing(false)
+        } catch (error) {
+            console.error('Auto save failed:', error);
+            // 自动保存失败不打扰用户
+        }
+    };
+
+    const handleManualSave = async (newContent: string) => {
+        try {
+            // 手动保存：写本地 + 触发云同步 + 退出编辑模式
             await fsService.writeFile(filePath, newContent);
             setContent(newContent);
             setIsEditing(false);
             invalidateMetadata(filePath); // Invalidate metadata on local edit
-            checkSyncStatus(); // Re-check status (should become localNewer)
+
+            // Trigger upload to cloud (Copy on Write pattern: Save -> Local -> Queue -> Upload)
+            syncService.syncFile(filePath);
+
+            checkSyncStatus(); // Re-check status (should become localNewer initially, then synced after upload)
         } catch (error) {
             Alert.alert('Error', 'Failed to save file');
         }
     };
 
     const onWebViewMessage = (event: any) => {
-        const newContent = event.nativeEvent.data;
-        handleSave(newContent);
+        try {
+            const data = JSON.parse(event.nativeEvent.data);
+            if (data.type === 'autoSave') {
+                handleAutoSave(data.content);
+            } else if (data.type === 'manualSave') {
+                handleManualSave(data.content);
+            }
+        } catch {
+            // 兼容旧格式（纯字符串），当做手动保存处理
+            handleManualSave(event.nativeEvent.data);
+        }
     };
 
     const requestSaveFromWebView = () => {
@@ -129,31 +169,12 @@ export const EditorScreen = () => {
     const handleSaveCopy = async () => {
         try {
             setLoading(true);
-            await syncService.resolveConflict(filePath);
-            // After resolveConflict, the original file is replaced by cloud version (if cloud newer)
-            // or we just uploaded our copy.
-            // Wait, resolveConflict in SyncService does: Move Local -> Download Cloud -> Upload Moved.
-            // This fits "Cloud Newer" -> "Save Copy" (Keep local as copy, get cloud).
-            // But for "Local Newer" -> "Save Copy", we might want: Upload Local as Copy?
-            // The requirement says:
-            // Cloud Newer -> Save Copy: Rename Local -> Upload Copy. (And presumably keep Cloud as main?)
-            // Local Newer -> Save Copy: Rename Local -> Upload Copy.
-            // Actually, the requirement says:
-            // Cloud Newer -> [Save Copy]: Rename current local -> Trigger copy upload. (And what happens to view? presumably we then download cloud?)
-            // Local Newer -> [Save Copy]: Rename current local -> Upload copy.
+            // Rename local file and upload as copy (like "Save As" in Office apps)
+            const newPath = await syncService.resolveConflict(filePath);
 
-            // Let's stick to SyncService.resolveConflict which seems to do: Backup Local -> Download Cloud -> Upload Backup.
-            // This seems to match "Cloud Newer" flow.
-            // For "Local Newer", if we want to keep local changes but as a copy, we should probably just rename local and upload it, then maybe revert?
-            // Or maybe "Save Copy" just means "Backup my changes to cloud as a copy, and let me see the main file".
-
-            // Re-reading requirement:
-            // Cloud Newer -> [Save Copy]: Rename Local -> Trigger Copy Upload. (Implies we then see Cloud version?)
-            // Local Newer -> [Save Copy]: Rename Local -> Upload Copy. (Implies we then see what? The file is now renamed.)
-
-            // Let's use resolveConflict for now as it seems to handle the "Backup and Sync" flow.
-
-            await loadFile();
+            // Navigate to the renamed file (user continues editing the renamed version)
+            // Cloud version is NOT downloaded - user can open it manually from file list
+            navigation.replace('Editor', { filePath: newPath });
         } catch (error) {
             Alert.alert('Error', 'Failed to save copy');
         } finally {
@@ -190,10 +211,10 @@ export const EditorScreen = () => {
         <SafeAreaView style={styles.container}>
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
-                    <Text style={styles.headerButtonText}>Back</Text>
+                    <Text style={styles.headerButtonText}>{t('common.back')}</Text>
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
-                    <Text style={styles.title} numberOfLines={1}>
+                    <Text style={styles.title} numberOfLines={2}>
                         {filePath.split('/').pop()}
                     </Text>
                     {syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
@@ -209,7 +230,7 @@ export const EditorScreen = () => {
                     }}
                     style={styles.headerButton}
                 >
-                    <Text style={styles.headerButtonText}>{isEditing ? 'Save' : 'Edit'}</Text>
+                    <Text style={styles.headerButtonText}>{isEditing ? t('common.save') : t('common.edit')}</Text>
                 </TouchableOpacity>
             </View>
 
@@ -258,7 +279,7 @@ export const EditorScreen = () => {
                 />
             ) : (
                 <ScrollView style={styles.viewerContainer}>
-                    <Markdown style={markdownStyles}>
+                    <Markdown style={markdownThemes[markdownTheme]}>
                         {content}
                     </Markdown>
                 </ScrollView>
@@ -270,7 +291,7 @@ export const EditorScreen = () => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: theme.colors.background,
+        backgroundColor: theme.colors.white,
     },
     loadingContainer: {
         flex: 1,
@@ -281,7 +302,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        padding: theme.spacing.m,
+        padding: theme.spacing.s, // Reduced padding
         backgroundColor: theme.colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
@@ -299,11 +320,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'center',
+        marginHorizontal: 10,
     },
     title: {
-        fontSize: 18,
-        fontWeight: 'bold',
+        fontSize: 16, // Slightly smaller font
+        // fontWeight removed
         marginHorizontal: theme.spacing.s,
+        flexShrink: 1,
+        textAlign: 'center', // Center text if it wraps
     },
     syncIcon: {
         fontSize: 16,
@@ -343,11 +367,4 @@ const styles = StyleSheet.create({
     },
 });
 
-const markdownStyles = {
-    body: {
-        color: theme.colors.text,
-    },
-    heading1: {
-        color: theme.colors.primary,
-    },
-};
+
