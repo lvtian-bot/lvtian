@@ -1,6 +1,7 @@
 import { fsService } from './FileSystemService';
 import { syncService } from './SyncService';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { DeviceEventEmitter } from 'react-native';
 
 export interface FlashNote {
     id: string;
@@ -11,11 +12,19 @@ export interface FlashNote {
 const SUFFIX_REGEX = /\n>\s*$/;
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
 
+export const FLASH_NOTES_UPDATED_EVENT = 'FLASH_NOTES_UPDATED';
+
 class FlashNoteService {
     private getFlashNotePath(): string {
         const { flashNoteConfig } = useSettingsStore.getState();
         const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
         return path.replace(/\/+/g, '/');
+    }
+
+    private getFormattedTimestamp(): string {
+        const now = new Date();
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     }
 
     parseNotes(content: string): FlashNote[] {
@@ -43,6 +52,7 @@ class FlashNoteService {
             parsedNotes.push(currentNote as FlashNote);
         }
 
+        console.log(`Parsed ${parsedNotes.length} notes. Latest: ${parsedNotes[0]?.timestamp}`);
         parsedNotes.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
         return parsedNotes;
     }
@@ -62,8 +72,7 @@ class FlashNoteService {
             // Ignore error if file doesn't exist, start fresh
         }
 
-        const now = new Date();
-        const timestamp = now.toISOString().replace('T', ' ').split('.')[0];
+        const timestamp = this.getFormattedTimestamp();
         const suffix = '\n> ';
         const newEntry = `\n\n## ${timestamp}\n${trimmedInput}${suffix}`;
 
@@ -71,6 +80,7 @@ class FlashNoteService {
 
         await fsService.writeFile(filePath, newContent);
         await syncService.syncFile(filePath);
+        DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
 
     async updateNote(id: string, newText: string): Promise<void> {
@@ -93,6 +103,7 @@ class FlashNoteService {
             const newContent = newBlocks.join('');
             await fsService.writeFile(filePath, newContent);
             await syncService.syncFile(filePath);
+            DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
         } else {
             throw new Error('Note not found');
         }
@@ -126,6 +137,7 @@ class FlashNoteService {
         const newContent = newLines.join('\n');
         await fsService.writeFile(filePath, newContent);
         await syncService.syncFile(filePath);
+        DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
 }
 

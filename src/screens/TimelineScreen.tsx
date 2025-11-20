@@ -11,7 +11,8 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal'; // Import the new modal
-import { flashNoteService } from '../services/FlashNoteService';
+import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
+import { DeviceEventEmitter } from 'react-native';
 
 interface FlashNote {
     id: string;
@@ -61,6 +62,17 @@ export const TimelineScreen = () => {
 
             // Check if file is currently uploading (temporary state after "Save As")
             if (localMetadata?.etag === 'uploading') {
+                setSyncStatus('synced'); // Show as synced while uploading
+                setConflictType(null);
+                return;
+            }
+
+            // Check if file is in upload queue (real-time sync)
+            const { useSyncStore } = require('../store/useSyncStore');
+            const uploadQueue = useSyncStore.getState().uploadQueue;
+            const isUploading = uploadQueue.some((item: any) => item.filePath === filePath && (item.status === 'pending' || item.status === 'uploading'));
+
+            if (isUploading) {
                 setSyncStatus('synced'); // Show as synced while uploading
                 setConflictType(null);
                 return;
@@ -170,27 +182,34 @@ export const TimelineScreen = () => {
         try {
             setIsUpdating(true);
             const filePath = getFlashNotePath();
-            // Rename local file and upload as copy (like "Save As" in Office apps)
-            const newPath = await syncService.resolveConflict(filePath);
+            const key = filePath; // In this app structure, key is often same as filePath relative to root
 
-            // Read and display the renamed file content
-            const content = await fsService.readFile(newPath);
+            // 1. Rename local file (backup) and upload it
+            // This moves the local 'flash_notes.md' to 'flash_notes_conflict_xxx.md'
+            const backupPath = await syncService.resolveConflict(filePath);
+            const backupFileName = backupPath.split('/').pop();
+
+            // 2. Download the CLOUD version of the original file to restore main timeline
+            // Since local file was moved, we can download fresh
+            const { cloudService } = require('../services/CloudService');
+            const result = await cloudService.downloadFile(key, filePath);
+
+            // 3. Update Metadata & UI to show the fresh cloud content
+            setMetadata(filePath, result.etag, result.lastModified);
+            setSyncStatus('synced');
+            setConflictType(null);
+
+            const content = await fsService.readFile(filePath);
             parseAndSetNotes(content);
 
-            // Update flash note config to point to the new file
-            const newFileName = newPath.split('/').pop() || 'flash_notes.md';
-            const { setFlashNoteConfig } = useSettingsStore.getState();
-            setFlashNoteConfig({ filename: newFileName });
-
-            checkSyncStatus(newPath);
-
-            // Notify user about the file rename
+            // 4. Notify user
             Alert.alert(
                 t('common.success'),
-                t('timeline.savedAsCopy', { fileName: newFileName }) || `副本已保存为: ${newFileName}`
+                t('timeline.conflictResolvedAsCopy', { backupFileName }) || `本地更改已另存为副本: ${backupFileName}\n首页已刷新为云端最新版本`
             );
         } catch (error) {
-            Alert.alert('Error', 'Failed to save copy');
+            console.error('Save copy failed:', error);
+            Alert.alert('Error', 'Failed to save copy and restore');
         } finally {
             setIsUpdating(false);
         }
@@ -241,16 +260,16 @@ export const TimelineScreen = () => {
 
     const handleNoteLongPress = (item: FlashNote) => {
         Alert.alert(
-            item.id, // Use note ID as title
-            undefined, // No message
+            item.id,
+            undefined,
             [
                 {
-                    text: t('common.delete'), // Delete first
+                    text: t('common.delete'),
                     onPress: () => handleDeleteFlashNote(item),
                     style: 'destructive',
                 },
                 {
-                    text: t('common.edit'), // Then Edit
+                    text: t('common.edit'),
                     onPress: () => {
                         setEditingNoteId(item.id);
                         setEditingNoteContent(item.content.trim());
@@ -258,7 +277,7 @@ export const TimelineScreen = () => {
                     },
                 },
                 {
-                    text: t('common.cancel'), // Then Cancel
+                    text: t('common.cancel'),
                     style: 'cancel',
                 },
             ]
@@ -268,6 +287,18 @@ export const TimelineScreen = () => {
     useFocusEffect(useCallback(() => {
         loadNotes();
     }, [loadNotes]));
+
+    // Listen for flash note updates (e.g. from share intent)
+    React.useEffect(() => {
+        const subscription = DeviceEventEmitter.addListener(FLASH_NOTES_UPDATED_EVENT, () => {
+            console.log('Flash notes updated event received, reloading...');
+            loadNotes();
+        });
+
+        return () => {
+            subscription.remove();
+        };
+    }, [loadNotes]);
 
     React.useLayoutEffect(() => {
         navigation.setOptions({

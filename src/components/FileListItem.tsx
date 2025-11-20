@@ -40,7 +40,11 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onDel
                     {item.isDirectory
                         ? t('fileItem.folder')
                         : `${(item.size / 1024).toFixed(1)} ${t('fileItem.kb')}`}{' '}
-                    • {new Date(item.mtime).toLocaleDateString()}
+                    • {(() => {
+                        const d = new Date(item.mtime);
+                        const pad = (n: number) => n.toString().padStart(2, '0');
+                        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                    })()}
                 </Text>
             </View>
             {/* The explicit delete button is removed */}
