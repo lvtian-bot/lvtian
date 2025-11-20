@@ -1,7 +1,9 @@
 import { fsService } from './FileSystemService';
 import { syncService } from './SyncService';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { DeviceEventEmitter } from 'react-native';
+import { normalizePath } from '../utils/pathUtils';
 
 export interface FlashNote {
     id: string;
@@ -18,7 +20,7 @@ class FlashNoteService {
     private getFlashNotePath(): string {
         const { flashNoteConfig } = useSettingsStore.getState();
         const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
-        return path.replace(/\/+/g, '/');
+        return normalizePath(path);
     }
 
     private getFormattedTimestamp(): string {
@@ -79,7 +81,15 @@ class FlashNoteService {
         const newContent = currentContent.trim() ? currentContent.trim() + newEntry : `## ${timestamp}\n${trimmedInput}${suffix}`;
 
         await fsService.writeFile(filePath, newContent);
-        await syncService.syncFile(filePath);
+
+        // Set temporary metadata to indicate uploading state (only if cloud is configured)
+        const { cloudService } = require('./CloudService');
+        if (cloudService.isConfigured()) {
+            const { setMetadata } = useFileMetadataStore.getState();
+            setMetadata(filePath, 'uploading', new Date().toISOString());
+            await syncService.syncFile(filePath);
+        }
+
         DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
 
@@ -102,7 +112,15 @@ class FlashNoteService {
         if (noteFound) {
             const newContent = newBlocks.join('');
             await fsService.writeFile(filePath, newContent);
-            await syncService.syncFile(filePath);
+
+            // Set temporary metadata to indicate uploading state (only if cloud is configured)
+            const { cloudService } = require('./CloudService');
+            if (cloudService.isConfigured()) {
+                const { setMetadata } = useFileMetadataStore.getState();
+                setMetadata(filePath, 'uploading', new Date().toISOString());
+                await syncService.syncFile(filePath);
+            }
+
             DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
         } else {
             throw new Error('Note not found');
@@ -136,7 +154,15 @@ class FlashNoteService {
 
         const newContent = newLines.join('\n');
         await fsService.writeFile(filePath, newContent);
-        await syncService.syncFile(filePath);
+
+        // Set temporary metadata to indicate uploading state (only if cloud is configured)
+        const { cloudService } = require('./CloudService');
+        if (cloudService.isConfigured()) {
+            const { setMetadata } = useFileMetadataStore.getState();
+            setMetadata(filePath, 'uploading', new Date().toISOString());
+            await syncService.syncFile(filePath);
+        }
+
         DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
 }

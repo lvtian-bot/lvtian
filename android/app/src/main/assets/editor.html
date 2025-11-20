@@ -1,13 +1,22 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="zh-CN">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Markdown Editor</title>
+
+    <!-- EasyMDE CSS - Local -->
+    <link rel="stylesheet" href="easymde.min.css">
+
     <style>
-        body {
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
             margin: 0;
             padding: 0;
         }
@@ -17,6 +26,11 @@
             border: none;
             border-radius: 0;
             font-size: 16px;
+        }
+
+        .CodeMirror-scroll {
+            overflow-y: auto !important;
+            overflow-x: auto !important;
         }
 
         /* 强制设置行高 */
@@ -35,11 +49,23 @@
             border-bottom: 1px solid #ddd;
             border-radius: 0;
         }
+
+        .EasyMDEContainer {
+            height: 100%;
+        }
+
+        textarea {
+            display: none;
+        }
     </style>
 </head>
 
 <body>
     <textarea id="editor"></textarea>
+
+    <!-- EasyMDE JS - Local -->
+    <script src="easymde.min.js"></script>
+
     <script>
         var easyMDE = new EasyMDE({
             element: document.getElementById('editor'),
@@ -110,7 +136,9 @@
                 }));
             }
         }
+
+        // Debug: Log when editor is ready
+        console.log('EasyMDE editor initialized successfully');
     </script>
 </body>
-
 </html>

@@ -2,7 +2,10 @@ import { cloudService } from './CloudService';
 import { fsService } from './FileSystemService';
 import { useSyncStore } from '../store/useSyncStore';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { Alert } from 'react-native';
+import { Alert, DeviceEventEmitter } from 'react-native';
+import { normalizePath } from '../utils/pathUtils';
+
+export const SYNC_COMPLETED_EVENT = 'SYNC_COMPLETED';
 
 class SyncService {
     private isSyncing = false;
@@ -11,10 +14,12 @@ class SyncService {
     // Credentials are stored in react-native-keychain and loaded on app start
 
     async syncFile(filePath: string) {
-        // Use filePath as key to maintain directory structure
-        const key = filePath;
+        // Normalize path to ensure consistency
+        const normalizedPath = normalizePath(filePath);
+        // Use normalized path as key to maintain directory structure
+        const key = normalizedPath;
         // Add to queue
-        useSyncStore.getState().addToQueue(filePath, key);
+        useSyncStore.getState().addToQueue(normalizedPath, key);
         // Trigger processing
         this.processQueue();
     }
@@ -46,6 +51,8 @@ class SyncService {
                     setMetadata(item.filePath, result.etag, result.lastModified);
                 }
                 removeFromQueue(item.id);
+                // Emit event to notify that sync is completed for this file
+                DeviceEventEmitter.emit(SYNC_COMPLETED_EVENT, { filePath: item.filePath });
             } catch (error) {
                 console.error('Upload failed', error);
                 incrementRetry(item.id);
@@ -73,14 +80,17 @@ class SyncService {
     }
 
     async resolveConflict(filePath: string) {
+        // Normalize path first
+        const normalizedPath = normalizePath(filePath);
+
         // Rename local file (like "Save As" in Office apps)
-        const fileName = filePath.split('/').pop() || '';
-        const dir = filePath.replace(fileName, '');
+        const fileName = normalizedPath.split('/').pop() || '';
+        const dir = normalizedPath.replace(fileName, '');
         const timestamp = new Date().getTime();
         const newName = `${fileName.replace('.md', '')}_old_${timestamp}.md`;
-        const newPath = `${dir}${newName}`;
+        const newPath = normalizePath(`${dir}${newName}`);
 
-        await fsService.moveFile(filePath, newPath);
+        await fsService.moveFile(normalizedPath, newPath);
 
         // Set temporary metadata to prevent conflict detection before upload completes
         const { setMetadata } = require('../store/useFileMetadataStore').useFileMetadataStore.getState();

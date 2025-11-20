@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, ScrollView } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, ScrollView, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -9,11 +9,12 @@ import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { cloudService } from '../services/CloudService';
-import { syncService } from '../services/SyncService';
+import { syncService, SYNC_COMPLETED_EVENT } from '../services/SyncService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes } from '../utils/markdownThemes';
+import { normalizePath } from '../utils/pathUtils';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -25,7 +26,8 @@ export const EditorScreen = () => {
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
     const { markdownTheme } = useSettingsStore();
-    const { filePath, isNew } = route.params;
+    const { filePath: rawFilePath, isNew } = route.params;
+    const filePath = normalizePath(rawFilePath); // Normalize path immediately
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [isEditing, setIsEditing] = useState(isNew || false);
@@ -35,42 +37,43 @@ export const EditorScreen = () => {
 
     const { getMetadata, invalidateMetadata, setMetadata } = useFileMetadataStore();
 
-    useEffect(() => {
-        loadFile();
-    }, [filePath]);
-
-    const loadFile = async () => {
-        try {
-            const exists = await fsService.exists(filePath);
-            if (exists) {
-                const fileContent = await fsService.readFile(filePath);
-                setContent(fileContent);
-                checkSyncStatus();
-            } else {
-                setContent('');
-                setSyncStatus('error');
-            }
-        } catch (error) {
-            console.log('Error loading file:', error);
-            setContent('');
-        } finally {
-            setLoading(false);
-        }
-    };
-
     const checkSyncStatus = async () => {
         setSyncStatus('checking');
         try {
-            const key = filePath; // Assuming key is filePath for now
+            const key = filePath;
             const localMetadata = getMetadata(filePath);
-            const cloudMetadata = await cloudService.headFile(key);
 
-            // Check if file is currently uploading (temporary state after "Save As")
+            console.log('[EditorScreen] checkSyncStatus for:', filePath);
+            console.log('[EditorScreen] localMetadata:', localMetadata);
+
+            // Check if file is currently uploading (temporary state set after save)
             if (localMetadata?.etag === 'uploading') {
-                setSyncStatus('synced'); // Show as synced while uploading
+                console.log('[EditorScreen] File is uploading');
+                setSyncStatus('checking'); // Show uploading indicator
                 setConflictType(null);
                 return;
             }
+
+            // Check if file is in upload queue (real-time sync)
+            const { useSyncStore } = require('../store/useSyncStore');
+            const uploadQueue = useSyncStore.getState().uploadQueue;
+            const isUploading = uploadQueue.some((item: any) => item.filePath === filePath && (item.status === 'pending' || item.status === 'uploading'));
+
+            if (isUploading) {
+                setSyncStatus('checking'); // Show uploading indicator
+                setConflictType(null);
+                return;
+            }
+
+            // If cloud is not configured, just show as synced (local only mode)
+            if (!cloudService.isConfigured()) {
+                setSyncStatus('synced');
+                setConflictType(null);
+                return;
+            }
+
+            const cloudMetadata = await cloudService.headFile(key);
+            console.log('[EditorScreen] cloudMetadata:', cloudMetadata);
 
             if (!cloudMetadata) {
                 // File might not exist in cloud yet
@@ -84,9 +87,11 @@ export const EditorScreen = () => {
             }
 
             if (localMetadata?.etag === cloudMetadata.etag) {
+                console.log('[EditorScreen] ETags match! Setting synced');
                 setSyncStatus('synced');
                 setConflictType(null);
             } else {
+                console.log('[EditorScreen] ETags mismatch! local:', localMetadata?.etag, 'cloud:', cloudMetadata.etag);
                 setSyncStatus('conflict');
                 const localFileStat = await fsService.stat(filePath);
                 const localMtime = localFileStat?.mtime || new Date(0);
@@ -101,6 +106,50 @@ export const EditorScreen = () => {
         } catch (error) {
             console.error('Error checking sync status:', error);
             setSyncStatus('error');
+        }
+    };
+
+    useEffect(() => {
+        loadFile();
+    }, [filePath]);
+
+    // Listen for sync completion events
+    useEffect(() => {
+        const subscription = DeviceEventEmitter.addListener(SYNC_COMPLETED_EVENT, (data: { filePath: string }) => {
+            console.log('EditorScreen: Sync completed event received for:', data.filePath);
+            if (data.filePath === filePath) {
+                checkSyncStatus();
+            }
+        });
+
+        return () => {
+            subscription.remove();
+        };
+    }, [filePath, checkSyncStatus]);
+
+
+    const loadFile = async () => {
+        try {
+            console.log('[EditorScreen] Loading file:', filePath);
+            const exists = await fsService.exists(filePath);
+            console.log('[EditorScreen] File exists:', exists);
+
+            if (exists) {
+                const fileContent = await fsService.readFile(filePath);
+                console.log('[EditorScreen] File content length:', fileContent.length);
+                setContent(fileContent);
+                checkSyncStatus();
+            } else {
+                console.log('[EditorScreen] File does not exist');
+                setContent('');
+                setSyncStatus('error');
+            }
+        } catch (error) {
+            console.error('[EditorScreen] Error loading file:', error);
+            Alert.alert('加载文件失败', JSON.stringify(error));
+            setContent('');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -123,12 +172,15 @@ export const EditorScreen = () => {
             await fsService.writeFile(filePath, newContent);
             setContent(newContent);
             setIsEditing(false);
-            invalidateMetadata(filePath); // Invalidate metadata on local edit
 
-            // Trigger upload to cloud (Copy on Write pattern: Save -> Local -> Queue -> Upload)
-            syncService.syncFile(filePath);
+            // Set temporary metadata to indicate uploading state (only if cloud is configured)
+            if (cloudService.isConfigured()) {
+                setMetadata(filePath, 'uploading', new Date().toISOString());
+                // Trigger upload to cloud (Copy on Write pattern: Save -> Local -> Queue -> Upload)
+                syncService.syncFile(filePath);
+            }
 
-            checkSyncStatus(); // Re-check status (should become localNewer initially, then synced after upload)
+            checkSyncStatus(); // Re-check status (will show uploading indicator)
         } catch (error) {
             Alert.alert('Error', 'Failed to save file');
         }
@@ -217,6 +269,7 @@ export const EditorScreen = () => {
                     <Text style={styles.title} numberOfLines={2}>
                         {filePath.split('/').pop()}
                     </Text>
+                    {syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
                     {syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
                     {syncStatus === 'conflict' && <Text style={styles.syncIcon}>⚠️</Text>}
                 </View>
@@ -271,6 +324,10 @@ export const EditorScreen = () => {
                             ? { uri: 'file:///android_asset/editor.html' }
                             : require('../../android/app/src/main/assets/editor.html')
                     }
+                    originWhitelist={['*']}
+                    allowFileAccess={true}
+                    allowFileAccessFromFileURLs={true}
+                    allowUniversalAccessFromFileURLs={true}
                     onMessage={onWebViewMessage}
                     onLoadEnd={() => {
                         webViewRef.current?.postMessage(content);

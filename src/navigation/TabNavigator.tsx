@@ -27,7 +27,7 @@ export const TabNavigator = () => {
                     headerShown: true,
                     title: t('tabs.timeline'),
                     tabBarIcon: ({ color, size }) => (
-                        <Icon name="timeline" color={color} size={size} />
+                        <Icon name="flash-on" color={color} size={size} />
                     ),
                 }}
             />

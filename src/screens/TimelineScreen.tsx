@@ -12,7 +12,9 @@ import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal'; // Import the new modal
 import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
+import { SYNC_COMPLETED_EVENT } from '../services/SyncService';
 import { DeviceEventEmitter } from 'react-native';
+import { normalizePath } from '../utils/pathUtils';
 
 interface FlashNote {
     id: string;
@@ -44,7 +46,7 @@ export const TimelineScreen = () => {
 
     const getFlashNotePath = useCallback(() => {
         const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
-        return path.replace(/\/+/g, '/'); // Normalize slashes
+        return normalizePath(path);
     }, [flashNoteConfig]);
 
     const parseAndSetNotes = useCallback((content: string) => {
@@ -58,11 +60,23 @@ export const TimelineScreen = () => {
             const { cloudService } = require('../services/CloudService');
             const key = filePath;
             const localMetadata = getMetadata(filePath);
-            const cloudMetadata = await cloudService.headFile(key);
 
-            // Check if file is currently uploading (temporary state after "Save As")
+            console.log('[TimelineScreen] checkSyncStatus for:', filePath);
+            console.log('[TimelineScreen] localMetadata:', localMetadata);
+
+            // Check if file is currently uploading (temporary state set by FlashNoteService)
             if (localMetadata?.etag === 'uploading') {
-                setSyncStatus('synced'); // Show as synced while uploading
+                console.log('[TimelineScreen] File is uploading (metadata.etag = uploading)');
+                // If cloud is not configured, clear the uploading state
+                if (!cloudService.isConfigured()) {
+                    console.log('[TimelineScreen] Cloud not configured, clearing uploading state');
+                    const { invalidateMetadata } = require('../store/useFileMetadataStore').useFileMetadataStore.getState();
+                    invalidateMetadata(filePath);
+                    setSyncStatus('synced');
+                    setConflictType(null);
+                    return;
+                }
+                setSyncStatus('checking'); // Show uploading indicator
                 setConflictType(null);
                 return;
             }
@@ -70,13 +84,26 @@ export const TimelineScreen = () => {
             // Check if file is in upload queue (real-time sync)
             const { useSyncStore } = require('../store/useSyncStore');
             const uploadQueue = useSyncStore.getState().uploadQueue;
+            console.log('[TimelineScreen] Upload queue:', uploadQueue);
             const isUploading = uploadQueue.some((item: any) => item.filePath === filePath && (item.status === 'pending' || item.status === 'uploading'));
 
             if (isUploading) {
-                setSyncStatus('synced'); // Show as synced while uploading
+                console.log('[TimelineScreen] File is in upload queue');
+                setSyncStatus('checking'); // Show syncing indicator
                 setConflictType(null);
                 return;
             }
+
+            // If cloud is not configured, just show as synced (local only mode)
+            if (!cloudService.isConfigured()) {
+                console.log('[TimelineScreen] Cloud not configured, showing as synced (local only)');
+                setSyncStatus('synced');
+                setConflictType(null);
+                return;
+            }
+
+            const cloudMetadata = await cloudService.headFile(key);
+            console.log('[TimelineScreen] cloudMetadata:', cloudMetadata);
 
             if (!cloudMetadata) {
                 if (await fsService.exists(filePath)) {
@@ -87,9 +114,11 @@ export const TimelineScreen = () => {
             }
 
             if (localMetadata?.etag === cloudMetadata.etag) {
+                console.log('[TimelineScreen] ETags match! Setting synced');
                 setSyncStatus('synced');
                 setConflictType(null);
             } else {
+                console.log('[TimelineScreen] ETags mismatch! local:', localMetadata?.etag, 'cloud:', cloudMetadata.etag);
                 setSyncStatus('conflict');
                 const localFileStat = await fsService.stat(filePath);
                 const localMtime = localFileStat?.mtime || new Date(0);
@@ -300,12 +329,32 @@ export const TimelineScreen = () => {
         };
     }, [loadNotes]);
 
+    // Listen for sync completion events
+    React.useEffect(() => {
+        const subscription = DeviceEventEmitter.addListener(SYNC_COMPLETED_EVENT, (data: { filePath: string }) => {
+            console.log('[TimelineScreen] Sync completed event received for:', data.filePath);
+            const currentFilePath = getFlashNotePath();
+            console.log('[TimelineScreen] Current flash note path:', currentFilePath);
+            if (data.filePath === currentFilePath) {
+                console.log('[TimelineScreen] Paths match! Checking sync status...');
+                checkSyncStatus(currentFilePath);
+            } else {
+                console.log('[TimelineScreen] Paths do NOT match, ignoring event');
+            }
+        });
+
+        return () => {
+            subscription.remove();
+        };
+    }, [checkSyncStatus, getFlashNotePath]);
+
     React.useLayoutEffect(() => {
         navigation.setOptions({
             title: t('timeline.title'),
             headerRight: () => (
                 <View style={styles.headerRight}>
                     {isUpdating && <ActivityIndicator size="small" color={theme.colors.primary} />}
+                    {!isUpdating && syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
                     {!isUpdating && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
                     {!isUpdating && syncStatus === 'conflict' && <Text style={styles.syncIcon}>⚠️</Text>}
                 </View>
