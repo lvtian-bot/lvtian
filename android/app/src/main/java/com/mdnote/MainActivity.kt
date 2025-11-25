@@ -13,10 +13,19 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 class MainActivity : ReactActivity() {
 
   private var pendingShareText: String? = null
+  private var lastProcessedIntentTime = 0L
   private val handler = Handler(Looper.getMainLooper())
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(null)
+    android.util.Log.d("MainActivity", "onCreate called")
+  }
+
+  override fun onResume() {
+    super.onResume()
+    android.util.Log.d("MainActivity", "onResume called")
+    // Handle share intent in onResume as a fallback for systems where onNewIntent might not be called
+    handleShareIntent(intent)
   }
 
   /**
@@ -46,6 +55,7 @@ class MainActivity : ReactActivity() {
 
   override fun onNewIntent(intent: Intent?) {
     super.onNewIntent(intent)
+    android.util.Log.d("MainActivity", "onNewIntent called with action: ${intent?.action}")
     setIntent(intent)
     intent?.let { handleShareIntent(it) }
   }
@@ -53,15 +63,34 @@ class MainActivity : ReactActivity() {
   private fun handleShareIntent(intent: Intent?) {
     if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
       val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+      android.util.Log.d("MainActivity", "Found share intent with text: ${sharedText?.take(50)}")
+
       if (sharedText != null) {
+        // Prevent duplicate processing of the same intent
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastProcessedIntentTime < 1000) {
+          android.util.Log.d("MainActivity", "Skipping duplicate intent (within 1 second)")
+          return
+        }
+        lastProcessedIntentTime = currentTime
+
         sendEventToReactNative(sharedText)
       }
+    } else {
+      android.util.Log.d("MainActivity", "Intent action: ${intent?.action}, type: ${intent?.type}")
     }
   }
 
   private fun sendEventToReactNative(data: String) {
     try {
-      val reactContext = reactInstanceManager?.currentReactContext
+      // Use new architecture compatible method to get React context
+      val reactContext = try {
+        reactActivityDelegate?.getCurrentReactContext()
+      } catch (e: Exception) {
+        android.util.Log.w("MainActivity", "Cannot access ReactContext: ${e.message}")
+        null
+      }
+
       if (reactContext != null) {
         android.util.Log.d("MainActivity", "Sending share event to React Native")
         reactContext
@@ -75,6 +104,9 @@ class MainActivity : ReactActivity() {
       }
     } catch (e: Exception) {
       android.util.Log.e("MainActivity", "Error sending share event", e)
+      // Cache and retry even on error
+      pendingShareText = data
+      retryShareEvent()
     }
   }
 
@@ -85,7 +117,13 @@ class MainActivity : ReactActivity() {
     val retryRunnable = object : Runnable {
       override fun run() {
         attempts++
-        val reactContext = reactInstanceManager?.currentReactContext
+
+        // Use new architecture compatible method to get React context
+        val reactContext = try {
+          reactActivityDelegate?.getCurrentReactContext()
+        } catch (e: Exception) {
+          null
+        }
 
         if (reactContext != null && pendingShareText != null) {
           android.util.Log.d("MainActivity", "React context ready after $attempts attempts, sending cached share event")

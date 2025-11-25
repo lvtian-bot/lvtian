@@ -14,16 +14,23 @@ import * as Keychain from 'react-native-keychain';
 import { theme } from './src/utils/theme';
 import { useShareStore } from './src/store/useShareStore';
 import { RootStackParamList } from './src/types/navigation';
+import { SHARE_RECEIVED_EVENT } from './src/services/FlashNoteService';
+
 
 // Create navigation ref for programmatic navigation
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function App(props: { sharedText?: string }): React.JSX.Element {
   // Logic to initialize cloud service based on settings
-  const { cosConfig } = useSettingsStore();
+  const { cosConfig, hasHydrated } = useSettingsStore();
 
   useEffect(() => {
     const initializeCloud = async () => {
+      if (!hasHydrated) {
+        console.log('[App] Waiting for settings hydration...');
+        return;
+      }
+
       try {
         const { bucket, region } = cosConfig;
         const credentials = await Keychain.getGenericPassword();
@@ -31,19 +38,27 @@ function App(props: { sharedText?: string }): React.JSX.Element {
         if (credentials && credentials.username && credentials.password && bucket && region) {
           const secretId = credentials.username;
           const secretKey = credentials.password;
+          console.log('[App] Initializing cloud service with bucket:', bucket);
           const provider = new TencentCOSProvider(secretId, secretKey, bucket, region);
           cloudService.setProvider(provider);
+          console.log('[App] Cloud service initialized successfully');
         } else {
+          console.log('[App] Cloud service not configured - missing credentials or config');
           cloudService.setProvider(null);
         }
       } catch (error) {
-        console.error('Error initializing cloud service:', error);
+        console.error('[App] Error initializing cloud service:', error);
         cloudService.setProvider(null);
+      } finally {
+        cloudService.markInitialized();
       }
+
     };
 
-    initializeCloud();
-  }, [cosConfig]);
+    // Explicitly call the async function without await (useEffect cannot be async)
+    // The initialization will complete in the background
+    void initializeCloud();
+  }, [cosConfig, hasHydrated]);
 
   // Shared handler for processing shared content
   const handleSharedContent = React.useCallback(async (sharedText: string) => {
@@ -51,6 +66,10 @@ function App(props: { sharedText?: string }): React.JSX.Element {
 
     // Store the pending share content
     useShareStore.getState().setPendingShare(sharedText);
+
+    // Emit event for active listeners (like TimelineScreen)
+    DeviceEventEmitter.emit(SHARE_RECEIVED_EVENT, { content: sharedText });
+
 
     // Wait for navigation to be ready (with timeout)
     let attempts = 0;

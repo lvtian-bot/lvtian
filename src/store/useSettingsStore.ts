@@ -20,6 +20,8 @@ interface SettingsState {
     setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
     markdownTheme: MarkdownThemeKey;
     setMarkdownTheme: (theme: MarkdownThemeKey) => void;
+    hasHydrated: boolean;
+    setHasHydrated: (state: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -41,10 +43,15 @@ export const useSettingsStore = create<SettingsState>()(
                 set((state) => ({ flashNoteConfig: { ...state.flashNoteConfig, ...config } })),
             markdownTheme: 'default',
             setMarkdownTheme: (theme) => set({ markdownTheme: theme }),
+            hasHydrated: false,
+            setHasHydrated: (state) => set({ hasHydrated: state }),
         }),
         {
             name: 'settings-storage',
             storage: createJSONStorage(() => AsyncStorage),
+            onRehydrateStorage: () => (state) => {
+                state?.setHasHydrated(true);
+            },
         }
     )
 );

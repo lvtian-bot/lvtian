@@ -15,12 +15,26 @@ export interface CloudFileItem {
 }
 
 export const UPLOAD_COMPLETED_EVENT = 'UPLOAD_COMPLETED';
+export const CLOUD_INIT_COMPLETED_EVENT = 'CLOUD_INIT_COMPLETED';
+
 
 class CloudService {
     private provider: ICloudProvider | null = null;
+    private _isInitialized: boolean = false;
+
 
     setProvider(provider: ICloudProvider | null) {
         this.provider = provider;
+    }
+
+    markInitialized() {
+        this._isInitialized = true;
+        const { DeviceEventEmitter } = require('react-native');
+        DeviceEventEmitter.emit(CLOUD_INIT_COMPLETED_EVENT);
+    }
+
+    isInitialized(): boolean {
+        return this._isInitialized;
     }
 
     isConfigured(): boolean {

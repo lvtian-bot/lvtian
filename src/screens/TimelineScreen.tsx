@@ -13,8 +13,10 @@ import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useShareStore } from '../store/useShareStore';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal'; // Import the new modal
-import { flashNoteService, FLASH_NOTES_UPDATED_EVENT, SHARE_RECEIVED_EVENT } from '../services/FlashNoteService';
-import { UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
+import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
+
+import { UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudService';
+
 import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
 
@@ -28,7 +30,7 @@ interface FlashNote {
 
 type TimelineScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error' | 'offline';
+type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error' | 'offline' | 'not-configured';
 type ConflictType = 'cloudNewer' | 'localNewer' | null;
 
 export const TimelineScreen = () => {
@@ -36,9 +38,8 @@ export const TimelineScreen = () => {
     const [isUpdating, setIsUpdating] = useState(false);
     const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
     const [conflictType, setConflictType] = useState<ConflictType>(null);
-    const [configLoaded, setConfigLoaded] = useState(false); // Track if AsyncStorage config is loaded
     const navigation = useNavigation<TimelineScreenNavigationProp>();
-    const { flashNoteConfig, cosConfig } = useSettingsStore();
+    const { flashNoteConfig } = useSettingsStore();
     const { t } = useTranslation();
     const { getMetadata, setMetadata, setUploadState } = useFileMetadataStore();
 
@@ -62,6 +63,10 @@ export const TimelineScreen = () => {
 
     const checkSyncStatus = useCallback(async (filePath: string) => {
         setSyncStatus('checking');
+
+        // No delay needed, we rely on events now
+
+
         try {
             // const { cloudService } = require('../services/CloudService');
             const key = filePath;
@@ -89,12 +94,12 @@ export const TimelineScreen = () => {
 
             // 3. Check Cloud Config (after network, to allow AsyncStorage to load)
             if (!cloudService.isConfigured()) {
-                console.log('[TimelineScreen] Cloud not configured, treating as offline');
+                console.log('[TimelineScreen] Cloud not configured');
                 if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
                     setSyncStatus('conflict');
                     setConflictType('localNewer');
                 } else {
-                    setSyncStatus('offline');
+                    setSyncStatus('not-configured');
                     setConflictType(null);
                 }
                 return;
@@ -356,42 +361,20 @@ export const TimelineScreen = () => {
         // Step 1: Load and display content first (user experience priority)
         loadNotes();
 
-        // Step 2: Check for pending share content
-        const pendingContent = useShareStore.getState().pendingShareContent;
-        if (pendingContent) {
-            console.log('[TimelineScreen] Found pending share content, opening modal');
-            setEditingNoteId(undefined);
-            setEditingNoteContent(pendingContent);
-            setIsModalVisible(true);
-            // Clear the pending content after processing
-            useShareStore.getState().clearPendingShare();
-        }
+        // Step 2: Check sync status
+        const filePath = getFlashNotePath();
 
-        // Step 3: Check sync status only after config is loaded
-        // Configuration loading is tracked by the useEffect below
-        if (configLoaded) {
-            const filePath = getFlashNotePath();
+
+        // Only check sync status if cloud service is fully initialized
+        if (cloudService.isInitialized()) {
+            console.log('[TimelineScreen] Cloud initialized, checking sync status immediately');
             checkSyncStatus(filePath);
+        } else {
+            console.log('[TimelineScreen] Cloud not initialized yet, waiting for event...');
+            // We don't check yet, we wait for the event
         }
-    }, [loadNotes, getFlashNotePath, checkSyncStatus, configLoaded]));
+    }, [loadNotes, getFlashNotePath, checkSyncStatus]));
 
-    // Track when config is loaded from AsyncStorage and check sync status
-    React.useEffect(() => {
-        // Use a timer to detect when AsyncStorage has finished loading
-        // If cosConfig changes or stays empty for 800ms, consider it loaded
-        const timer = setTimeout(() => {
-            setConfigLoaded(true);
-            const filePath = getFlashNotePath();
-            if (cosConfig.bucket && cosConfig.region) {
-                console.log('[TimelineScreen] COS config loaded, checking sync status');
-            } else {
-                console.log('[TimelineScreen] COS not configured, checking sync status');
-            }
-            checkSyncStatus(filePath);
-        }, 800); // 800ms should be enough for AsyncStorage to load
-
-        return () => clearTimeout(timer);
-    }, [cosConfig.bucket, cosConfig.region, checkSyncStatus, getFlashNotePath]);
 
     // Listen for flash note updates (e.g. from share intent)
     React.useEffect(() => {
@@ -419,19 +402,47 @@ export const TimelineScreen = () => {
         };
     }, [checkSyncStatus, getFlashNotePath]);
 
-    // Listen for share received event
+    // Listen for cloud initialization completion
     React.useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(SHARE_RECEIVED_EVENT, (data: { content: string }) => {
-            console.log('Share received event, opening modal with content:', data.content);
-            setEditingNoteId(undefined);
-            setEditingNoteContent(data.content);
-            setIsModalVisible(true);
+        const subscription = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, () => {
+            console.log('[TimelineScreen] Cloud init completed event received, checking sync status...');
+            const filePath = getFlashNotePath();
+            checkSyncStatus(filePath);
         });
 
         return () => {
             subscription.remove();
         };
+    }, [checkSyncStatus, getFlashNotePath]);
+
+
+    // Subscribe to share content updates
+    React.useEffect(() => {
+        const handleShareContent = (content: string | null) => {
+            if (content) {
+                console.log('[TimelineScreen] Share content detected via subscription, opening modal');
+                setEditingNoteId(undefined);
+                setEditingNoteContent(content);
+                setIsModalVisible(true);
+                // Clear the pending content immediately to prevent duplicate triggers
+                useShareStore.getState().clearPendingShare();
+            }
+        };
+
+        // Check initial value
+        handleShareContent(useShareStore.getState().pendingShareContent);
+
+        // Subscribe to changes
+        const unsubscribe = useShareStore.subscribe((state) => {
+            handleShareContent(state.pendingShareContent);
+        });
+
+
+        return () => {
+            unsubscribe();
+        };
     }, []);
+
 
     React.useLayoutEffect(() => {
         navigation.setOptions({
@@ -455,8 +466,22 @@ export const TimelineScreen = () => {
 
     return (
         <View style={styles.container}>
-            {/* Only show offline banner when config is loaded and status is confirmed offline */}
-            {configLoaded && syncStatus === 'offline' && (
+            {/* Show not-configured banner when cloud service is not set up */}
+            {syncStatus === 'not-configured' && (
+                <View style={styles.infoBanner}>
+                    <Text style={styles.infoBannerText}>
+                        {'未配置云服务：当前仅使用本地存储'}
+                    </Text>
+                    <View style={styles.bannerButtons}>
+                        <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} style={styles.infoBannerButton}>
+
+                            <Text style={styles.infoBannerButtonText}>{'前往设置'}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
+            {/* Show offline banner when device is offline */}
+            {syncStatus === 'offline' && (
                 <View style={styles.banner}>
                     <Text style={styles.bannerText}>
                         {t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
@@ -603,6 +628,27 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 12,
     },
+    infoBanner: {
+        backgroundColor: '#D1ECF1',
+        padding: theme.spacing.s,
+        borderBottomWidth: 1,
+        borderBottomColor: '#BEE5EB',
+        alignItems: 'center',
+    },
+    infoBannerText: {
+        color: '#0C5460',
+        marginBottom: theme.spacing.s,
+    },
+    infoBannerButton: {
+        backgroundColor: '#0C5460',
+        paddingHorizontal: theme.spacing.m,
+        paddingVertical: theme.spacing.xs,
+        borderRadius: 4,
+    },
+    infoBannerButtonText: {
+        color: 'white',
+        fontSize: 12,
+    },
 });
 
 const HeaderRight = ({ isUpdating, syncStatus }: { isUpdating: boolean, syncStatus: SyncStatus }) => (
@@ -611,5 +657,6 @@ const HeaderRight = ({ isUpdating, syncStatus }: { isUpdating: boolean, syncStat
         {!isUpdating && syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
         {!isUpdating && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
         {!isUpdating && (syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
+        {!isUpdating && syncStatus === 'not-configured' && <Text style={styles.syncIcon}>ℹ️</Text>}
     </View>
 );
