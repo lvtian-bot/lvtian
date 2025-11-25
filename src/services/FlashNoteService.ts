@@ -96,9 +96,8 @@ class FlashNoteService {
 
         // Upload to cloud if configured (async, don't wait)
         if (cloudService.isConfigured()) {
-            const { setMetadata } = useFileMetadataStore.getState();
-            // Set temporary uploading state
-            setMetadata(filePath, 'uploading', new Date().toISOString());
+            const { setMetadata, setUploadState } = useFileMetadataStore.getState();
+            setUploadState(filePath, 'uploading');
 
             // Start upload in background
             cloudService.uploadFile(filePath, filePath).then(result => {
@@ -109,11 +108,9 @@ class FlashNoteService {
                 DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
             }).catch(error => {
                 console.error('Upload failed:', error);
-                // Clear uploading state on error
-                setMetadata(filePath, null, null);
+                setUploadState(filePath, 'failed');
                 // Notify UI that upload failed
                 DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
-                // TODO: Add to retry queue
             });
         }
 
@@ -143,20 +140,19 @@ class FlashNoteService {
 
             // Upload to cloud if configured (async, don't wait)
             if (cloudService.isConfigured()) {
-                const { setMetadata } = useFileMetadataStore.getState();
-                // Set temporary uploading state
-                setMetadata(filePath, 'uploading', new Date().toISOString());
+                const { setMetadata, setUploadState } = useFileMetadataStore.getState();
+                setUploadState(filePath, 'uploading');
 
                 // Start upload in background
                 cloudService.uploadFile(filePath, filePath).then(result => {
                     if (result) {
                         setMetadata(filePath, result.etag, result.lastModified);
                     }
+                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
                 }).catch(error => {
                     console.error('Upload failed:', error);
-                    // Clear uploading state on error
-                    setMetadata(filePath, null, null);
-                    // TODO: Add to retry queue
+                    setUploadState(filePath, 'failed');
+                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
                 });
             }
 

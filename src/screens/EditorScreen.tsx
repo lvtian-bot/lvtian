@@ -24,7 +24,7 @@ export const EditorScreen = () => {
     const [loading, setLoading] = useState(true);
     const webViewRef = useRef<WebView>(null);
 
-    const { setMetadata } = useFileMetadataStore();
+    const { setMetadata, setUploadState } = useFileMetadataStore();
 
     useEffect(() => {
         loadFile();
@@ -74,19 +74,29 @@ export const EditorScreen = () => {
 
             // Upload to cloud if configured (async, don't wait)
             if (cloudService.isConfigured()) {
-                // Set temporary uploading state
-                setMetadata(filePath, 'uploading', new Date().toISOString());
+                // Set persistent uploading state
+                useFileMetadataStore.getState().setUploadState(filePath, 'uploading');
+
+                // Get current local ETag for optimistic locking
+                const currentMetadata = useFileMetadataStore.getState().getMetadata(filePath);
+                const expectedEtag = currentMetadata?.etag || undefined;
 
                 // Start upload in background
-                cloudService.uploadFile(filePath, filePath).then(result => {
+                cloudService.uploadFile(filePath, filePath, expectedEtag).then(result => {
                     if (result) {
+                        // setMetadata will implicitly set uploadState to 'success'
                         setMetadata(filePath, result.etag, result.lastModified);
                     }
                     DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: true });
-                }).catch(error => {
+                }).catch((error: any) => {
                     console.error('Upload failed:', error);
-                    // Clear uploading state on error
-                    setMetadata(filePath, null, null);
+
+                    if (error.code === 'PreconditionFailed') {
+                        useFileMetadataStore.getState().setUploadState(filePath, 'conflict-failed');
+                    } else {
+                        useFileMetadataStore.getState().setUploadState(filePath, 'failed');
+                    }
+
                     DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: false });
                 });
             }

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import NetInfo from "@react-native-community/netinfo";
 import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
@@ -16,7 +17,7 @@ import { normalizePath } from '../utils/pathUtils';
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-type SyncStatus = 'checking' | 'synced' | 'conflict' | 'error';
+type SyncStatus = 'checking' | 'synced' | 'conflict' | 'error' | 'offline';
 type ConflictType = 'localNewer' | 'cloudNewer' | null;
 
 export const PreviewScreen = () => {
@@ -24,13 +25,14 @@ export const PreviewScreen = () => {
     const navigation = useNavigation<NavigationProp>();
     const { t } = useTranslation();
     const { filePath } = route.params;
-    const { getMetadata, setMetadata } = useFileMetadataStore();
+    const { getMetadata, setMetadata, setUploadState } = useFileMetadataStore();
+    // Subscribe to metadata changes for this file to trigger re-renders
+    const fileMetadata = useFileMetadataStore(state => state.metadata[filePath]);
 
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
     const [conflictType, setConflictType] = useState<ConflictType>(null);
-    const [uploadFailed, setUploadFailed] = useState(false);
 
     // 检查同步状态
     const checkSyncStatus = useCallback(async () => {
@@ -39,17 +41,30 @@ export const PreviewScreen = () => {
             const key = filePath;
             const localMetadata = getMetadata(filePath);
 
-            // 检查是否正在上传
-            if (localMetadata?.etag === 'uploading') {
+            // 检查持久化的上传状态
+            if (localMetadata?.uploadState === 'uploading') {
+                // 正在上传中，保持 checking 或显示上传中
                 setSyncStatus('checking');
                 setConflictType(null);
                 return;
             }
 
-            // 如果没有配置云服务
-            if (!cloudService.isConfigured()) {
-                setSyncStatus('synced');
-                setConflictType(null);
+
+
+
+            // ...
+            // 0. 检查网络状态
+            const netState = await NetInfo.fetch();
+            if (netState.isConnected === false) {
+                // 离线状态
+                // 优先检查是否有上传失败记录
+                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
+                    setSyncStatus('conflict');
+                    setConflictType('localNewer');
+                } else {
+                    setSyncStatus('offline');
+                    setConflictType(null);
+                }
                 return;
             }
 
@@ -67,6 +82,10 @@ export const PreviewScreen = () => {
             if (localMetadata?.etag === cloudMetadata.etag) {
                 setSyncStatus('synced');
                 setConflictType(null);
+                // 如果之前标记为失败但现在ETag一致，说明实际上同步了（可能是误报），清除失败状态
+                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
+                    setUploadState(filePath, null);
+                }
             } else {
                 setSyncStatus('conflict');
                 const localFileStat = await fsService.stat(filePath);
@@ -81,6 +100,23 @@ export const PreviewScreen = () => {
             }
         } catch (error) {
             console.error('Error checking sync status:', error);
+
+            // If upload failed previously, show conflict state so user sees the error
+            const localMetadata = getMetadata(filePath);
+            if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
+                setSyncStatus('conflict');
+                setConflictType('localNewer');
+                return;
+            }
+
+            // Check if local file exists to show offline mode
+            try {
+                if (await fsService.exists(filePath)) {
+                    setSyncStatus('offline');
+                    setConflictType(null);
+                    return;
+                }
+            } catch (e) { }
             setSyncStatus('error');
         }
     }, [filePath, getMetadata]);
@@ -100,20 +136,11 @@ export const PreviewScreen = () => {
         }
     }, [filePath]);
 
-    // 监听上传完成事件
+    // 监听上传完成事件 - 仅用于触发刷新，不再维护状态
     useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string; success?: boolean }) => {
             if (data.filePath === filePath) {
-                if (data.success === false) {
-                    // Upload failed, directly show conflict/local newer state
-                    setUploadFailed(true);
-                    setSyncStatus('conflict');
-                    setConflictType('localNewer');
-                } else {
-                    // Upload success or unknown, re-check properly
-                    setUploadFailed(false);
-                    checkSyncStatus();
-                }
+                checkSyncStatus();
             }
         });
 
@@ -126,7 +153,6 @@ export const PreviewScreen = () => {
     useFocusEffect(
         useCallback(() => {
             loadFile();
-            setUploadFailed(false); // 重新进入页面时清除上传失败标记
             checkSyncStatus();
         }, [loadFile, checkSyncStatus])
     );
@@ -151,13 +177,18 @@ export const PreviewScreen = () => {
     const handleUploadOverwrite = async () => {
         try {
             setLoading(true);
+            setUploadState(filePath, 'uploading');
             const result = await cloudService.uploadFile(filePath, filePath);
             if (result) {
                 setMetadata(filePath, result.etag, result.lastModified);
             }
             checkSyncStatus();
-        } catch (error) {
-            Alert.alert('Error', 'Failed to upload');
+        } catch (error: any) {
+            console.error('Upload failed:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            setUploadState(filePath, 'failed');
+            Alert.alert('Error', 'Failed to upload: ' + errorMessage);
+            checkSyncStatus(); // Re-check to update UI with failed state
         } finally {
             setLoading(false);
         }
@@ -176,13 +207,16 @@ export const PreviewScreen = () => {
             await fsService.moveFile(normalizedPath, newPath);
 
             if (cloudService.isConfigured()) {
+                setUploadState(newPath, 'uploading');
                 try {
                     const result = await cloudService.uploadFile(newPath, newPath);
                     if (result) {
                         setMetadata(newPath, result.etag, result.lastModified);
                     }
-                } catch (error) {
+                } catch (error: any) {
                     console.error('Upload failed:', error);
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    setUploadState(newPath, 'failed');
                 }
             }
 
@@ -214,7 +248,7 @@ export const PreviewScreen = () => {
                     </Text>
                     {syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
                     {syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
-                    {syncStatus === 'conflict' && <Text style={styles.syncIcon}>⚠️</Text>}
+                    {(syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
                 </View>
                 <TouchableOpacity
                     onPress={() => navigation.navigate('Editor', { filePath })}
@@ -224,10 +258,27 @@ export const PreviewScreen = () => {
                 </TouchableOpacity>
             </View>
 
+            {syncStatus === 'offline' && (
+                <View style={styles.banner}>
+                    <Text style={styles.bannerText}>
+                        {t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
+                    </Text>
+                    <View style={styles.bannerButtons}>
+                        <TouchableOpacity onPress={checkSyncStatus} style={styles.bannerButton}>
+                            <Text style={styles.bannerButtonText}>{t('common.retry') || '重试连接'}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
+
             {syncStatus === 'conflict' && conflictType && (
                 <View style={styles.banner}>
                     <Text style={styles.bannerText}>
-                        {uploadFailed && '上传失败\n'}
+                        {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') && (
+                            fileMetadata?.uploadState === 'conflict-failed'
+                                ? '上传失败：云端文件已更改\n'
+                                : '上传失败\n'
+                        )}
                         {conflictType === 'cloudNewer' ? '云端有新版本' : '本地更改未同步'}
                     </Text>
                     <View style={styles.bannerButtons}>

@@ -1,5 +1,5 @@
 export interface ICloudProvider {
-    uploadFile(key: string, filePath: string): Promise<{ etag: string; lastModified: string } | void>;
+    uploadFile(key: string, filePath: string, expectedEtag?: string): Promise<{ etag: string; lastModified: string } | void>;
     downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }>;
     getCloudFileContent(key: string): Promise<string>;
     listFiles(prefix?: string): Promise<CloudFileItem[]>;
@@ -27,9 +27,9 @@ class CloudService {
         return this.provider !== null;
     }
 
-    async uploadFile(key: string, filePath: string): Promise<{ etag: string; lastModified: string } | void> {
+    async uploadFile(key: string, filePath: string, expectedEtag?: string): Promise<{ etag: string; lastModified: string } | void> {
         if (!this.provider) throw new Error('Cloud provider not configured');
-        return this.provider.uploadFile(key, filePath);
+        return this.provider.uploadFile(key, filePath, expectedEtag);
     }
 
     async downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }> {
@@ -59,4 +59,3 @@ class CloudService {
 }
 
 export const cloudService = new CloudService();
-

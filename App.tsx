@@ -15,6 +15,7 @@ import { theme } from './src/utils/theme'; // Import theme
 import { flashNoteService } from './src/services/FlashNoteService';
 import { Alert } from 'react-native';
 import { t } from 'i18next';
+import { useFileMetadataStore } from './src/store/useFileMetadataStore';
 
 function App(props: { sharedText?: string }): React.JSX.Element {
   // Logic to initialize cloud service based on settings
@@ -55,6 +56,11 @@ function App(props: { sharedText?: string }): React.JSX.Element {
       console.error('Failed to save shared content:', error);
       Alert.alert(t('common.error'), t('timeline.saveError'));
     }
+  }, []);
+
+  // Clear stale uploading states on app launch
+  useEffect(() => {
+    useFileMetadataStore.getState().resetUploadingToFailed();
   }, []);
 
   // Handle Initial Share (Cold Start)

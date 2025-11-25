@@ -21,7 +21,13 @@
       "default": "无法加载文件，请稍后重试。",
       "auth": "云服务认证失败，请前往“设置”检查您的密钥。",
       "bucket": "找不到指定的存储桶(Bucket)，请前往“设置”检查您的配置。",
-      "network": "网络连接错误，请检查您的网络设置。"
+      "network": "网络连接错误，请检查您的网络设置。",
+      "downloadFailed": "下载文件失败"
+    },
+    "offlineMode": "当前处于离线模式，仅显示本地缓存，数据可能不完整",
+    "offlineFileNotCached": "文件未缓存，无法离线查看",
+    "info": {
+      "notMarkdown": "不是 Markdown 文件，无法预览"
     }
   },
   "timeline": {
@@ -46,7 +52,9 @@
     "error": "错误",
     "confirm": "确认",
     "edit": "编辑",
-    "delete": "删除"
+    "delete": "删除",
+    "retry": "重试",
+    "notice": "提示"
   },
   "settings": {
     "saveAndValidate": "验证并保存配置",
@@ -76,5 +84,8 @@
   "fileItem": {
     "folder": "文件夹",
     "kb": "KB"
+  },
+  "preview": {
+    "offlineMode": "当前处于离线模式，显示文件为本地缓存，可能不是最新版本"
   }
 }

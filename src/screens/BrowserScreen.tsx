@@ -21,11 +21,14 @@ import { FileItem, fsService } from '../services/FileSystemService';
 import { cloudService } from '../services/CloudService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { useFileListStore } from '../store/useFileListStore';
 
 import { Breadcrumb } from '../components/Breadcrumb';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type Status = 'idle' | 'loading' | 'success' | 'error' | 'unconfigured';
+
+type ExtendedFileItem = FileItem & { isCached?: boolean };
 
 const MessageView = ({ title, message, buttonText, onButtonPress }: { title: string; message: string; buttonText?: string; onButtonPress?: () => void; }) => (
     <View style={styles.messageContainer}>
@@ -41,13 +44,15 @@ const MessageView = ({ title, message, buttonText, onButtonPress }: { title: str
 
 export const BrowserScreen = () => {
     const { t } = useTranslation();
-    const [files, setFiles] = useState<FileItem[]>([]);
+    const [files, setFiles] = useState<ExtendedFileItem[]>([]);
     const [status, setStatus] = useState<Status>('idle');
     const [errorMessage, setErrorMessage] = useState('');
     const [prefix, setPrefix] = useState('');
+    const [isOfflineMode, setIsOfflineMode] = useState(false);
 
     const navigation = useNavigation<NavigationProp>();
     const { cosConfig } = useSettingsStore();
+    const { setCachedList, getCachedList } = useFileListStore();
 
     const loadFiles = useCallback(async () => {
         if (!cloudService.isConfigured()) {
@@ -57,7 +62,12 @@ export const BrowserScreen = () => {
         setStatus('loading');
         try {
             const cloudFiles = await cloudService.listFiles(prefix);
-            const fileList: FileItem[] = cloudFiles.map((item): FileItem => ({
+
+            // Cache the successful list
+            setCachedList(prefix, cloudFiles);
+            setIsOfflineMode(false);
+
+            const fileList: ExtendedFileItem[] = cloudFiles.map((item): ExtendedFileItem => ({
                 name: item.key.endsWith('/')
                     ? item.key.split('/').slice(-2, -1)[0] + '/'
                     : item.key.split('/').pop() ?? item.key,
@@ -65,6 +75,7 @@ export const BrowserScreen = () => {
                 size: item.size,
                 isDirectory: item.key.endsWith('/'),
                 mtime: new Date(item.lastModified),
+                isCached: true, // Online files are "cached" in the sense they are available (or downloadable)
             }));
 
             fileList.sort((a, b) => {
@@ -76,6 +87,92 @@ export const BrowserScreen = () => {
             setStatus('success');
         } catch (error: any) {
             console.error('Failed to load cloud files:', error);
+            setIsOfflineMode(true);
+
+            // Try to load from cache + local files
+            try {
+                const cachedCloudFiles = getCachedList(prefix);
+                const localFiles = await fsService.listFiles(prefix);
+                const localFileNames = new Set(localFiles.map(f => f.name));
+
+                let mergedFiles: ExtendedFileItem[] = [];
+
+                if (cachedCloudFiles) {
+                    // We have a cached list, use it as the source of truth for "what exists"
+                    mergedFiles = cachedCloudFiles.map((item): ExtendedFileItem => {
+                        const name = item.key.endsWith('/')
+                            ? item.key.split('/').slice(-2, -1)[0] + '/'
+                            : item.key.split('/').pop() ?? item.key;
+
+                        // Check if this file exists locally
+                        // For directories, we assume they exist if they are in the list? 
+                        // Or we check if local has that dir?
+                        // fsService.listFiles returns directories too.
+                        const isCached = localFileNames.has(name);
+
+                        return {
+                            name: name,
+                            path: item.key,
+                            size: item.size,
+                            isDirectory: item.key.endsWith('/'),
+                            mtime: new Date(item.lastModified),
+                            isCached: item.key.endsWith('/') ? true : isCached, // Folders always "cached" (clickable) to navigate?
+                            // Actually if folder is not locally present, we can't list its contents offline unless we have cache for THAT folder too.
+                            // But let's allow clicking, it will try to load that folder's cache.
+                        };
+                    });
+                } else {
+                    // No cache. Check if local directory exists to decide if we should show empty list or error.
+                    let useLocal = localFiles.length > 0 || prefix === '';
+                    if (!useLocal) {
+                        try {
+                            useLocal = await fsService.exists(prefix);
+                        } catch (e) { }
+                    }
+
+                    if (useLocal) {
+                        const rootPath = fsService.getRootPath();
+                        mergedFiles = localFiles.map(f => {
+                            let relativePath = f.path;
+                            if (relativePath.startsWith(rootPath)) {
+                                relativePath = relativePath.substring(rootPath.length);
+                            }
+                            relativePath = relativePath.replace(/^\/+/, '');
+                            if (f.isDirectory && !relativePath.endsWith('/')) {
+                                relativePath += '/';
+                            }
+                            return {
+                                ...f,
+                                path: relativePath,
+                                isCached: true,
+                            };
+                        });
+
+                        // If we decided to use local, we show success even if empty
+                        mergedFiles.sort((a, b) => {
+                            if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+                            return a.name.localeCompare(b.name);
+                        });
+                        setFiles(mergedFiles);
+                        setStatus('success');
+                        return;
+                    }
+                }
+
+                if (mergedFiles.length > 0 || (cachedCloudFiles && cachedCloudFiles.length === 0)) {
+                    mergedFiles.sort((a, b) => {
+                        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+                        return a.name.localeCompare(b.name);
+                    });
+                    setFiles(mergedFiles);
+                    setStatus('success');
+                    return;
+                }
+
+            } catch (localError) {
+                console.log('Failed to load local/cached files:', localError);
+            }
+
             let message = t('browser.error.default');
             if (error && error.code) {
                 switch (error.code) {
@@ -87,7 +184,7 @@ export const BrowserScreen = () => {
             setErrorMessage(message);
             setStatus('error');
         }
-    }, [cosConfig, prefix, t]);
+    }, [cosConfig, prefix, t, getCachedList, setCachedList]);
 
     const handlePathPress = (newPath: string) => {
         setPrefix(newPath);
@@ -177,7 +274,12 @@ export const BrowserScreen = () => {
         }
     };
 
-    const handleFilePress = async (item: FileItem) => {
+    const handleFilePress = async (item: ExtendedFileItem) => {
+        if (isOfflineMode && !item.isDirectory && !item.isCached) {
+            Alert.alert(t('common.notice'), t('browser.offlineFileNotCached') || 'File not cached locally');
+            return;
+        }
+
         if (item.isDirectory) {
             setPrefix(item.path);
         } else {
@@ -187,6 +289,10 @@ export const BrowserScreen = () => {
                     if (exists) {
                         navigation.navigate('Preview', { filePath: item.path });
                     } else {
+                        if (isOfflineMode) {
+                            Alert.alert(t('common.notice'), t('browser.offlineFileNotCached') || 'File not cached locally');
+                            return;
+                        }
                         setStatus('loading');
                         const result = await cloudService.downloadFile(item.path, item.path);
 
@@ -220,19 +326,27 @@ export const BrowserScreen = () => {
                 return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} />;
             case 'success':
                 return (
-                    <FlatList
-                        data={files}
-                        renderItem={({ item }) => (
-                            <FileListItem
-                                item={item}
-                                onPress={handleFilePress}
-                                onDelete={handleDeleteFile} // Pass the delete handler
-                            />
+                    <View style={{ flex: 1 }}>
+                        {isOfflineMode && (
+                            <View style={styles.offlineBanner}>
+                                <Text style={styles.offlineBannerText}>{t('browser.offlineMode') || 'Offline Mode - Showing cached list'}</Text>
+                            </View>
                         )}
-                        keyExtractor={(item) => item.path}
-                        refreshControl={<RefreshControl refreshing={false} onRefresh={loadFiles} />}
-                        ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
-                    />
+                        <FlatList
+                            data={files}
+                            renderItem={({ item }) => (
+                                <FileListItem
+                                    item={item}
+                                    onPress={handleFilePress}
+                                    onDelete={handleDeleteFile}
+                                    isCached={item.isCached}
+                                />
+                            )}
+                            keyExtractor={(item) => item.path}
+                            refreshControl={<RefreshControl refreshing={false} onRefresh={loadFiles} />}
+                            ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
+                        />
+                    </View>
                 );
         }
     };
@@ -254,4 +368,15 @@ const styles = StyleSheet.create({
     buttonText: { color: theme.colors.white, fontSize: 16, fontWeight: 'bold' },
     headerBackButton: { marginLeft: -5, padding: 10 },
     headerBackButtonText: { color: theme.colors.primary, fontSize: 16 },
+    offlineBanner: {
+        backgroundColor: '#FFF3CD',
+        padding: 8,
+        alignItems: 'center',
+        borderBottomWidth: 1,
+        borderBottomColor: '#FFEEBA',
+    },
+    offlineBannerText: {
+        color: '#856404',
+        fontSize: 12,
+    },
 });

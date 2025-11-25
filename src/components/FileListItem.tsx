@@ -9,12 +9,16 @@ interface FileListItemProps {
     item: FileItem;
     onPress: (item: FileItem) => void;
     onDelete?: (item: FileItem) => void; // Now will be triggered by long press
+    isCached?: boolean; // Default true if undefined
 }
 
-export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onDelete }) => {
+export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onDelete, isCached = true }) => {
     const { t } = useTranslation();
     const iconName = item.isDirectory ? 'folder' : 'description';
-    const iconColor = item.isDirectory ? theme.colors.primary : theme.colors.textSecondary;
+    // If not cached, use disabled color. Otherwise use primary for folder, textSecondary for file icon (or keep existing logic)
+    const baseIconColor = item.isDirectory ? theme.colors.primary : theme.colors.textSecondary;
+    const iconColor = isCached ? baseIconColor : theme.colors.mutedText || '#ccc';
+    const textColor = isCached ? theme.colors.text : theme.colors.mutedText || '#ccc';
 
     const handleLongPress = () => {
         if (onDelete && !item.isDirectory) { // Only call onDelete for files
@@ -33,7 +37,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onDel
                 <Icon name={iconName} size={28} color={iconColor} />
             </View>
             <View style={styles.contentContainer}>
-                <Text style={styles.name} numberOfLines={1}>
+                <Text style={[styles.name, { color: textColor }]} numberOfLines={1}>
                     {item.name}
                 </Text>
                 <Text style={styles.details}>

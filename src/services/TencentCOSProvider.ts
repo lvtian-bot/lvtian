@@ -16,20 +16,40 @@ export class TencentCOSProvider implements ICloudProvider {
         this.region = region;
     }
 
-    async uploadFile(key: string, filePath: string): Promise<{ etag: string; lastModified: string } | void> {
+    async uploadFile(key: string, filePath: string, expectedEtag?: string): Promise<{ etag: string; lastModified: string } | void> {
         const content = await fsService.readFile(filePath);
-        const result = await this.cos.putObject({
+        const params: any = {
             Bucket: this.bucket,
             Region: this.region,
             Key: key,
             Body: content,
-        });
-        // COS putObject returns ETag in headers usually, but let's check what the SDK returns.
-        // If not available, we might need to HEAD it, but let's try to extract from result if possible.
-        // The type definition for putObject result might not expose headers easily in all SDK versions.
-        // For now, let's try to return what we can or void if not easy, but the plan says we should update metadata.
-        // Let's try to HEAD it immediately to be safe and get accurate LastModified.
-        return this.headFile(key) as Promise<{ etag: string; lastModified: string }>;
+        };
+
+        if (expectedEtag) {
+            // Add If-Match header for optimistic locking
+            // Note: ETag in If-Match must be quoted
+            params.Headers = {
+                'If-Match': `"${expectedEtag}"`
+            };
+        }
+
+        try {
+            const result = await this.cos.putObject(params);
+            // COS putObject returns ETag in headers usually, but let's check what the SDK returns.
+            // If not available, we might need to HEAD it, but let's try to extract from result if possible.
+            // The type definition for putObject result might not expose headers easily in all SDK versions.
+            // For now, let's try to return what we can or void if not easy, but the plan says we should update metadata.
+            // Let's try to HEAD it immediately to be safe and get accurate LastModified.
+            return this.headFile(key) as Promise<{ etag: string; lastModified: string }>;
+        } catch (error: any) {
+            // Handle Precondition Failed (Optimistic Lock Failure)
+            if (error.statusCode === 412) {
+                const e: any = new Error('Precondition Failed');
+                e.code = 'PreconditionFailed';
+                throw e;
+            }
+            throw error;
+        }
     }
 
     async downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }> {
@@ -130,22 +150,22 @@ export class TencentCOSProvider implements ICloudProvider {
                             'Accept': '*/*',
                         }
                     })
-                    .then(response => {
-                        console.log('Delete response status:', response.status);
-                        if (response.ok || response.status === 204) {
-                            console.log('Delete successful via fetch');
-                            resolve();
-                        } else {
-                            response.text().then(text => {
-                                console.error('Delete failed:', response.status, text);
-                                reject(new Error(`Delete failed with status ${response.status}: ${text}`));
-                            });
-                        }
-                    })
-                    .catch(fetchError => {
-                        console.error('Fetch error:', fetchError);
-                        reject(fetchError);
-                    });
+                        .then(response => {
+                            console.log('Delete response status:', response.status);
+                            if (response.ok || response.status === 204) {
+                                console.log('Delete successful via fetch');
+                                resolve();
+                            } else {
+                                response.text().then(text => {
+                                    console.error('Delete failed:', response.status, text);
+                                    reject(new Error(`Delete failed with status ${response.status}: ${text}`));
+                                });
+                            }
+                        })
+                        .catch(fetchError => {
+                            console.error('Fetch error:', fetchError);
+                            reject(fetchError);
+                        });
                 });
             } catch (error) {
                 console.error('Exception in deleteFile:', error);
@@ -167,9 +187,14 @@ export class TencentCOSProvider implements ICloudProvider {
                 etag: (data.ETag || headers.headers?.etag || '').replace(/"/g, ''),
                 lastModified: headers.LastModified || headers.headers?.['last-modified'] || '',
             };
-        } catch (error) {
+        } catch (error: any) {
+            // Only return null if file not found (404)
+            if (error && error.statusCode === 404) {
+                return null;
+            }
+            // For other errors (network, 403, etc), rethrow so caller can handle it
             console.log('Error heading file:', error);
-            return null;
+            throw error;
         }
     }
 }
