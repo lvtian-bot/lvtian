@@ -15,6 +15,7 @@ const SUFFIX_REGEX = /\n>\s*$/;
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
 
 export const FLASH_NOTES_UPDATED_EVENT = 'FLASH_NOTES_UPDATED';
+export const SHARE_RECEIVED_EVENT = 'SHARE_RECEIVED_EVENT';
 
 class FlashNoteService {
     private getFlashNotePath(): string {

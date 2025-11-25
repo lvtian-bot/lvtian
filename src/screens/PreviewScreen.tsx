@@ -292,9 +292,14 @@ export const PreviewScreen = () => {
                                 </TouchableOpacity>
                             </>
                         ) : (
-                            <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                <Text style={styles.bannerButtonText}>上传到云端</Text>
-                            </TouchableOpacity>
+                            <>
+                                <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
+                                    <Text style={styles.bannerButtonText}>上传到云端</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
+                                    <Text style={styles.bannerButtonText}>保存副本</Text>
+                                </TouchableOpacity>
+                            </>
                         )}
                     </View>
                 </View>

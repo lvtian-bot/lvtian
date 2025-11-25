@@ -11,8 +11,9 @@ import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { useShareStore } from '../store/useShareStore';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal'; // Import the new modal
-import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
+import { flashNoteService, FLASH_NOTES_UPDATED_EVENT, SHARE_RECEIVED_EVENT } from '../services/FlashNoteService';
 import { UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
@@ -355,7 +356,18 @@ export const TimelineScreen = () => {
         // Step 1: Load and display content first (user experience priority)
         loadNotes();
 
-        // Step 2: Check sync status only after config is loaded
+        // Step 2: Check for pending share content
+        const pendingContent = useShareStore.getState().pendingShareContent;
+        if (pendingContent) {
+            console.log('[TimelineScreen] Found pending share content, opening modal');
+            setEditingNoteId(undefined);
+            setEditingNoteContent(pendingContent);
+            setIsModalVisible(true);
+            // Clear the pending content after processing
+            useShareStore.getState().clearPendingShare();
+        }
+
+        // Step 3: Check sync status only after config is loaded
         // Configuration loading is tracked by the useEffect below
         if (configLoaded) {
             const filePath = getFlashNotePath();
@@ -406,6 +418,20 @@ export const TimelineScreen = () => {
             subscription.remove();
         };
     }, [checkSyncStatus, getFlashNotePath]);
+
+    // Listen for share received event
+    React.useEffect(() => {
+        const subscription = DeviceEventEmitter.addListener(SHARE_RECEIVED_EVENT, (data: { content: string }) => {
+            console.log('Share received event, opening modal with content:', data.content);
+            setEditingNoteId(undefined);
+            setEditingNoteContent(data.content);
+            setIsModalVisible(true);
+        });
+
+        return () => {
+            subscription.remove();
+        };
+    }, []);
 
     React.useLayoutEffect(() => {
         navigation.setOptions({
@@ -461,19 +487,19 @@ export const TimelineScreen = () => {
                         {conflictType === 'cloudNewer' ? (
                             <>
                                 <TouchableOpacity onPress={handleOverwriteLocal} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>覆盖本地</Text>
+                                    <Text style={styles.bannerButtonText}>使用云端版本</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>另存副本</Text>
+                                    <Text style={styles.bannerButtonText}>保存副本</Text>
                                 </TouchableOpacity>
                             </>
                         ) : (
                             <>
                                 <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>上传覆盖</Text>
+                                    <Text style={styles.bannerButtonText}>上传到云端</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>另存副本</Text>
+                                    <Text style={styles.bannerButtonText}>保存副本</Text>
                                 </TouchableOpacity>
                             </>
                         )}

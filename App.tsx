@@ -1,21 +1,26 @@
 import './src/i18n'; // Initialize i18next
 import React, { useEffect } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation/AppNavigator';
-import { StyleSheet, StatusBar } from 'react-native'; // Import StatusBar
+import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
 
 // Imports for cloud service initialization
 import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
 import { TencentCOSProvider } from './src/services/TencentCOSProvider';
 import * as Keychain from 'react-native-keychain';
-import { theme } from './src/utils/theme'; // Import theme
-import { flashNoteService } from './src/services/FlashNoteService';
+import { theme } from './src/utils/theme';
+import { flashNoteService, SHARE_RECEIVED_EVENT } from './src/services/FlashNoteService';
 import { Alert } from 'react-native';
 import { t } from 'i18next';
 import { useFileMetadataStore } from './src/store/useFileMetadataStore';
+import { useShareStore } from './src/store/useShareStore';
+import { RootStackParamList } from './src/types/navigation';
+
+// Create navigation ref for programmatic navigation
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function App(props: { sharedText?: string }): React.JSX.Element {
   // Logic to initialize cloud service based on settings
@@ -46,15 +51,30 @@ function App(props: { sharedText?: string }): React.JSX.Element {
 
   // Shared handler for processing shared content
   const handleSharedContent = React.useCallback(async (sharedText: string) => {
-    try {
-      await flashNoteService.addNote(sharedText);
-      Alert.alert(
-        t('common.success'),
-        t('timeline.savedFromShare', { defaultValue: '分享内容已保存到闪念笔记' })
-      );
-    } catch (error) {
-      console.error('Failed to save shared content:', error);
-      Alert.alert(t('common.error'), t('timeline.saveError'));
+    console.log('[App] Received share content, length:', sharedText.length);
+
+    // Store the pending share content
+    useShareStore.getState().setPendingShare(sharedText);
+
+    // Wait for navigation to be ready (with timeout)
+    let attempts = 0;
+    const maxAttempts = 30; // 3 seconds max wait
+    while (!navigationRef.isReady() && attempts < maxAttempts) {
+      console.log(`[App] Waiting for navigation ref... attempt ${attempts + 1}`);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+
+    // Navigate to Timeline tab
+    if (navigationRef.isReady()) {
+      navigationRef.navigate('MainTabs', {
+        screen: 'Timeline'
+      } as any);
+      console.log('[App] Navigated to Timeline');
+    } else {
+      console.warn('[App] Navigation ref not ready after waiting');
+      // Even if navigation fails, the content is stored and will be processed
+      // when user manually navigates to Timeline
     }
   }, []);
 
@@ -72,8 +92,6 @@ function App(props: { sharedText?: string }): React.JSX.Element {
 
   // Share Intent Handler (Warm Start)
   useEffect(() => {
-    const { DeviceEventEmitter } = require('react-native');
-
     const subscription = DeviceEventEmitter.addListener('onShareReceived', handleSharedContent);
 
     return () => {
@@ -85,7 +103,7 @@ function App(props: { sharedText?: string }): React.JSX.Element {
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={theme.colors.surface} />
       <SafeAreaProvider>
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           <AppNavigator />
         </NavigationContainer>
       </SafeAreaProvider>
