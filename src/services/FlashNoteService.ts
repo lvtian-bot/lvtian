@@ -1,5 +1,5 @@
 import { fsService } from './FileSystemService';
-import { syncService } from './SyncService';
+import { cloudService, UPLOAD_COMPLETED_EVENT } from './CloudService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { DeviceEventEmitter } from 'react-native';
@@ -21,6 +21,16 @@ class FlashNoteService {
         const { flashNoteConfig } = useSettingsStore.getState();
         const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
         return normalizePath(path);
+    }
+
+    private async ensureDirectoryExists(filePath: string): Promise<void> {
+        const lastSlashIndex = filePath.lastIndexOf('/');
+        if (lastSlashIndex > 0) {
+            const dirPath = filePath.substring(0, lastSlashIndex);
+            if (!(await fsService.exists(dirPath))) {
+                await fsService.createDirectory(dirPath);
+            }
+        }
     }
 
     private getFormattedTimestamp(): string {
@@ -80,14 +90,31 @@ class FlashNoteService {
 
         const newContent = currentContent.trim() ? currentContent.trim() + newEntry : `## ${timestamp}\n${trimmedInput}${suffix}`;
 
+        // Ensure directory exists before writing
+        await this.ensureDirectoryExists(filePath);
         await fsService.writeFile(filePath, newContent);
 
-        // Set temporary metadata to indicate uploading state (only if cloud is configured)
-        const { cloudService } = require('./CloudService');
+        // Upload to cloud if configured (async, don't wait)
         if (cloudService.isConfigured()) {
             const { setMetadata } = useFileMetadataStore.getState();
+            // Set temporary uploading state
             setMetadata(filePath, 'uploading', new Date().toISOString());
-            await syncService.syncFile(filePath);
+
+            // Start upload in background
+            cloudService.uploadFile(filePath, filePath).then(result => {
+                if (result) {
+                    setMetadata(filePath, result.etag, result.lastModified);
+                }
+                // Notify UI that upload completed
+                DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
+            }).catch(error => {
+                console.error('Upload failed:', error);
+                // Clear uploading state on error
+                setMetadata(filePath, null, null);
+                // Notify UI that upload failed
+                DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
+                // TODO: Add to retry queue
+            });
         }
 
         DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
@@ -111,14 +138,26 @@ class FlashNoteService {
 
         if (noteFound) {
             const newContent = newBlocks.join('');
+            await this.ensureDirectoryExists(filePath);
             await fsService.writeFile(filePath, newContent);
 
-            // Set temporary metadata to indicate uploading state (only if cloud is configured)
-            const { cloudService } = require('./CloudService');
+            // Upload to cloud if configured (async, don't wait)
             if (cloudService.isConfigured()) {
                 const { setMetadata } = useFileMetadataStore.getState();
+                // Set temporary uploading state
                 setMetadata(filePath, 'uploading', new Date().toISOString());
-                await syncService.syncFile(filePath);
+
+                // Start upload in background
+                cloudService.uploadFile(filePath, filePath).then(result => {
+                    if (result) {
+                        setMetadata(filePath, result.etag, result.lastModified);
+                    }
+                }).catch(error => {
+                    console.error('Upload failed:', error);
+                    // Clear uploading state on error
+                    setMetadata(filePath, null, null);
+                    // TODO: Add to retry queue
+                });
             }
 
             DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
@@ -153,14 +192,21 @@ class FlashNoteService {
         });
 
         const newContent = newLines.join('\n');
+        await this.ensureDirectoryExists(filePath);
         await fsService.writeFile(filePath, newContent);
 
-        // Set temporary metadata to indicate uploading state (only if cloud is configured)
-        const { cloudService } = require('./CloudService');
+        // Upload to cloud if configured
         if (cloudService.isConfigured()) {
-            const { setMetadata } = useFileMetadataStore.getState();
-            setMetadata(filePath, 'uploading', new Date().toISOString());
-            await syncService.syncFile(filePath);
+            try {
+                const result = await cloudService.uploadFile(filePath, filePath);
+                if (result) {
+                    const { setMetadata } = useFileMetadataStore.getState();
+                    setMetadata(filePath, result.etag, result.lastModified);
+                }
+            } catch (error) {
+                console.error('Upload failed:', error);
+                // TODO: Add to retry queue
+            }
         }
 
         DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);

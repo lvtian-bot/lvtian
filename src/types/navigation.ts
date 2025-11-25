@@ -8,7 +8,8 @@ export type MainTabParamList = {
 
 export type RootStackParamList = {
     MainTabs: NavigatorScreenParams<MainTabParamList>;
-    Editor: { filePath: string; isNew?: boolean };
+    Preview: { filePath: string };
+    Editor: { filePath: string };
 };
 
 

@@ -14,6 +14,8 @@ export interface CloudFileItem {
     etag: string;
 }
 
+export const UPLOAD_COMPLETED_EVENT = 'UPLOAD_COMPLETED';
+
 class CloudService {
     private provider: ICloudProvider | null = null;
 

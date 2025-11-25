@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     Modal,
     View,
@@ -38,6 +38,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const { t } = useTranslation();
     const [inputText, setInputText] = useState(initialContent || '');
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0); // Measured height from onContentSizeChange
+    const inputRef = useRef<TextInput>(null);
 
     // Calculate effective min/max heights dynamically
     const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5; // Estimate line height is 1.5 times font size
@@ -67,6 +68,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             transparent={true}
             visible={visible}
             onRequestClose={onCancel}
+            onShow={() => inputRef.current?.focus()}
         >
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -86,6 +88,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                         </TouchableOpacity>
                     </View>
                     <TextInput
+                        ref={inputRef}
                         style={[
                             styles.input,
                             { height: Math.max(MIN_HEIGHT, Math.min(inputMeasuredHeight, MAX_HEIGHT)) }

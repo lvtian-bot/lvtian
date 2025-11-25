@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndi
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { fsService } from '../services/FileSystemService';
-import { syncService } from '../services/SyncService';
+import { cloudService } from '../services/CloudService';
 import { theme } from '../utils/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
@@ -12,7 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal'; // Import the new modal
 import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
-import { SYNC_COMPLETED_EVENT } from '../services/SyncService';
+import { UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
 
@@ -64,32 +64,10 @@ export const TimelineScreen = () => {
             console.log('[TimelineScreen] checkSyncStatus for:', filePath);
             console.log('[TimelineScreen] localMetadata:', localMetadata);
 
-            // Check if file is currently uploading (temporary state set by FlashNoteService)
+            // Check if file is currently uploading
             if (localMetadata?.etag === 'uploading') {
-                console.log('[TimelineScreen] File is uploading (metadata.etag = uploading)');
-                // If cloud is not configured, clear the uploading state
-                if (!cloudService.isConfigured()) {
-                    console.log('[TimelineScreen] Cloud not configured, clearing uploading state');
-                    const { invalidateMetadata } = require('../store/useFileMetadataStore').useFileMetadataStore.getState();
-                    invalidateMetadata(filePath);
-                    setSyncStatus('synced');
-                    setConflictType(null);
-                    return;
-                }
+                console.log('[TimelineScreen] File is uploading');
                 setSyncStatus('checking'); // Show uploading indicator
-                setConflictType(null);
-                return;
-            }
-
-            // Check if file is in upload queue (real-time sync)
-            const { useSyncStore } = require('../store/useSyncStore');
-            const uploadQueue = useSyncStore.getState().uploadQueue;
-            console.log('[TimelineScreen] Upload queue:', uploadQueue);
-            const isUploading = uploadQueue.some((item: any) => item.filePath === filePath && (item.status === 'pending' || item.status === 'uploading'));
-
-            if (isUploading) {
-                console.log('[TimelineScreen] File is in upload queue');
-                setSyncStatus('checking'); // Show syncing indicator
                 setConflictType(null);
                 return;
             }
@@ -196,11 +174,12 @@ export const TimelineScreen = () => {
         try {
             setIsUpdating(true);
             const filePath = getFlashNotePath();
-            await syncService.syncFile(filePath);
-            setTimeout(() => {
-                checkSyncStatus(filePath);
-                setIsUpdating(false);
-            }, 2000);
+            const result = await cloudService.uploadFile(filePath, filePath);
+            if (result) {
+                setMetadata(filePath, result.etag, result.lastModified);
+            }
+            checkSyncStatus(filePath);
+            setIsUpdating(false);
         } catch (error) {
             Alert.alert('Error', 'Failed to upload');
             setIsUpdating(false);
@@ -215,12 +194,31 @@ export const TimelineScreen = () => {
 
             // 1. Rename local file (backup) and upload it
             // This moves the local 'flash_notes.md' to 'flash_notes_conflict_xxx.md'
-            const backupPath = await syncService.resolveConflict(filePath);
+            const normalizedPath = normalizePath(filePath);
+            const fileName = normalizedPath.split('/').pop() || '';
+            const dir = normalizedPath.replace(fileName, '');
+            const timestamp = new Date().getTime();
+            const newName = `${fileName.replace('.md', '')}_old_${timestamp}.md`;
+            const backupPath = normalizePath(`${dir}${newName}`);
+
+            await fsService.moveFile(normalizedPath, backupPath);
+
+            // Upload the renamed file to cloud
+            if (cloudService.isConfigured()) {
+                try {
+                    const result = await cloudService.uploadFile(backupPath, backupPath);
+                    if (result) {
+                        setMetadata(backupPath, result.etag, result.lastModified);
+                    }
+                } catch (error) {
+                    console.error('Upload backup failed:', error);
+                }
+            }
+
             const backupFileName = backupPath.split('/').pop();
 
             // 2. Download the CLOUD version of the original file to restore main timeline
             // Since local file was moved, we can download fresh
-            const { cloudService } = require('../services/CloudService');
             const result = await cloudService.downloadFile(key, filePath);
 
             // 3. Update Metadata & UI to show the fresh cloud content
@@ -329,17 +327,12 @@ export const TimelineScreen = () => {
         };
     }, [loadNotes]);
 
-    // Listen for sync completion events
+    // Listen for upload completion
     React.useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(SYNC_COMPLETED_EVENT, (data: { filePath: string }) => {
-            console.log('[TimelineScreen] Sync completed event received for:', data.filePath);
+        const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string }) => {
             const currentFilePath = getFlashNotePath();
-            console.log('[TimelineScreen] Current flash note path:', currentFilePath);
             if (data.filePath === currentFilePath) {
-                console.log('[TimelineScreen] Paths match! Checking sync status...');
                 checkSyncStatus(currentFilePath);
-            } else {
-                console.log('[TimelineScreen] Paths do NOT match, ignoring event');
             }
         });
 

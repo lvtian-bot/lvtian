@@ -84,20 +84,16 @@ The app uses Zustand stores with AsyncStorage persistence:
 - Provider is set at app initialization based on settings
 - Operations: uploadFile, downloadFile, getCloudFileContent, listFiles, deleteFile, headFile
 
-#### Sync Service (`src/services/SyncService.ts`)
-- Manages upload queue processing
-- Implements "Copy on Write" pattern: Save → Local → Queue → Upload
-- Conflict resolution: Renames local file with timestamp suffix, downloads cloud version, uploads backup
-- Retry logic: Max 3 retries per upload
-
-### Cloud Synchronization Flow
+### Upload Flow
 
 1. **Initialization** (App.tsx):
    - On app start, checks for valid COS config and credentials
    - If found, initializes TencentCOSProvider and sets it on cloudService
 
 2. **Write Flow**:
-   - User saves file → Local write → Add to sync queue → Background upload
+   - User saves file → Local write → Direct upload to cloud
+   - Upload success: Update local metadata (etag, lastModified)
+   - Upload failure: Log error (TODO: Add to retry queue)
    - Upload result (etag, lastModified) stored in FileMetadataStore
 
 3. **Conflict Detection**:

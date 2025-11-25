@@ -135,41 +135,41 @@ export const BrowserScreen = () => {
                     {
                         text: t('common.confirm'),
                         onPress: async () => {
-                        try {
-                            console.log('=== Starting delete operation ===');
-                            console.log('File to delete:', fileToDelete.name);
-                            console.log('File path:', fileToDelete.path);
+                            try {
+                                console.log('=== Starting delete operation ===');
+                                console.log('File to delete:', fileToDelete.name);
+                                console.log('File path:', fileToDelete.path);
 
-                            // Step 1: Delete from local file system first (safer - can recover from cloud)
-                            const localFileExists = await fsService.exists(fileToDelete.path);
-                            console.log('Local file exists:', localFileExists);
+                                // Step 1: Delete from local file system first (safer - can recover from cloud)
+                                const localFileExists = await fsService.exists(fileToDelete.path);
+                                console.log('Local file exists:', localFileExists);
 
-                            if (localFileExists) {
-                                await fsService.deleteFile(fileToDelete.path);
-                                console.log('Local file deleted');
+                                if (localFileExists) {
+                                    await fsService.deleteFile(fileToDelete.path);
+                                    console.log('Local file deleted');
+                                }
+
+                                // Step 2: Delete from the cloud
+                                console.log('Starting cloud delete...');
+                                await cloudService.deleteFile(fileToDelete.path);
+                                console.log('Cloud delete successful!');
+
+                                // Temporarily remove Alert to avoid Android Activity issue
+                                console.log('Delete completed successfully');
+                                loadFiles(); // Refresh the list
+                            } catch (error) {
+                                console.error('Failed to delete file:', error);
+                                console.error('Error type:', typeof error);
+                                console.error('Error message:', error instanceof Error ? error.message : String(error));
+
+                                // Show error alert with delay to ensure Activity is ready
+                                setTimeout(() => {
+                                    Alert.alert(t('common.error'), t('browser.deleteFailed') + '\n' + (error instanceof Error ? error.message : String(error)));
+                                }, 500);
                             }
-
-                            // Step 2: Delete from the cloud
-                            console.log('Starting cloud delete...');
-                            await cloudService.deleteFile(fileToDelete.path);
-                            console.log('Cloud delete successful!');
-
-                            // Temporarily remove Alert to avoid Android Activity issue
-                            console.log('Delete completed successfully');
-                            loadFiles(); // Refresh the list
-                        } catch (error) {
-                            console.error('Failed to delete file:', error);
-                            console.error('Error type:', typeof error);
-                            console.error('Error message:', error instanceof Error ? error.message : String(error));
-
-                            // Show error alert with delay to ensure Activity is ready
-                            setTimeout(() => {
-                                Alert.alert(t('common.error'), t('browser.deleteFailed') + '\n' + (error instanceof Error ? error.message : String(error)));
-                            }, 500);
-                        }
+                        },
                     },
-                },
-            ],
+                ],
                 { cancelable: true }
             );
         } catch (error) {
@@ -185,17 +185,17 @@ export const BrowserScreen = () => {
                 try {
                     const exists = await fsService.exists(item.path);
                     if (exists) {
-                        navigation.navigate('Editor', { filePath: item.path });
+                        navigation.navigate('Preview', { filePath: item.path });
                     } else {
                         setStatus('loading');
                         const result = await cloudService.downloadFile(item.path, item.path);
-                        
+
                         // Set the metadata for the newly downloaded file
                         const { setMetadata } = useFileMetadataStore.getState();
                         setMetadata(item.path, result.etag, result.lastModified);
-                        
+
                         setStatus('success');
-                        navigation.navigate('Editor', { filePath: item.path });
+                        navigation.navigate('Preview', { filePath: item.path });
                     }
                 } catch (error) {
                     console.error('Failed to open file:', error);

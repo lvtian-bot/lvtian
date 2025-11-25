@@ -1,132 +1,34 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, ScrollView, DeviceEventEmitter } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
-import Markdown from 'react-native-markdown-display';
 import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
-import { cloudService } from '../services/CloudService';
-import { syncService, SYNC_COMPLETED_EVENT } from '../services/SyncService';
+import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
-import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
-import { markdownThemes } from '../utils/markdownThemes';
 import { normalizePath } from '../utils/pathUtils';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
-
-type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error';
-type ConflictType = 'cloudNewer' | 'localNewer' | null;
 
 export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
-    const { markdownTheme } = useSettingsStore();
-    const { filePath: rawFilePath, isNew } = route.params;
-    const filePath = normalizePath(rawFilePath); // Normalize path immediately
+    const { filePath: rawFilePath } = route.params;
+    const filePath = normalizePath(rawFilePath);
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
-    const [isEditing, setIsEditing] = useState(isNew || false);
-    const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
-    const [conflictType, setConflictType] = useState<ConflictType>(null);
     const webViewRef = useRef<WebView>(null);
 
-    const { getMetadata, invalidateMetadata, setMetadata } = useFileMetadataStore();
-
-    const checkSyncStatus = async () => {
-        setSyncStatus('checking');
-        try {
-            const key = filePath;
-            const localMetadata = getMetadata(filePath);
-
-            console.log('[EditorScreen] checkSyncStatus for:', filePath);
-            console.log('[EditorScreen] localMetadata:', localMetadata);
-
-            // Check if file is currently uploading (temporary state set after save)
-            if (localMetadata?.etag === 'uploading') {
-                console.log('[EditorScreen] File is uploading');
-                setSyncStatus('checking'); // Show uploading indicator
-                setConflictType(null);
-                return;
-            }
-
-            // Check if file is in upload queue (real-time sync)
-            const { useSyncStore } = require('../store/useSyncStore');
-            const uploadQueue = useSyncStore.getState().uploadQueue;
-            const isUploading = uploadQueue.some((item: any) => item.filePath === filePath && (item.status === 'pending' || item.status === 'uploading'));
-
-            if (isUploading) {
-                setSyncStatus('checking'); // Show uploading indicator
-                setConflictType(null);
-                return;
-            }
-
-            // If cloud is not configured, just show as synced (local only mode)
-            if (!cloudService.isConfigured()) {
-                setSyncStatus('synced');
-                setConflictType(null);
-                return;
-            }
-
-            const cloudMetadata = await cloudService.headFile(key);
-            console.log('[EditorScreen] cloudMetadata:', cloudMetadata);
-
-            if (!cloudMetadata) {
-                // File might not exist in cloud yet
-                setSyncStatus('error'); // Or 'localNewer' if we assume it's a new file?
-                // For now, if cloud doesn't have it, it's effectively local newer if we have content
-                if (await fsService.exists(filePath)) {
-                    setSyncStatus('conflict');
-                    setConflictType('localNewer');
-                }
-                return;
-            }
-
-            if (localMetadata?.etag === cloudMetadata.etag) {
-                console.log('[EditorScreen] ETags match! Setting synced');
-                setSyncStatus('synced');
-                setConflictType(null);
-            } else {
-                console.log('[EditorScreen] ETags mismatch! local:', localMetadata?.etag, 'cloud:', cloudMetadata.etag);
-                setSyncStatus('conflict');
-                const localFileStat = await fsService.stat(filePath);
-                const localMtime = localFileStat?.mtime || new Date(0);
-                const cloudMtime = new Date(cloudMetadata.lastModified);
-
-                if (cloudMtime > localMtime) {
-                    setConflictType('cloudNewer');
-                } else {
-                    setConflictType('localNewer');
-                }
-            }
-        } catch (error) {
-            console.error('Error checking sync status:', error);
-            setSyncStatus('error');
-        }
-    };
+    const { setMetadata } = useFileMetadataStore();
 
     useEffect(() => {
         loadFile();
     }, [filePath]);
-
-    // Listen for sync completion events
-    useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(SYNC_COMPLETED_EVENT, (data: { filePath: string }) => {
-            console.log('EditorScreen: Sync completed event received for:', data.filePath);
-            if (data.filePath === filePath) {
-                checkSyncStatus();
-            }
-        });
-
-        return () => {
-            subscription.remove();
-        };
-    }, [filePath, checkSyncStatus]);
-
 
     const loadFile = async () => {
         try {
@@ -138,11 +40,9 @@ export const EditorScreen = () => {
                 const fileContent = await fsService.readFile(filePath);
                 console.log('[EditorScreen] File content length:', fileContent.length);
                 setContent(fileContent);
-                checkSyncStatus();
             } else {
                 console.log('[EditorScreen] File does not exist');
                 setContent('');
-                setSyncStatus('error');
             }
         } catch (error) {
             console.error('[EditorScreen] Error loading file:', error);
@@ -155,10 +55,10 @@ export const EditorScreen = () => {
 
     const handleAutoSave = async (newContent: string) => {
         try {
-            // 自动保存：只写本地，不触发云同步，不退出编辑模式
+            // 自动保存：只写本地，不触发云上传，不退出编辑模式
             await fsService.writeFile(filePath, newContent);
             setContent(newContent);
-            // 不调用 syncService.syncFile
+            // 不调用 cloudService.uploadFile
             // 不调用 setIsEditing(false)
         } catch (error) {
             console.error('Auto save failed:', error);
@@ -168,19 +68,31 @@ export const EditorScreen = () => {
 
     const handleManualSave = async (newContent: string) => {
         try {
-            // 手动保存：写本地 + 触发云同步 + 退出编辑模式
+            // 手动保存：写本地 + 触发云同步 + 返回预览页
             await fsService.writeFile(filePath, newContent);
             setContent(newContent);
-            setIsEditing(false);
 
-            // Set temporary metadata to indicate uploading state (only if cloud is configured)
+            // Upload to cloud if configured (async, don't wait)
             if (cloudService.isConfigured()) {
+                // Set temporary uploading state
                 setMetadata(filePath, 'uploading', new Date().toISOString());
-                // Trigger upload to cloud (Copy on Write pattern: Save -> Local -> Queue -> Upload)
-                syncService.syncFile(filePath);
+
+                // Start upload in background
+                cloudService.uploadFile(filePath, filePath).then(result => {
+                    if (result) {
+                        setMetadata(filePath, result.etag, result.lastModified);
+                    }
+                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: true });
+                }).catch(error => {
+                    console.error('Upload failed:', error);
+                    // Clear uploading state on error
+                    setMetadata(filePath, null, null);
+                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: false });
+                });
             }
 
-            checkSyncStatus(); // Re-check status (will show uploading indicator)
+            // 返回预览页
+            navigation.goBack();
         } catch (error) {
             Alert.alert('Error', 'Failed to save file');
         }
@@ -204,53 +116,6 @@ export const EditorScreen = () => {
         webViewRef.current?.injectJavaScript('window.getContent(); true;');
     };
 
-    const handleOverwriteLocal = async () => {
-        try {
-            setLoading(true);
-            const key = filePath;
-            const result = await cloudService.downloadFile(key, filePath);
-            setMetadata(filePath, result.etag, result.lastModified);
-            await loadFile(); // Reload content
-        } catch (error) {
-            Alert.alert('Error', 'Failed to overwrite local file');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleSaveCopy = async () => {
-        try {
-            setLoading(true);
-            // Rename local file and upload as copy (like "Save As" in Office apps)
-            const newPath = await syncService.resolveConflict(filePath);
-
-            // Navigate to the renamed file (user continues editing the renamed version)
-            // Cloud version is NOT downloaded - user can open it manually from file list
-            navigation.replace('Editor', { filePath: newPath });
-        } catch (error) {
-            Alert.alert('Error', 'Failed to save copy');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleUploadOverwrite = async () => {
-        try {
-            setLoading(true);
-            await syncService.syncFile(filePath);
-            // We need to wait for upload to finish to update metadata?
-            // syncFile adds to queue. processQueue updates metadata.
-            // We might need to poll or wait.
-            // For now, let's just set status to checking and let the queue handle it.
-            // Ideally we'd have a way to know when it's done.
-            setTimeout(() => checkSyncStatus(), 2000); // Simple timeout for now
-        } catch (error) {
-            Alert.alert('Error', 'Failed to upload');
-        } finally {
-            setLoading(false);
-        }
-    };
-
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
@@ -269,78 +134,32 @@ export const EditorScreen = () => {
                     <Text style={styles.title} numberOfLines={2}>
                         {filePath.split('/').pop()}
                     </Text>
-                    {syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
-                    {syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
-                    {syncStatus === 'conflict' && <Text style={styles.syncIcon}>⚠️</Text>}
                 </View>
                 <TouchableOpacity
-                    onPress={() => {
-                        if (isEditing) {
-                            requestSaveFromWebView();
-                        } else {
-                            setIsEditing(true);
-                        }
-                    }}
+                    onPress={requestSaveFromWebView}
                     style={styles.headerButton}
                 >
-                    <Text style={styles.headerButtonText}>{isEditing ? t('common.save') : t('common.edit')}</Text>
+                    <Text style={styles.headerButtonText}>{t('common.save')}</Text>
                 </TouchableOpacity>
             </View>
 
-            {syncStatus === 'conflict' && conflictType && (
-                <View style={styles.banner}>
-                    <Text style={styles.bannerText}>
-                        {conflictType === 'cloudNewer' ? '云端有新版本' : '本地更改未同步'}
-                    </Text>
-                    <View style={styles.bannerButtons}>
-                        {conflictType === 'cloudNewer' ? (
-                            <>
-                                <TouchableOpacity onPress={handleOverwriteLocal} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>覆盖本地</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>另存副本</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : (
-                            <>
-                                <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>上传覆盖</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>另存副本</Text>
-                                </TouchableOpacity>
-                            </>
-                        )}
-                    </View>
-                </View>
-            )}
-
-            {isEditing ? (
-                <WebView
-                    ref={webViewRef}
-                    source={
-                        Platform.OS === 'android'
-                            ? { uri: 'file:///android_asset/editor.html' }
-                            : require('../../android/app/src/main/assets/editor.html')
-                    }
-                    originWhitelist={['*']}
-                    allowFileAccess={true}
-                    allowFileAccessFromFileURLs={true}
-                    allowUniversalAccessFromFileURLs={true}
-                    onMessage={onWebViewMessage}
-                    onLoadEnd={() => {
-                        webViewRef.current?.postMessage(content);
-                    }}
-                    style={styles.webview}
-                />
-            ) : (
-                <ScrollView style={styles.viewerContainer}>
-                    <Markdown style={markdownThemes[markdownTheme]}>
-                        {content}
-                    </Markdown>
-                </ScrollView>
-            )}
+            <WebView
+                ref={webViewRef}
+                source={
+                    Platform.OS === 'android'
+                        ? { uri: 'file:///android_asset/editor.html' }
+                        : require('../../android/app/src/main/assets/editor.html')
+                }
+                originWhitelist={['*']}
+                allowFileAccess={true}
+                allowFileAccessFromFileURLs={true}
+                allowUniversalAccessFromFileURLs={true}
+                onMessage={onWebViewMessage}
+                onLoadEnd={() => {
+                    webViewRef.current?.postMessage(content);
+                }}
+                style={styles.webview}
+            />
         </SafeAreaView>
     );
 };
@@ -359,7 +178,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        padding: theme.spacing.s, // Reduced padding
+        padding: theme.spacing.s,
         backgroundColor: theme.colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
@@ -380,47 +199,13 @@ const styles = StyleSheet.create({
         marginHorizontal: 10,
     },
     title: {
-        fontSize: 16, // Slightly smaller font
-        // fontWeight removed
+        fontSize: 16,
         marginHorizontal: theme.spacing.s,
         flexShrink: 1,
-        textAlign: 'center', // Center text if it wraps
-    },
-    syncIcon: {
-        fontSize: 16,
-        marginLeft: 4,
+        textAlign: 'center',
     },
     webview: {
         flex: 1,
-    },
-    viewerContainer: {
-        flex: 1,
-        padding: theme.spacing.m,
-    },
-    banner: {
-        backgroundColor: '#FFF3CD',
-        padding: theme.spacing.s,
-        borderBottomWidth: 1,
-        borderBottomColor: '#FFEEBA',
-        alignItems: 'center',
-    },
-    bannerText: {
-        color: '#856404',
-        marginBottom: theme.spacing.s,
-    },
-    bannerButtons: {
-        flexDirection: 'row',
-        gap: theme.spacing.m,
-    },
-    bannerButton: {
-        backgroundColor: '#856404',
-        paddingHorizontal: theme.spacing.m,
-        paddingVertical: theme.spacing.xs,
-        borderRadius: 4,
-    },
-    bannerButtonText: {
-        color: 'white',
-        fontSize: 12,
     },
 });
 

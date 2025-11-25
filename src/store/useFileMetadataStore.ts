@@ -9,7 +9,7 @@ export interface FileMetadata {
 
 interface FileMetadataState {
     metadata: Record<string, FileMetadata>;
-    setMetadata: (filePath: string, etag: string, lastModified: string) => void;
+    setMetadata: (filePath: string, etag: string | null, lastModified: string | null) => void;
     getMetadata: (filePath: string) => FileMetadata | null;
     invalidateMetadata: (filePath: string) => void;
 }

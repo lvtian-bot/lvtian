@@ -10,6 +10,10 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 
 class MainActivity : ReactActivity() {
 
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(null)
+  }
+
   /**
    * Returns the name of the main component registered from JavaScript. This is used to schedule
    * rendering of the component.
@@ -37,7 +41,6 @@ class MainActivity : ReactActivity() {
 
   override fun onNewIntent(intent: Intent?) {
     super.onNewIntent(intent)
-    android.util.Log.d("MainActivity", "onNewIntent received: ${intent?.action}")
     setIntent(intent)
     intent?.let { handleShareIntent(it) }
   }
@@ -45,7 +48,6 @@ class MainActivity : ReactActivity() {
   private fun handleShareIntent(intent: Intent?) {
     if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
       val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-      android.util.Log.d("MainActivity", "Handling share intent. Text: $sharedText")
       if (sharedText != null) {
         sendEventToReactNative(sharedText)
       }
@@ -55,20 +57,12 @@ class MainActivity : ReactActivity() {
   private fun sendEventToReactNative(data: String) {
     try {
       val reactContext = reactInstanceManager?.currentReactContext
-      android.util.Log.d("MainActivity", "Sending event to RN. Context exists: ${reactContext != null}")
       if (reactContext != null) {
         reactContext
           .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
           ?.emit("onShareReceived", data)
       } else {
-          // Retry once after a short delay if context is null (though unlikely in warm start)
-          android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-              val retryContext = reactInstanceManager?.currentReactContext
-              android.util.Log.d("MainActivity", "Retry sending event. Context exists: ${retryContext != null}")
-              retryContext
-                  ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                  ?.emit("onShareReceived", data)
-          }, 1000)
+        android.util.Log.w("MainActivity", "React context not available, event may be lost")
       }
     } catch (e: Exception) {
       android.util.Log.e("MainActivity", "Error sending share event", e)
