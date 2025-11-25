@@ -4,9 +4,13 @@
       "Bash(cat:*)",
       "Bash(curl:*)",
       "Bash(./gradlew assembleRelease:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(gh auth:*)",
+      "Bash(test:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "outputStyle": "Explanatory"
 }
