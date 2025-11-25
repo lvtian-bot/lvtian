@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -15,6 +15,9 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 
 import { FileListItem } from '../components/FileListItem';
+import { FileActionSheet, FileAction } from '../components/FileActionSheet';
+import { RenameDialog } from '../components/RenameDialog';
+import { DirectoryPicker } from '../components/DirectoryPicker';
 import { theme } from '../utils/theme';
 import { RootStackParamList } from '../types/navigation';
 import { FileItem, fsService } from '../services/FileSystemService';
@@ -49,6 +52,17 @@ export const BrowserScreen = () => {
     const [errorMessage, setErrorMessage] = useState('');
     const [prefix, setPrefix] = useState('');
     const [isOfflineMode, setIsOfflineMode] = useState(false);
+
+    // 文件操作相关状态
+    const [selectedFile, setSelectedFile] = useState<ExtendedFileItem | null>(null);
+    const [showActionSheet, setShowActionSheet] = useState(false);
+    const [showRenameDialog, setShowRenameDialog] = useState(false);
+    const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
+
+    // 滚动位置记录
+    const [scrollPositions, setScrollPositions] = useState<Record<string, number>>({});
+    const flatListRef = useRef<FlatList>(null);
+    const currentScrollY = useRef(0);
 
     const navigation = useNavigation<NavigationProp>();
     const { cosConfig } = useSettingsStore();
@@ -187,6 +201,11 @@ export const BrowserScreen = () => {
     }, [cosConfig, prefix, t, getCachedList, setCachedList]);
 
     const handlePathPress = (newPath: string) => {
+        // 保存当前路径的滚动位置
+        setScrollPositions(prev => ({
+            ...prev,
+            [prefix]: currentScrollY.current,
+        }));
         setPrefix(newPath);
     };
 
@@ -197,11 +216,33 @@ export const BrowserScreen = () => {
         });
     }, [navigation, t]);
 
+    // 恢复滚动位置
+    useEffect(() => {
+        if (status === 'success' && files.length > 0) {
+            const savedPosition = scrollPositions[prefix];
+            if (savedPosition !== undefined) {
+                // 延迟恢复，确保列表已渲染
+                setTimeout(() => {
+                    flatListRef.current?.scrollToOffset({
+                        offset: savedPosition,
+                        animated: false,
+                    });
+                }, 100);
+            }
+        }
+    }, [status, prefix]);
+
     // This effect will handle the hardware back button
     useFocusEffect(
         useCallback(() => {
             const onBackPress = () => {
                 if (prefix) {
+                    // 保存当前路径的滚动位置
+                    setScrollPositions(prev => ({
+                        ...prev,
+                        [prefix]: currentScrollY.current,
+                    }));
+
                     const parts = prefix.split('/').filter(Boolean);
                     parts.pop();
                     const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : '';
@@ -274,11 +315,114 @@ export const BrowserScreen = () => {
         }
     };
 
+    // 处理长按文件
+    const handleFileLongPress = (item: ExtendedFileItem) => {
+        setSelectedFile(item);
+        setShowActionSheet(true);
+    };
+
+    // 处理重命名
+    const handleRename = async (newName: string) => {
+        if (!selectedFile) return;
+
+        try {
+            const oldPath = selectedFile.path;
+            const pathParts = oldPath.split('/');
+            pathParts[pathParts.length - (selectedFile.isDirectory ? 2 : 1)] = newName;
+            const newPath = pathParts.join('/');
+
+            // 重命名本地文件
+            const localExists = await fsService.exists(oldPath);
+            if (localExists) {
+                await fsService.moveFile(oldPath, newPath);
+            }
+
+            // 重命名云端文件（通过复制+删除实现）
+            if (cloudService.isConfigured()) {
+                // 对于文件，需要下载后重新上传
+                if (!selectedFile.isDirectory) {
+                    // 确保本地文件存在
+                    if (!localExists) {
+                        await cloudService.downloadFile(oldPath, oldPath);
+                    }
+                    // 读取文件内容
+                    const content = await fsService.readFile(newPath);
+                    // 上传到新路径
+                    await cloudService.uploadFile(newPath, content);
+                    // 删除旧路径
+                    await cloudService.deleteFile(oldPath);
+                }
+            }
+
+            Alert.alert(t('common.success'), '重命名成功');
+            setShowRenameDialog(false);
+            setSelectedFile(null);
+            loadFiles();
+        } catch (error) {
+            console.error('Failed to rename:', error);
+            Alert.alert(t('common.error'), '重命名失败：' + (error instanceof Error ? error.message : String(error)));
+        }
+    };
+
+    // 处理移动
+    const handleMove = async (targetPath: string) => {
+        if (!selectedFile) return;
+
+        try {
+            const oldPath = selectedFile.path;
+            const fileName = selectedFile.name;
+            const newPath = targetPath ? `${targetPath}${fileName}` : fileName;
+
+            if (oldPath === newPath) {
+                Alert.alert(t('common.notice'), '目标位置与当前位置相同');
+                setShowDirectoryPicker(false);
+                setSelectedFile(null);
+                return;
+            }
+
+            // 移动本地文件
+            const localExists = await fsService.exists(oldPath);
+            if (localExists) {
+                await fsService.moveFile(oldPath, newPath);
+            }
+
+            // 移动云端文件
+            if (cloudService.isConfigured()) {
+                if (!selectedFile.isDirectory) {
+                    // 确保本地文件存在
+                    if (!localExists) {
+                        await cloudService.downloadFile(oldPath, oldPath);
+                    }
+                    // 读取文件内容
+                    const content = await fsService.readFile(newPath);
+                    // 上传到新路径
+                    await cloudService.uploadFile(newPath, content);
+                    // 删除旧路径
+                    await cloudService.deleteFile(oldPath);
+                }
+            }
+
+            Alert.alert(t('common.success'), '移动成功');
+            setShowDirectoryPicker(false);
+            setSelectedFile(null);
+            loadFiles();
+        } catch (error) {
+            console.error('Failed to move:', error);
+            Alert.alert(t('common.error'), '移动失败：' + (error instanceof Error ? error.message : String(error)));
+        }
+    };
+
     const handleFilePress = async (item: ExtendedFileItem) => {
         if (isOfflineMode && !item.isDirectory && !item.isCached) {
             Alert.alert(t('common.notice'), t('browser.offlineFileNotCached') || 'File not cached locally');
             return;
         }
+
+        // 保存当前路径的滚动位置（无论是打开文件夹还是文件）
+        setScrollPositions(prev => ({
+            ...prev,
+            [prefix]: currentScrollY.current,
+        }));
 
         if (item.isDirectory) {
             setPrefix(item.path);
@@ -333,28 +477,106 @@ export const BrowserScreen = () => {
                             </View>
                         )}
                         <FlatList
+                            ref={flatListRef}
                             data={files}
                             renderItem={({ item }) => (
                                 <FileListItem
                                     item={item}
                                     onPress={handleFilePress}
-                                    onDelete={handleDeleteFile}
+                                    onLongPress={handleFileLongPress}
                                     isCached={item.isCached}
                                 />
                             )}
                             keyExtractor={(item) => item.path}
                             refreshControl={<RefreshControl refreshing={false} onRefresh={loadFiles} />}
                             ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
+                            onScroll={(event) => {
+                                currentScrollY.current = event.nativeEvent.contentOffset.y;
+                            }}
+                            scrollEventThrottle={16}
                         />
                     </View>
                 );
         }
     };
 
+    // 准备操作菜单的选项
+    const getFileActions = (): FileAction[] => {
+        if (!selectedFile) return [];
+
+        const actions: FileAction[] = [
+            {
+                label: '重命名',
+                icon: 'edit',
+                onPress: () => {
+                    setShowActionSheet(false);
+                    setShowRenameDialog(true);
+                },
+            },
+            {
+                label: '移动',
+                icon: 'drive-file-move',
+                onPress: () => {
+                    setShowActionSheet(false);
+                    setShowDirectoryPicker(true);
+                },
+            },
+            {
+                label: '删除',
+                icon: 'delete',
+                onPress: () => {
+                    setShowActionSheet(false);
+                    handleDeleteFile(selectedFile);
+                    setSelectedFile(null);
+                },
+                destructive: true,
+            },
+        ];
+
+        return actions;
+    };
+
     return (
         <View style={styles.container}>
             <Breadcrumb path={prefix} onPathPress={handlePathPress} />
             {renderContent()}
+
+            {/* 文件操作菜单 */}
+            {selectedFile && (
+                <>
+                    <FileActionSheet
+                        visible={showActionSheet}
+                        fileName={selectedFile.name}
+                        actions={getFileActions()}
+                        onCancel={() => {
+                            setShowActionSheet(false);
+                            setSelectedFile(null);
+                        }}
+                    />
+
+                    <RenameDialog
+                        visible={showRenameDialog}
+                        currentName={selectedFile.name.replace(/\/$/, '')} // 移除文件夹名末尾的 /
+                        onConfirm={handleRename}
+                        onCancel={() => {
+                            setShowRenameDialog(false);
+                            setSelectedFile(null);
+                        }}
+                    />
+
+                    <DirectoryPicker
+                        visible={showDirectoryPicker}
+                        currentPath={selectedFile.path}
+                        onConfirm={(targetPath) => {
+                            handleMove(targetPath);
+                        }}
+                        onCancel={() => {
+                            setShowDirectoryPicker(false);
+                            setSelectedFile(null);
+                        }}
+                    />
+                </>
+            )}
         </View>
     );
 };

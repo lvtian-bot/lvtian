@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
     Modal,
     View,
-    Text,
     TextInput,
     TouchableOpacity,
     StyleSheet,
@@ -12,6 +11,7 @@ import {
     Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import Icon from 'react-native-vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 
 interface FlashNoteInputModalProps {
@@ -23,10 +23,10 @@ interface FlashNoteInputModalProps {
 }
 
 const { height: screenHeight } = Dimensions.get('window');
-const MIN_INPUT_HEIGHT_LINES = 6; // Start with 6 lines height
-const MAX_INPUT_HEIGHT_RATIO = 0.4; // Max 40% of screen height for input
+const MIN_INPUT_HEIGHT_LINES = 8; // Increased height
+const MAX_INPUT_HEIGHT_RATIO = 0.5; // Increased max height ratio
 
-const TEXT_INPUT_FONT_SIZE = 16; // Moved outside the component
+const TEXT_INPUT_FONT_SIZE = 16;
 
 export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     visible,
@@ -37,17 +37,15 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
 }) => {
     const { t } = useTranslation();
     const [inputText, setInputText] = useState(initialContent || '');
-    const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0); // Measured height from onContentSizeChange
+    const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
     const inputRef = useRef<TextInput>(null);
 
-    // Calculate effective min/max heights dynamically
-    const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5; // Estimate line height is 1.5 times font size
+    const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5;
     const MAX_HEIGHT = screenHeight * MAX_INPUT_HEIGHT_RATIO;
 
     useEffect(() => {
         if (visible) {
             setInputText(initialContent || '');
-            // Reset measured height when modal opens or initial content changes
             setInputMeasuredHeight(MIN_HEIGHT);
         }
     }, [initialContent, visible, MIN_HEIGHT]);
@@ -60,33 +58,25 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
         onSave(initialId, inputText);
     };
 
-    const modalTitle = initialId ? t('timeline.editTitle') : t('timeline.newTitle');
-
     return (
         <Modal
             animationType="slide"
             transparent={true}
             visible={visible}
             onRequestClose={onCancel}
-            onShow={() => inputRef.current?.focus()}
+            onShow={() => {
+                setTimeout(() => {
+                    inputRef.current?.focus();
+                }, 100);
+            }}
         >
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 style={styles.keyboardAvoidingView}
             >
-                {/* Overlay to dim background and close modal on tap outside */}
                 <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onCancel} />
 
                 <View style={styles.modalContentContainer}>
-                    <View style={styles.header}>
-                        <TouchableOpacity onPress={onCancel}>
-                            <Text style={styles.headerButtonText}>{t('common.cancel')}</Text>
-                        </TouchableOpacity>
-                        <Text style={styles.modalTitle}>{modalTitle}</Text>
-                        <TouchableOpacity onPress={handleSave}>
-                            <Text style={[styles.headerButtonText, styles.saveButtonText]}>{t('common.save')}</Text>
-                        </TouchableOpacity>
-                    </View>
                     <TextInput
                         ref={inputRef}
                         style={[
@@ -97,12 +87,16 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                         placeholder={t('timeline.placeholder')}
                         value={inputText}
                         onChangeText={setInputText}
-                        autoFocus
                         textAlignVertical="top"
                         onContentSizeChange={(event) => {
                             setInputMeasuredHeight(event.nativeEvent.contentSize.height);
                         }}
                     />
+                    <View style={styles.actionContainer}>
+                        <TouchableOpacity onPress={handleSave} style={styles.sendButton}>
+                            <Icon name="send" size={24} color={theme.colors.primary} />
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </KeyboardAvoidingView>
         </Modal>
@@ -112,44 +106,42 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
 const styles = StyleSheet.create({
     keyboardAvoidingView: {
         flex: 1,
-        justifyContent: 'flex-end', // Keep modal at the bottom
+        justifyContent: 'flex-end',
     },
     overlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)', // Dim background
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0,0,0,0.5)',
     },
     modalContentContainer: {
         width: '100%',
-        backgroundColor: theme.colors.white, // Changed to pure white
+        backgroundColor: theme.colors.white,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
-        overflow: 'hidden', // Ensures border radius is applied correctly
-    },
-    header: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: theme.spacing.sm, // Reduced vertical padding
-        paddingHorizontal: theme.spacing.l,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.border,
-    },
-    modalTitle: {
-        fontSize: 16, // Changed to 16
-        fontWeight: 'bold',
-        color: theme.colors.text,
-    },
-    headerButtonText: {
-        fontSize: 16, // Changed to 16
-        color: theme.colors.primary,
-    },
-    saveButtonText: {
-        fontWeight: 'bold',
+        overflow: 'hidden',
+        paddingBottom: theme.spacing.m, // Add padding for the button area
     },
     input: {
-        fontSize: TEXT_INPUT_FONT_SIZE, // Use the defined font size
+        fontSize: TEXT_INPUT_FONT_SIZE,
         color: theme.colors.text,
-        padding: theme.spacing.l, // Consistent padding
-        // Min/Max height handled by inline style
+        padding: theme.spacing.l,
+        paddingTop: theme.spacing.l,
+        paddingBottom: theme.spacing.xl * 2, // Extra padding at bottom to avoid text going behind button
+        backgroundColor: 'transparent', // 确保不覆盖圆角
+    },
+    actionContainer: {
+        position: 'absolute',
+        right: theme.spacing.l,
+        bottom: theme.spacing.s, // Changed from l (24) to s (8)
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+    },
+    sendButton: {
+        padding: theme.spacing.s,
+        backgroundColor: theme.colors.surface, // Optional: add background to button if needed, or keep transparent
+        borderRadius: 20,
     },
 });

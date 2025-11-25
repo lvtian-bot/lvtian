@@ -61,7 +61,7 @@ function App(props: { sharedText?: string }): React.JSX.Element {
     const maxAttempts = 30; // 3 seconds max wait
     while (!navigationRef.isReady() && attempts < maxAttempts) {
       console.log(`[App] Waiting for navigation ref... attempt ${attempts + 1}`);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise<void>(resolve => setTimeout(resolve, 100));
       attempts++;
     }
 
@@ -78,10 +78,6 @@ function App(props: { sharedText?: string }): React.JSX.Element {
     }
   }, []);
 
-  // Clear stale uploading states on app launch
-  useEffect(() => {
-    useFileMetadataStore.getState().resetUploadingToFailed();
-  }, []);
 
   // Handle Initial Share (Cold Start)
   useEffect(() => {

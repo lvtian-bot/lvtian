@@ -76,6 +76,9 @@ export const useFileMetadataStore = create<FileMetadataState>()(
         {
             name: 'file-metadata-storage',
             storage: createJSONStorage(() => AsyncStorage),
+            onRehydrateStorage: () => (state) => {
+                state?.resetUploadingToFailed();
+            },
         }
     )
 );

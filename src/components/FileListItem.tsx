@@ -8,11 +8,12 @@ import { theme } from '../utils/theme';
 interface FileListItemProps {
     item: FileItem;
     onPress: (item: FileItem) => void;
-    onDelete?: (item: FileItem) => void; // Now will be triggered by long press
+    onLongPress?: (item: FileItem) => void; // 长按时触发
+    onDelete?: (item: FileItem) => void; // 保留用于向后兼容，但建议使用 onLongPress
     isCached?: boolean; // Default true if undefined
 }
 
-export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onDelete, isCached = true }) => {
+export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onLongPress, onDelete, isCached = true }) => {
     const { t } = useTranslation();
     const iconName = item.isDirectory ? 'folder' : 'description';
     // If not cached, use disabled color. Otherwise use primary for folder, textSecondary for file icon (or keep existing logic)
@@ -21,7 +22,11 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onDel
     const textColor = isCached ? theme.colors.text : theme.colors.mutedText || '#ccc';
 
     const handleLongPress = () => {
-        if (onDelete && !item.isDirectory) { // Only call onDelete for files
+        // 优先使用新的 onLongPress 回调
+        if (onLongPress) {
+            onLongPress(item);
+        } else if (onDelete && !item.isDirectory) {
+            // 向后兼容：如果只提供了 onDelete，则只对文件有效
             onDelete(item);
         }
     };
