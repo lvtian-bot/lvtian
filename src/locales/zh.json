@@ -28,7 +28,11 @@
     "offlineFileNotCached": "文件未缓存，无法离线查看",
     "info": {
       "notMarkdown": "不是 Markdown 文件，无法预览"
-    }
+    },
+    "createNewFile": "新建文件",
+    "enterFilename": "请输入文件名 (例如: MyNote)",
+    "emptyFilenameError": "文件名不能为空",
+    "fileAlreadyExists": "文件已存在"
   },
   "timeline": {
     "title": "闪念笔记",
@@ -54,7 +58,8 @@
     "edit": "编辑",
     "delete": "删除",
     "retry": "重试",
-    "notice": "提示"
+    "notice": "提示",
+    "create": "创建"
   },
   "settings": {
     "saveAndValidate": "验证并保存配置",

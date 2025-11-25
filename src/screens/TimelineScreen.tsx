@@ -24,7 +24,7 @@ interface FlashNote {
     content: string;
 }
 
-const FLASH_NOTE_FILE = 'flash_notes.md';
+
 
 type TimelineScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -63,7 +63,7 @@ export const TimelineScreen = () => {
     const checkSyncStatus = useCallback(async (filePath: string) => {
         setSyncStatus('checking');
         try {
-            const { cloudService } = require('../services/CloudService');
+            // const { cloudService } = require('../services/CloudService');
             const key = filePath;
             const localMetadata = getMetadata(filePath);
 
@@ -140,7 +140,7 @@ export const TimelineScreen = () => {
                     setConflictType(null);
                     return;
                 }
-            } catch (e) { }
+            } catch { }
             setSyncStatus('error');
         }
     }, [getMetadata, setUploadState]);
@@ -148,7 +148,7 @@ export const TimelineScreen = () => {
     const tryRestoreFromCloud = useCallback(async (filePath: string) => {
         try {
             setIsUpdating(true);
-            const { cloudService } = require('../services/CloudService');
+            // const { cloudService } = require('../services/CloudService');
             const key = filePath;
 
             const metadata = await cloudService.headFile(key);
@@ -191,7 +191,7 @@ export const TimelineScreen = () => {
             setIsUpdating(true);
             const filePath = getFlashNotePath();
             const key = filePath;
-            const { cloudService } = require('../services/CloudService');
+            // const { cloudService } = require('../services/CloudService');
             const result = await cloudService.downloadFile(key, filePath);
             setMetadata(filePath, result.etag, result.lastModified);
             setSyncStatus('synced');
@@ -199,7 +199,7 @@ export const TimelineScreen = () => {
 
             const content = await fsService.readFile(filePath);
             parseAndSetNotes(content);
-        } catch (error) {
+        } catch {
             Alert.alert('Error', 'Failed to overwrite local file');
         } finally {
             setIsUpdating(false);
@@ -217,7 +217,7 @@ export const TimelineScreen = () => {
             }
             checkSyncStatus(filePath);
             setIsUpdating(false);
-        } catch (error) {
+        } catch {
             const filePath = getFlashNotePath();
             setUploadState(filePath, 'failed');
             checkSyncStatus(filePath);
@@ -437,12 +437,7 @@ export const TimelineScreen = () => {
         navigation.setOptions({
             title: t('timeline.title'),
             headerRight: () => (
-                <View style={styles.headerRight}>
-                    {isUpdating && <ActivityIndicator size="small" color={theme.colors.primary} />}
-                    {!isUpdating && syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
-                    {!isUpdating && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
-                    {!isUpdating && (syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
-                </View>
+                <HeaderRight isUpdating={isUpdating} syncStatus={syncStatus} />
             ),
         });
     }, [navigation, t, syncStatus, isUpdating]);
@@ -609,3 +604,12 @@ const styles = StyleSheet.create({
         fontSize: 12,
     },
 });
+
+const HeaderRight = ({ isUpdating, syncStatus }: { isUpdating: boolean, syncStatus: SyncStatus }) => (
+    <View style={styles.headerRight}>
+        {isUpdating && <ActivityIndicator size="small" color={theme.colors.primary} />}
+        {!isUpdating && syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
+        {!isUpdating && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
+        {!isUpdating && (syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
+    </View>
+);

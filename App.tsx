@@ -12,10 +12,6 @@ import { cloudService } from './src/services/CloudService';
 import { TencentCOSProvider } from './src/services/TencentCOSProvider';
 import * as Keychain from 'react-native-keychain';
 import { theme } from './src/utils/theme';
-import { flashNoteService, SHARE_RECEIVED_EVENT } from './src/services/FlashNoteService';
-import { Alert } from 'react-native';
-import { t } from 'i18next';
-import { useFileMetadataStore } from './src/store/useFileMetadataStore';
 import { useShareStore } from './src/store/useShareStore';
 import { RootStackParamList } from './src/types/navigation';
 

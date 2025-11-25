@@ -81,7 +81,7 @@ class FlashNoteService {
             if (await fsService.exists(filePath)) {
                 currentContent = await fsService.readFile(filePath);
             }
-        } catch (e) {
+        } catch {
             // Ignore error if file doesn't exist, start fresh
         }
 

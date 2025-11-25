@@ -10,6 +10,18 @@ import { MainTabParamList } from '../types/navigation';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
+const TimelineIcon = ({ color, size }: { color: string; size: number }) => (
+    <Icon name="flash-on" color={color} size={size} />
+);
+
+const BrowserIcon = ({ color, size }: { color: string; size: number }) => (
+    <Icon name="folder" color={color} size={size} />
+);
+
+const SettingsIcon = ({ color, size }: { color: string; size: number }) => (
+    <Icon name="settings" color={color} size={size} />
+);
+
 export const TabNavigator = () => {
     const { t } = useTranslation();
 
@@ -26,9 +38,7 @@ export const TabNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('tabs.timeline'),
-                    tabBarIcon: ({ color, size }) => (
-                        <Icon name="flash-on" color={color} size={size} />
-                    ),
+                    tabBarIcon: TimelineIcon,
                 }}
             />
             <Tab.Screen
@@ -37,9 +47,7 @@ export const TabNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('tabs.browser'),
-                    tabBarIcon: ({ color, size }) => (
-                        <Icon name="folder" color={color} size={size} />
-                    ),
+                    tabBarIcon: BrowserIcon,
                 }}
             />
             <Tab.Screen
@@ -48,9 +56,7 @@ export const TabNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('tabs.settings'),
-                    tabBarIcon: ({ color, size }) => (
-                        <Icon name="settings" color={color} size={size} />
-                    ),
+                    tabBarIcon: SettingsIcon,
                 }}
             />
         </Tab.Navigator>

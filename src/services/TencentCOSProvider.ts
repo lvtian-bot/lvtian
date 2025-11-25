@@ -34,7 +34,7 @@ export class TencentCOSProvider implements ICloudProvider {
         }
 
         try {
-            const result = await this.cos.putObject(params);
+            await this.cos.putObject(params);
             // COS putObject returns ETag in headers usually, but let's check what the SDK returns.
             // If not available, we might need to HEAD it, but let's try to extract from result if possible.
             // The type definition for putObject result might not expose headers easily in all SDK versions.
@@ -98,7 +98,7 @@ export class TencentCOSProvider implements ICloudProvider {
             .filter(item => item.Key !== prefix)
             .map((item: any) => ({
                 key: item.Key,
-                size: parseInt(item.Size),
+                size: parseInt(item.Size, 10),
                 lastModified: item.LastModified,
                 etag: (item.ETag || '').replace(/"/g, ''),
             }));
@@ -127,7 +127,7 @@ export class TencentCOSProvider implements ICloudProvider {
         return new Promise((resolve, reject) => {
             try {
                 // Get signed URL from SDK
-                const url = this.cos.getObjectUrl({
+                this.cos.getObjectUrl({
                     Bucket: this.bucket,
                     Region: this.region,
                     Key: key,

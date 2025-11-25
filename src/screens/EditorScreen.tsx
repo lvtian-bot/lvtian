@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
@@ -24,13 +24,9 @@ export const EditorScreen = () => {
     const [loading, setLoading] = useState(true);
     const webViewRef = useRef<WebView>(null);
 
-    const { setMetadata, setUploadState } = useFileMetadataStore();
+    const { setMetadata } = useFileMetadataStore();
 
-    useEffect(() => {
-        loadFile();
-    }, [filePath]);
-
-    const loadFile = async () => {
+    const loadFile = useCallback(async () => {
         try {
             console.log('[EditorScreen] Loading file:', filePath);
             const exists = await fsService.exists(filePath);
@@ -51,7 +47,11 @@ export const EditorScreen = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [filePath]);
+
+    useEffect(() => {
+        loadFile();
+    }, [loadFile]);
 
     const handleAutoSave = async (newContent: string) => {
         try {
@@ -103,7 +103,7 @@ export const EditorScreen = () => {
 
             // 返回预览页
             navigation.goBack();
-        } catch (error) {
+        } catch {
             Alert.alert('Error', 'Failed to save file');
         }
     };

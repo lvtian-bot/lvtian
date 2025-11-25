@@ -13,20 +13,21 @@ import {
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
+import Icon from 'react-native-vector-icons/MaterialIcons';
 
 import { FileListItem } from '../components/FileListItem';
 import { FileActionSheet, FileAction } from '../components/FileActionSheet';
 import { RenameDialog } from '../components/RenameDialog';
 import { DirectoryPicker } from '../components/DirectoryPicker';
+import { CreateFileModal } from '../components/CreateFileModal';
+import { Breadcrumb } from '../components/Breadcrumb';
+
 import { theme } from '../utils/theme';
 import { RootStackParamList } from '../types/navigation';
 import { FileItem, fsService } from '../services/FileSystemService';
 import { cloudService } from '../services/CloudService';
-import { useSettingsStore } from '../store/useSettingsStore';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useFileListStore } from '../store/useFileListStore';
-
-import { Breadcrumb } from '../components/Breadcrumb';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type Status = 'idle' | 'loading' | 'success' | 'error' | 'unconfigured';
@@ -52,6 +53,7 @@ export const BrowserScreen = () => {
     const [errorMessage, setErrorMessage] = useState('');
     const [prefix, setPrefix] = useState('');
     const [isOfflineMode, setIsOfflineMode] = useState(false);
+    const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
 
     // 文件操作相关状态
     const [selectedFile, setSelectedFile] = useState<ExtendedFileItem | null>(null);
@@ -60,12 +62,11 @@ export const BrowserScreen = () => {
     const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
 
     // 滚动位置记录
-    const [scrollPositions, setScrollPositions] = useState<Record<string, number>>({});
+    const scrollPositionsRef = useRef<Record<string, number>>({});
     const flatListRef = useRef<FlatList>(null);
     const currentScrollY = useRef(0);
 
     const navigation = useNavigation<NavigationProp>();
-    const { cosConfig } = useSettingsStore();
     const { setCachedList, getCachedList } = useFileListStore();
 
     const loadFiles = useCallback(async () => {
@@ -141,7 +142,7 @@ export const BrowserScreen = () => {
                     if (!useLocal) {
                         try {
                             useLocal = await fsService.exists(prefix);
-                        } catch (e) { }
+                        } catch { }
                     }
 
                     if (useLocal) {
@@ -198,28 +199,57 @@ export const BrowserScreen = () => {
             setErrorMessage(message);
             setStatus('error');
         }
-    }, [cosConfig, prefix, t, getCachedList, setCachedList]);
+    }, [prefix, t, getCachedList, setCachedList]);
 
     const handlePathPress = (newPath: string) => {
-        // 保存当前路径的滚动位置
-        setScrollPositions(prev => ({
-            ...prev,
-            [prefix]: currentScrollY.current,
-        }));
         setPrefix(newPath);
     };
 
-    // Set a static title once
+    // Set header options (title and add button)
     useEffect(() => {
         navigation.setOptions({
             title: t('tabs.browser'),
+            headerRight: () => (
+                <TouchableOpacity
+                    onPress={() => setIsCreateModalVisible(true)}
+                    style={styles.headerButton}
+                >
+                    <Icon name="note-add" size={24} color={theme.colors.primary} />
+                </TouchableOpacity>
+            ),
         });
     }, [navigation, t]);
+
+    const handleCreateFile = async (filename: string) => {
+        setIsCreateModalVisible(false);
+
+        let finalFilename = filename;
+        if (!finalFilename.toLowerCase().endsWith('.md')) {
+            finalFilename += '.md';
+        }
+
+        const fullPath = prefix + finalFilename;
+
+        try {
+            // Check if file already exists
+            const exists = await fsService.exists(fullPath);
+            if (exists) {
+                Alert.alert(t('common.error'), t('browser.fileAlreadyExists') || 'File already exists');
+                return;
+            }
+
+            // Navigate to editor with new file path
+            navigation.navigate('Editor', { filePath: fullPath });
+        } catch (error) {
+            console.error('Error checking file existence:', error);
+            Alert.alert(t('common.error'), String(error));
+        }
+    };
 
     // 恢复滚动位置
     useEffect(() => {
         if (status === 'success' && files.length > 0) {
-            const savedPosition = scrollPositions[prefix];
+            const savedPosition = scrollPositionsRef.current[prefix];
             if (savedPosition !== undefined) {
                 // 延迟恢复，确保列表已渲染
                 setTimeout(() => {
@@ -230,19 +260,13 @@ export const BrowserScreen = () => {
                 }, 100);
             }
         }
-    }, [status, prefix]);
+    }, [status, prefix, files.length]);
 
     // This effect will handle the hardware back button
     useFocusEffect(
         useCallback(() => {
             const onBackPress = () => {
                 if (prefix) {
-                    // 保存当前路径的滚动位置
-                    setScrollPositions(prev => ({
-                        ...prev,
-                        [prefix]: currentScrollY.current,
-                    }));
-
                     const parts = prefix.split('/').filter(Boolean);
                     parts.pop();
                     const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : '';
@@ -258,7 +282,9 @@ export const BrowserScreen = () => {
         }, [prefix])
     );
 
-    useFocusEffect(useCallback(() => { loadFiles(); }, [loadFiles]));
+    useFocusEffect(useCallback(() => {
+        loadFiles();
+    }, [loadFiles]));
 
     const handleDeleteFile = async (fileToDelete: FileItem) => {
         console.log('=== handleDeleteFile called ===');
@@ -317,6 +343,11 @@ export const BrowserScreen = () => {
 
     // 处理长按文件
     const handleFileLongPress = (item: ExtendedFileItem) => {
+        // 文件夹不支持删除、重命名、移动操作
+        if (item.isDirectory) {
+            return;
+        }
+
         setSelectedFile(item);
         setShowActionSheet(true);
     };
@@ -418,12 +449,6 @@ export const BrowserScreen = () => {
             return;
         }
 
-        // 保存当前路径的滚动位置（无论是打开文件夹还是文件）
-        setScrollPositions(prev => ({
-            ...prev,
-            [prefix]: currentScrollY.current,
-        }));
-
         if (item.isDirectory) {
             setPrefix(item.path);
         } else {
@@ -470,7 +495,7 @@ export const BrowserScreen = () => {
                 return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} />;
             case 'success':
                 return (
-                    <View style={{ flex: 1 }}>
+                    <View style={styles.fileListContainer}>
                         {isOfflineMode && (
                             <View style={styles.offlineBanner}>
                                 <Text style={styles.offlineBannerText}>{t('browser.offlineMode') || 'Offline Mode - Showing cached list'}</Text>
@@ -491,7 +516,9 @@ export const BrowserScreen = () => {
                             refreshControl={<RefreshControl refreshing={false} onRefresh={loadFiles} />}
                             ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
                             onScroll={(event) => {
-                                currentScrollY.current = event.nativeEvent.contentOffset.y;
+                                const scrollY = event.nativeEvent.contentOffset.y;
+                                currentScrollY.current = scrollY;
+                                scrollPositionsRef.current[prefix] = scrollY;
                             }}
                             scrollEventThrottle={16}
                         />
@@ -540,6 +567,12 @@ export const BrowserScreen = () => {
         <View style={styles.container}>
             <Breadcrumb path={prefix} onPathPress={handlePathPress} />
             {renderContent()}
+
+            <CreateFileModal
+                visible={isCreateModalVisible}
+                onConfirm={handleCreateFile}
+                onCancel={() => setIsCreateModalVisible(false)}
+            />
 
             {/* 文件操作菜单 */}
             {selectedFile && (
@@ -600,5 +633,11 @@ const styles = StyleSheet.create({
     offlineBannerText: {
         color: '#856404',
         fontSize: 12,
+    },
+    fileListContainer: {
+        flex: 1,
+    },
+    headerButton: {
+        padding: 8,
     },
 });

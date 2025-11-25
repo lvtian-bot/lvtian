@@ -22,7 +22,11 @@
       "auth": "Cloud service authentication failed. Please check your keys in Settings.",
       "bucket": "The specified bucket was not found. Please check your configuration in Settings.",
       "network": "Network error. Please check your internet connection."
-    }
+    },
+    "createNewFile": "Create New File",
+    "enterFilename": "Enter filename (e.g. MyNote)",
+    "emptyFilenameError": "Filename cannot be empty",
+    "fileAlreadyExists": "File already exists"
   },
   "timeline": {
     "title": "Flash Notes",
@@ -46,7 +50,8 @@
     "error": "Error",
     "confirm": "Confirm",
     "edit": "Edit",
-    "delete": "Delete"
+    "delete": "Delete",
+    "create": "Create"
   },
   "settings": {
     "saveAndValidate": "Validate and Save",

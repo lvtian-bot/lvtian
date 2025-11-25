@@ -1,4 +1,4 @@
-import { StyleSheet } from 'react-native';
+
 import { theme } from './theme';
 
 export type MarkdownThemeKey = 'default' | 'github' | 'solarized' | 'night';
