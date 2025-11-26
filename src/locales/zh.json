@@ -59,7 +59,14 @@
     "delete": "删除",
     "retry": "重试",
     "notice": "提示",
-    "create": "创建"
+    "create": "创建",
+    "draftFound": "发现未保存的草稿",
+    "restoreDraftPrompt": "是否恢复上次未保存的内容？",
+    "discard": "丢弃",
+    "restore": "恢复",
+    "discardChangesPrompt": "是否放弃更改？",
+    "saveChangesPrompt": "是否保存更改？",
+    "dontSave": "暂不保存"
   },
   "settings": {
     "saveAndValidate": "验证并保存配置",

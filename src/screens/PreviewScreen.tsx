@@ -1,11 +1,12 @@
 ﻿import React, { useEffect, useState, useCallback } from 'react';
 import NetInfo from "@react-native-community/netinfo";
-import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
-import Markdown from 'react-native-markdown-display';
+import Markdown, { RenderRules } from 'react-native-markdown-display';
+import FastImage from 'react-native-fast-image'; // 引入 FastImage
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
@@ -35,6 +36,49 @@ export const PreviewScreen = () => {
     const [loading, setLoading] = useState(true);
     const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
     const [conflictType, setConflictType] = useState<ConflictType>(null);
+
+    // 自定义 AutoImage 组件，使用 FastImage 优化性能
+    const AutoImage = ({ source, style, accessibilityLabel }: any) => {
+        const [ratio, setRatio] = useState<number | undefined>(undefined);
+
+        useEffect(() => {
+            if (source?.uri) {
+                Image.getSize(source.uri, (width, height) => {
+                    if (width > 0 && height > 0) {
+                        setRatio(width / height);
+                    }
+                }, () => {});
+            }
+        }, [source?.uri]);
+
+        return (
+            <FastImage
+                source={source}
+                style={[
+                    style,
+                    { width: '100%' },
+                    ratio ? { aspectRatio: ratio } : { height: 200 } // 加载前占位，加载后自适应
+                ]}
+                resizeMode={FastImage.resizeMode.contain}
+                accessibilityLabel={accessibilityLabel}
+            />
+        );
+    };
+
+    // 自定义渲染规则，修复图片 key 展开警告导致的长文卡顿
+    const rules: RenderRules = {
+        image: (node, children, parent, styles) => {
+            const { src, alt } = node.attributes;
+            return (
+                <AutoImage
+                    key={node.key}
+                    source={{ uri: src }}
+                    style={styles.image}
+                    accessibilityLabel={alt}
+                />
+            );
+        },
+    };
 
     // 检查同步状态
     const checkSyncStatus = useCallback(async () => {
@@ -308,7 +352,10 @@ export const PreviewScreen = () => {
             )}
 
             <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
-                <Markdown style={markdownThemes[markdownTheme] || markdownThemes.default}>
+                <Markdown
+                    style={markdownThemes[markdownTheme] || markdownThemes.default}
+                    rules={rules}
+                >
                     {(() => {
     if (!content) return '# 空文件\n\n点击编辑按钮开始编写';
     // 尝试匹配文件开头的 YAML Front Matter

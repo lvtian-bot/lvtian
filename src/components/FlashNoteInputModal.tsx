@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
 
 interface FlashNoteInputModalProps {
@@ -28,6 +29,9 @@ const MAX_INPUT_HEIGHT_RATIO = 0.5; // Increased max height ratio
 
 const TEXT_INPUT_FONT_SIZE = 16;
 
+const FLASH_NOTE_DRAFT_NEW = 'flash_note_draft_new';
+const FLASH_NOTE_DRAFT_EDIT_PREFIX = 'flash_note_draft_edit_';
+
 export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     visible,
     initialId,
@@ -39,23 +43,143 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const [inputText, setInputText] = useState(initialContent || '');
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
     const inputRef = useRef<TextInput>(null);
+    const isDraftLoaded = useRef(false); // Ref to track if draft check is done to avoid overwriting with initialContent
 
     const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5;
     const MAX_HEIGHT = screenHeight * MAX_INPUT_HEIGHT_RATIO;
 
+    // Load draft when modal becomes visible
     useEffect(() => {
         if (visible) {
-            setInputText(initialContent || '');
-            setInputMeasuredHeight(MIN_HEIGHT);
-        }
-    }, [initialContent, visible, MIN_HEIGHT]);
+            const checkDraft = async () => {
+                try {
+                    const draftKey = initialId
+                        ? `${FLASH_NOTE_DRAFT_EDIT_PREFIX}${initialId}`
+                        : FLASH_NOTE_DRAFT_NEW;
+                    const draftContent = await AsyncStorage.getItem(draftKey);
 
-    const handleSave = () => {
+                    if (draftContent && draftContent !== (initialContent || '')) {
+                        Alert.alert(
+                            t('common.draftFound') || '发现未保存的草稿',
+                            t('common.restoreDraftPrompt') || '是否恢复上次未保存的内容？',
+                            [
+                                {
+                                    text: t('common.discard') || '丢弃',
+                                    style: 'destructive',
+                                    onPress: async () => {
+                                        await AsyncStorage.removeItem(draftKey);
+                                        setInputText(initialContent || '');
+                                        isDraftLoaded.current = true;
+                                    },
+                                },
+                                {
+                                    text: t('common.restore') || '恢复',
+                                    onPress: () => {
+                                        setInputText(draftContent);
+                                        isDraftLoaded.current = true;
+                                    },
+                                },
+                            ]
+                        );
+                    } else {
+                        setInputText(initialContent || '');
+                        isDraftLoaded.current = true;
+                    }
+                } catch (error) {
+                    console.error('Failed to load draft:', error);
+                    setInputText(initialContent || '');
+                    isDraftLoaded.current = true;
+                }
+                setInputMeasuredHeight(MIN_HEIGHT);
+            };
+
+            // Reset state before checking draft
+            isDraftLoaded.current = false;
+            checkDraft();
+        }
+    }, [visible, initialId, initialContent, MIN_HEIGHT, t]);
+
+
+    // Auto-save draft
+    useEffect(() => {
+        if (!visible || !isDraftLoaded.current) return;
+
+        const saveDraft = async () => {
+            try {
+                const draftKey = initialId
+                    ? `${FLASH_NOTE_DRAFT_EDIT_PREFIX}${initialId}`
+                    : FLASH_NOTE_DRAFT_NEW;
+
+                if (inputText && inputText !== (initialContent || '')) {
+                    await AsyncStorage.setItem(draftKey, inputText);
+                } else {
+                    // If content matches initial (or empty), remove draft to keep clean
+                    await AsyncStorage.removeItem(draftKey);
+                }
+            } catch (error) {
+                console.error('Failed to save draft:', error);
+            }
+        };
+
+        const timeoutId = setTimeout(saveDraft, 500); // Debounce save
+        return () => clearTimeout(timeoutId);
+    }, [inputText, visible, initialId, initialContent]);
+
+
+    const handleSave = async () => {
         if (!inputText.trim()) {
             Alert.alert(t('common.error'), t('timeline.emptyNoteError'));
             return;
         }
+
+        // Clear draft on save
+        try {
+            const draftKey = initialId
+                ? `${FLASH_NOTE_DRAFT_EDIT_PREFIX}${initialId}`
+                : FLASH_NOTE_DRAFT_NEW;
+            await AsyncStorage.removeItem(draftKey);
+        } catch (error) {
+            console.error('Failed to clear draft:', error);
+        }
+
         onSave(initialId, inputText);
+    };
+
+    const handleCancel = async () => {
+        if (inputText !== (initialContent || '')) {
+            Alert.alert(
+                t('common.confirm') || '确认',
+                t('common.saveChangesPrompt') || '是否保存更改？',
+                [
+                    {
+                        text: t('common.dontSave') || '暂不保存',
+                        style: 'destructive',
+                        onPress: async () => {
+                            // Clear draft on discard
+                            try {
+                                const draftKey = initialId
+                                    ? `${FLASH_NOTE_DRAFT_EDIT_PREFIX}${initialId}`
+                                    : FLASH_NOTE_DRAFT_NEW;
+                                await AsyncStorage.removeItem(draftKey);
+                            } catch (error) {
+                                console.error('Failed to clear draft:', error);
+                            }
+                            onCancel();
+                        },
+                    },
+                    {
+                        text: t('common.cancel'),
+                        style: 'cancel',
+                    },
+                    {
+                        text: t('common.save'),
+                        onPress: handleSave,
+                    },
+                ]
+            );
+        } else {
+            onCancel();
+        }
     };
 
     return (
@@ -63,7 +187,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             animationType="slide"
             transparent={true}
             visible={visible}
-            onRequestClose={onCancel}
+            onRequestClose={handleCancel}
             onShow={() => {
                 setTimeout(() => {
                     inputRef.current?.focus();
@@ -74,7 +198,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 style={styles.keyboardAvoidingView}
             >
-                <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onCancel} />
+                <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={handleCancel} />
 
                 <View style={styles.modalContentContainer}>
                     <TextInput
@@ -129,13 +253,13 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
         padding: theme.spacing.l,
         paddingTop: theme.spacing.l,
-        paddingBottom: theme.spacing.xl * 2, // Extra padding at bottom to avoid text going behind button
+        paddingBottom: theme.spacing.xl, // Reduced from xl * 2 (64) to xxl (48)
         backgroundColor: 'transparent', // 确保不覆盖圆角
     },
     actionContainer: {
         position: 'absolute',
         right: theme.spacing.l,
-        bottom: theme.spacing.s, // Changed from l (24) to s (8)
+        bottom: theme.spacing.xs, // Reduced from s (8) to xs (4)
         flexDirection: 'row',
         justifyContent: 'flex-end',
     },

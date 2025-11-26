@@ -51,7 +51,14 @@
     "confirm": "Confirm",
     "edit": "Edit",
     "delete": "Delete",
-    "create": "Create"
+    "create": "Create",
+    "draftFound": "Draft Found",
+    "restoreDraftPrompt": "Do you want to restore the unsaved content?",
+    "discard": "Discard",
+    "restore": "Restore",
+    "discardChangesPrompt": "Discard changes?",
+    "saveChangesPrompt": "Do you want to save changes?",
+    "dontSave": "Don't Save"
   },
   "settings": {
     "saveAndValidate": "Validate and Save",
