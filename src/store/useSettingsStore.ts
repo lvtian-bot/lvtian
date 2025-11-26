@@ -16,6 +16,7 @@ interface SettingsState {
     flashNoteConfig: {
         path: string;
         filename: string;
+        suffix: string;
     };
     setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
     markdownTheme: MarkdownThemeKey;
@@ -38,6 +39,7 @@ export const useSettingsStore = create<SettingsState>()(
             flashNoteConfig: {
                 path: '',
                 filename: 'flash_notes.md',
+                suffix: '',
             },
             setFlashNoteConfig: (config) =>
                 set((state) => ({ flashNoteConfig: { ...state.flashNoteConfig, ...config } })),

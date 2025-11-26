@@ -1,0 +1,26 @@
+{
+  "name": "mdnote-editor-bundler",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bundler for CodeMirror 6 editor in MDNote",
+  "scripts": {
+    "build": "rollup -c"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.3.3",
+    "@codemirror/lang-markdown": "^6.2.3",
+    "@codemirror/lang-yaml": "^6.0.0",
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/language-data": "^6.4.0",
+    "@codemirror/state": "^6.4.0",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.23.0",
+    "@lezer/highlight": "^1.2.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "rollup": "^4.9.6"
+  }
+}

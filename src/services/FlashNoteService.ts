@@ -11,7 +11,6 @@ export interface FlashNote {
     content: string;
 }
 
-const SUFFIX_REGEX = /\n>\s*$/;
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
 
 export const FLASH_NOTES_UPDATED_EVENT = 'FLASH_NOTES_UPDATED';
@@ -41,6 +40,13 @@ class FlashNoteService {
     }
 
     parseNotes(content: string): FlashNote[] {
+        const { flashNoteConfig } = useSettingsStore.getState();
+        const suffix = flashNoteConfig.suffix || '';
+
+        // Create regex to match suffix followed by only whitespace at end
+        // If suffix is empty, just trim trailing whitespace
+        const suffixRegex = suffix ? new RegExp(suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$') : /\s*$/;
+
         const lines = content.split('\n');
         const parsedNotes: FlashNote[] = [];
         let currentNote: Partial<FlashNote> = {};
@@ -49,19 +55,23 @@ class FlashNoteService {
             const match = line.match(HEADER_REGEX);
             if (match) {
                 if (currentNote.id) {
-                    currentNote.content = currentNote.content!.replace(SUFFIX_REGEX, '');
+                    currentNote.content = currentNote.content!.replace(suffixRegex, '');
                     parsedNotes.push(currentNote as FlashNote);
                 }
                 const timestamp = match[2].trim();
                 currentNote = { id: timestamp, timestamp: timestamp, content: '' };
             } else {
                 if (currentNote.id) {
+                    // 过滤掉只包含 > 和空白字符的行
+                    if (/^\s*>\s*$/.test(line)) {
+                        return;
+                    }
                     currentNote.content += line + '\n';
                 }
             }
         });
         if (currentNote.id) {
-            currentNote.content = currentNote.content!.replace(SUFFIX_REGEX, '');
+            currentNote.content = currentNote.content!.replace(suffixRegex, '');
             parsedNotes.push(currentNote as FlashNote);
         }
 
@@ -86,10 +96,11 @@ class FlashNoteService {
         }
 
         const timestamp = this.getFormattedTimestamp();
-        const suffix = '\n> ';
-        const newEntry = `\n\n## ${timestamp}\n${trimmedInput}${suffix}`;
+        const { flashNoteConfig } = useSettingsStore.getState();
+        const suffix = flashNoteConfig.suffix || '';
+        const newEntry = `\n## ${timestamp}\n${trimmedInput}${suffix}`;
 
-        const newContent = currentContent.trim() ? currentContent.trim() + newEntry : `## ${timestamp}\n${trimmedInput}${suffix}`;
+        const newContent = currentContent + newEntry;
 
         // Ensure directory exists before writing
         await this.ensureDirectoryExists(filePath);
@@ -121,15 +132,16 @@ class FlashNoteService {
     async updateNote(id: string, newText: string): Promise<void> {
         const filePath = this.getFlashNotePath();
         const currentContent = await fsService.readFile(filePath);
-        const suffix = '\n> ';
+        const { flashNoteConfig } = useSettingsStore.getState();
+        const suffix = flashNoteConfig.suffix || '';
 
-        const noteBlocks = currentContent.split(/(?=^##\s)/m);
+        const noteBlocks = currentContent.split(/(?=^##\s)/m).filter(b => b.trim());
         let noteFound = false;
 
         const newBlocks = noteBlocks.map(block => {
             if (block.trim().startsWith(`## ${id}`)) {
                 noteFound = true;
-                return `## ${id}\n${newText.trim()}${suffix}`;
+                return `## ${id}\n${newText.trim()}${suffix}\n`;
             }
             return block;
         });

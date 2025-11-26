@@ -70,6 +70,12 @@
     "flashNote": "Flash Note Settings",
     "flashNotePath": "Storage Path (e.g. notes/)",
     "flashNoteFilename": "Filename (e.g. flash_notes.md)",
+    "flashNoteSuffix": "Flash Note Suffix",
+    "flashNoteSuffixDesc": "Choose a preset or customize the fixed character at the end of each flash note (for format markers in note-taking apps like Obsidian)",
+    "customSuffix": "Custom Suffix",
+    "suffixPresets": {
+      "none": "None"
+    },
     "markdownStyle": "Markdown Style",
     "themes": {
       "default": "Default",

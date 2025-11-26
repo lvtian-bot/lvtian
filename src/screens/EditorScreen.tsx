@@ -115,6 +115,10 @@ export const EditorScreen = () => {
                 handleAutoSave(data.content);
             } else if (data.type === 'manualSave') {
                 handleManualSave(data.content);
+            } else if (data.type === 'log') {
+                console.log('[WebView Log]', data.content);
+            } else if (data.type === 'error') {
+                console.error('[WebView Error]', data.content);
             }
         } catch {
             // 兼容旧格式（纯字符串），当做手动保存处理
@@ -157,8 +161,8 @@ export const EditorScreen = () => {
                 ref={webViewRef}
                 source={
                     Platform.OS === 'android'
-                        ? { uri: 'file:///android_asset/editor.html' }
-                        : require('../../android/app/src/main/assets/editor.html')
+                        ? { uri: 'file:///android_asset/editor_cm6.html' }
+                        : require('../../android/app/src/main/assets/editor_cm6.html')
                 }
                 originWhitelist={['*']}
                 allowFileAccess={true}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+﻿import React, { useEffect, useState, useCallback } from 'react';
 import NetInfo from "@react-native-community/netinfo";
 import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,6 +10,7 @@ import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes } from '../utils/markdownThemes';
 import { normalizePath } from '../utils/pathUtils';
@@ -26,6 +27,7 @@ export const PreviewScreen = () => {
     const { t } = useTranslation();
     const { filePath } = route.params;
     const { getMetadata, setMetadata, setUploadState } = useFileMetadataStore();
+    const markdownTheme = useSettingsStore(state => state.markdownTheme);
     // Subscribe to metadata changes for this file to trigger re-renders
     const fileMetadata = useFileMetadataStore(state => state.metadata[filePath]);
 
@@ -116,10 +118,10 @@ export const PreviewScreen = () => {
                     setConflictType(null);
                     return;
                 }
-            } catch (e) { }
+            } catch (_) { }
             setSyncStatus('error');
         }
-    }, [filePath, getMetadata]);
+    }, [filePath, getMetadata, setUploadState]);
 
     // 加载文件内容（不触发同步检查）
     const loadFile = useCallback(async () => {
@@ -129,7 +131,7 @@ export const PreviewScreen = () => {
                 const fileContent = await fsService.readFile(filePath);
                 setContent(fileContent);
             }
-        } catch (error) {
+        } catch (_) {
             Alert.alert('Error', 'Failed to load file');
         } finally {
             setLoading(false);
@@ -167,7 +169,7 @@ export const PreviewScreen = () => {
             setContent(newContent);
             setSyncStatus('synced');
             setConflictType(null);
-        } catch (error) {
+        } catch (_) {
             Alert.alert('Error', 'Failed to download cloud version');
         } finally {
             setLoading(false);
@@ -215,13 +217,13 @@ export const PreviewScreen = () => {
                     }
                 } catch (error: any) {
                     console.error('Upload failed:', error);
-                    const errorMessage = error instanceof Error ? error.message : String(error);
+
                     setUploadState(newPath, 'failed');
                 }
             }
 
             navigation.replace('Preview', { filePath: newPath });
-        } catch (error) {
+        } catch (_) {
             Alert.alert('Error', 'Failed to save copy');
         } finally {
             setLoading(false);
@@ -305,9 +307,25 @@ export const PreviewScreen = () => {
                 </View>
             )}
 
-            <ScrollView style={styles.content}>
-                <Markdown style={markdownThemes.default}>
-                    {content || '# 空文件\n\n点击编辑按钮开始编写'}
+            <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+                <Markdown style={markdownThemes[markdownTheme] || markdownThemes.default}>
+                    {(() => {
+    if (!content) return '# 空文件\n\n点击编辑按钮开始编写';
+    // 尝试匹配文件开头的 YAML Front Matter
+    const frontMatterRegex = /^(?:---\s*[\r\n]+)([\s\S]*?)(?:[\r\n]+---\s*[\r\n]+|$)/;
+    const match = content.match(frontMatterRegex);
+
+    if (match) {
+        const metadataContent = match[1].trim(); // 获取 --- 之间的内容，并去除首尾空白
+        const afterFrontMatterContent = content.substring(match[0].length); // 获取 Front Matter 之后的所有内容
+
+        // 将元数据内容包裹在 ```yaml 代码块中
+        const processedMetadata = `\`\`\`yaml\n${metadataContent}\n\`\`\`\n`;
+        return processedMetadata + afterFrontMatterContent;
+    }
+
+    return content;
+})()}
                 </Markdown>
             </ScrollView>
         </SafeAreaView>
@@ -329,18 +347,18 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: 12,
+        padding: theme.spacing.s,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
         backgroundColor: theme.colors.surface,
     },
     headerButton: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        padding: theme.spacing.s,
     },
     headerButtonText: {
         color: theme.colors.primary,
         fontSize: 16,
+        fontWeight: 'bold',
     },
     titleContainer: {
         flex: 1,
@@ -360,7 +378,6 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        padding: 16,
     },
     banner: {
         backgroundColor: '#fff3cd',
@@ -386,4 +403,10 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 14,
     },
+    contentContainer: {
+        paddingHorizontal: 16,
+        paddingTop: 16,
+        paddingBottom: theme.spacing.l,
+    },
 });
+

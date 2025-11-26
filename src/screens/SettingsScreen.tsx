@@ -17,6 +17,7 @@ export const SettingsScreen = () => {
     const [region, setRegion] = useState(cosConfig.region);
     const [flashNotePath, setFlashNotePath] = useState(flashNoteConfig.path);
     const [flashNoteFilename, setFlashNoteFilename] = useState(flashNoteConfig.filename);
+    const [flashNoteSuffix, setFlashNoteSuffix] = useState(flashNoteConfig.suffix);
     const [isCosLoading, setIsCosLoading] = useState(false);
     const [isFlashNoteLoading, setIsFlashNoteLoading] = useState(false);
 
@@ -92,7 +93,7 @@ export const SettingsScreen = () => {
         }
         setIsFlashNoteLoading(true);
         // No validation needed for local paths for now, or simple check
-        setFlashNoteConfig({ path: flashNotePath, filename: flashNoteFilename });
+        setFlashNoteConfig({ path: flashNotePath, filename: flashNoteFilename, suffix: flashNoteSuffix });
         setIsFlashNoteLoading(false);
         Alert.alert(t('settings.success'), t('settings.success'));
     };
@@ -172,6 +173,47 @@ export const SettingsScreen = () => {
                     value={flashNoteFilename}
                     onChangeText={setFlashNoteFilename}
                     placeholder="flash_notes.md"
+                />
+            </View>
+
+            <View style={styles.inputGroup}>
+                <Text style={styles.label}>{t('settings.flashNoteSuffix')}</Text>
+                <Text style={styles.description}>{t('settings.flashNoteSuffixDesc')}</Text>
+
+                <View style={styles.suffixPresets}>
+                    <TouchableOpacity
+                        style={[styles.presetButton, flashNoteSuffix === '' && styles.presetButtonActive]}
+                        onPress={() => setFlashNoteSuffix('')}
+                    >
+                        <Text style={[styles.presetButtonText, flashNoteSuffix === '' && styles.presetButtonTextActive]}>
+                            {t('settings.suffixPresets.none')}
+                        </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.presetButton, flashNoteSuffix === '\n>' && styles.presetButtonActive]}
+                        onPress={() => setFlashNoteSuffix('\n>')}
+                    >
+                        <Text style={[styles.presetButtonText, flashNoteSuffix === '\n>' && styles.presetButtonTextActive]}>
+                            \n&gt;
+                        </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.presetButton, flashNoteSuffix === '\n> ' && styles.presetButtonActive]}
+                        onPress={() => setFlashNoteSuffix('\n> ')}
+                    >
+                        <Text style={[styles.presetButtonText, flashNoteSuffix === '\n> ' && styles.presetButtonTextActive]}>
+                            \n&gt;
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+
+                <Text style={styles.label}>{t('settings.customSuffix')}</Text>
+                <TextInput
+                    style={styles.input}
+                    value={flashNoteSuffix}
+                    onChangeText={setFlashNoteSuffix}
+                    placeholder="\n> "
+                    multiline
                 />
             </View>
 
@@ -282,6 +324,37 @@ const styles = StyleSheet.create({
         fontSize: 14,
     },
     themeButtonTextActive: {
+        color: theme.colors.white,
+        fontWeight: 'bold',
+    },
+    description: {
+        fontSize: theme.typography.caption.fontSize,
+        color: theme.colors.textSecondary,
+        marginBottom: theme.spacing.s,
+    },
+    suffixPresets: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: theme.spacing.s,
+        marginBottom: theme.spacing.m,
+    },
+    presetButton: {
+        paddingVertical: theme.spacing.xs,
+        paddingHorizontal: theme.spacing.m,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+    },
+    presetButtonActive: {
+        backgroundColor: theme.colors.primary,
+        borderColor: theme.colors.primary,
+    },
+    presetButtonText: {
+        color: theme.colors.text,
+        fontSize: 13,
+    },
+    presetButtonTextActive: {
         color: theme.colors.white,
         fontWeight: 'bold',
     },

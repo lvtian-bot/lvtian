@@ -78,6 +78,12 @@
     "flashNote": "闪念笔记设置",
     "flashNotePath": "存储路径 (例如: notes/)",
     "flashNoteFilename": "文件名 (例如: flash_notes.md)",
+    "flashNoteSuffix": "闪念结尾字符",
+    "flashNoteSuffixDesc": "可选择预设或自定义每条闪念末尾的固定字符（用于 Obsidian 等笔记软件的格式标记）",
+    "customSuffix": "自定义结尾字符",
+    "suffixPresets": {
+      "none": "无"
+    },
     "markdownStyle": "Markdown 样式",
     "themes": {
       "default": "默认",
