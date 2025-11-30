@@ -8,6 +8,8 @@ import { BrowserScreen } from '../screens/BrowserScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { MainTabParamList } from '../types/navigation';
 
+import { theme } from '../utils/theme';
+
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 const TimelineIcon = ({ color, size }: { color: string; size: number }) => (
@@ -30,6 +32,9 @@ export const TabNavigator = () => {
             screenOptions={{
                 headerTitleAlign: 'center',
                 headerShadowVisible: false,
+                headerStyle: {
+                    backgroundColor: theme.colors.background,
+                },
             }}
         >
             <Tab.Screen

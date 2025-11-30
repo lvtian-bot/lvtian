@@ -1,16 +1,16 @@
-﻿import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import NetInfo from "@react-native-community/netinfo";
 import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter, Image } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import Markdown, { RenderRules } from 'react-native-markdown-display';
-import FastImage from 'react-native-fast-image'; // 引入 FastImage
+import FastImage from 'react-native-fast-image';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
-import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { useFileMetadataStore, LOCAL_MODIFIED_HASH } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes } from '../utils/markdownThemes';
@@ -20,7 +20,6 @@ type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 type SyncStatus = 'checking' | 'synced' | 'conflict' | 'error' | 'offline';
-type ConflictType = 'localNewer' | 'cloudNewer' | null;
 
 export const PreviewScreen = () => {
     const route = useRoute<PreviewScreenRouteProp>();
@@ -28,16 +27,14 @@ export const PreviewScreen = () => {
     const { t } = useTranslation();
     const { filePath } = route.params;
     const { getMetadata, setMetadata, setUploadState } = useFileMetadataStore();
-    const markdownTheme = useSettingsStore(state => state.markdownTheme);
-    // Subscribe to metadata changes for this file to trigger re-renders
+    const { markdownTheme } = useSettingsStore();
     const fileMetadata = useFileMetadataStore(state => state.metadata[filePath]);
+    const insets = useSafeAreaInsets();
 
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
-    const [conflictType, setConflictType] = useState<ConflictType>(null);
 
-    // 自定义 AutoImage 组件，使用 FastImage 优化性能
     const AutoImage = ({ source, style, accessibilityLabel }: any) => {
         const [ratio, setRatio] = useState<number | undefined>(undefined);
 
@@ -47,7 +44,7 @@ export const PreviewScreen = () => {
                     if (width > 0 && height > 0) {
                         setRatio(width / height);
                     }
-                }, () => {});
+                }, () => { });
             }
         }, [source?.uri]);
 
@@ -57,7 +54,7 @@ export const PreviewScreen = () => {
                 style={[
                     style,
                     { width: '100%' },
-                    ratio ? { aspectRatio: ratio } : { height: 200 } // 加载前占位，加载后自适应
+                    ratio ? { aspectRatio: ratio } : { height: 200 }
                 ]}
                 resizeMode={FastImage.resizeMode.contain}
                 accessibilityLabel={accessibilityLabel}
@@ -65,7 +62,6 @@ export const PreviewScreen = () => {
         );
     };
 
-    // 自定义渲染规则，修复图片 key 展开警告导致的长文卡顿
     const rules: RenderRules = {
         image: (node, children, parent, styles) => {
             const { src, alt } = node.attributes;
@@ -80,139 +76,14 @@ export const PreviewScreen = () => {
         },
     };
 
-    // 检查同步状态
-    const checkSyncStatus = useCallback(async () => {
-        setSyncStatus('checking');
-        try {
-            const key = filePath;
-            const localMetadata = getMetadata(filePath);
-
-            // 检查持久化的上传状态
-            if (localMetadata?.uploadState === 'uploading') {
-                // 正在上传中，保持 checking 或显示上传中
-                setSyncStatus('checking');
-                setConflictType(null);
-                return;
-            }
-
-
-
-
-            // ...
-            // 0. 检查网络状态
-            const netState = await NetInfo.fetch();
-            if (netState.isConnected === false) {
-                // 离线状态
-                // 优先检查是否有上传失败记录
-                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                    setSyncStatus('conflict');
-                    setConflictType('localNewer');
-                } else {
-                    setSyncStatus('offline');
-                    setConflictType(null);
-                }
-                return;
-            }
-
-            const cloudMetadata = await cloudService.headFile(key);
-
-            if (!cloudMetadata) {
-                // 云端没有文件
-                if (await fsService.exists(filePath)) {
-                    setSyncStatus('conflict');
-                    setConflictType('localNewer');
-                }
-                return;
-            }
-
-            if (localMetadata?.etag === cloudMetadata.etag) {
-                setSyncStatus('synced');
-                setConflictType(null);
-                // 如果之前标记为失败但现在ETag一致，说明实际上同步了（可能是误报），清除失败状态
-                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                    setUploadState(filePath, null);
-                }
-            } else {
-                setSyncStatus('conflict');
-                const localFileStat = await fsService.stat(filePath);
-                const localMtime = localFileStat?.mtime || new Date(0);
-                const cloudMtime = new Date(cloudMetadata.lastModified);
-
-                if (cloudMtime > localMtime) {
-                    setConflictType('cloudNewer');
-                } else {
-                    setConflictType('localNewer');
-                }
-            }
-        } catch (error) {
-            console.error('Error checking sync status:', error);
-
-            // If upload failed previously, show conflict state so user sees the error
-            const localMetadata = getMetadata(filePath);
-            if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                setSyncStatus('conflict');
-                setConflictType('localNewer');
-                return;
-            }
-
-            // Check if local file exists to show offline mode
-            try {
-                if (await fsService.exists(filePath)) {
-                    setSyncStatus('offline');
-                    setConflictType(null);
-                    return;
-                }
-            } catch (_) { }
-            setSyncStatus('error');
-        }
-    }, [filePath, getMetadata, setUploadState]);
-
-    // 加载文件内容（不触发同步检查）
-    const loadFile = useCallback(async () => {
-        try {
-            const exists = await fsService.exists(filePath);
-            if (exists) {
-                const fileContent = await fsService.readFile(filePath);
-                setContent(fileContent);
-            }
-        } catch (_) {
-            Alert.alert('Error', 'Failed to load file');
-        } finally {
-            setLoading(false);
-        }
-    }, [filePath]);
-
-    // 监听上传完成事件 - 仅用于触发刷新，不再维护状态
-    useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string; success?: boolean }) => {
-            if (data.filePath === filePath) {
-                checkSyncStatus();
-            }
-        });
-
-        return () => {
-            subscription.remove();
-        };
-    }, [filePath, checkSyncStatus]);
-
-    // 每次页面获得焦点时重新加载文件并检查同步状态
-    useFocusEffect(
-        useCallback(() => {
-            loadFile();
-            checkSyncStatus();
-        }, [loadFile, checkSyncStatus])
-    );
-
-    // 冲突处理逻辑
     const handleOverwriteLocal = async () => {
         try {
             setLoading(true);
             const result = await cloudService.downloadFile(filePath, filePath);
-            setMetadata(filePath, result.etag, result.lastModified);
+            setMetadata(filePath, result.etag, result.etag, result.lastModified);
             const newContent = await fsService.readFile(filePath);
             setContent(newContent);
             setSyncStatus('synced');
-            setConflictType(null);
         } catch (_) {
             Alert.alert('Error', 'Failed to download cloud version');
         } finally {
@@ -226,7 +97,7 @@ export const PreviewScreen = () => {
             setUploadState(filePath, 'uploading');
             const result = await cloudService.uploadFile(filePath, filePath);
             if (result) {
-                setMetadata(filePath, result.etag, result.lastModified);
+                setMetadata(filePath, result.etag, result.etag, result.lastModified);
             }
             checkSyncStatus();
         } catch (error: any) {
@@ -234,7 +105,7 @@ export const PreviewScreen = () => {
             const errorMessage = error instanceof Error ? error.message : String(error);
             setUploadState(filePath, 'failed');
             Alert.alert('Error', 'Failed to upload: ' + errorMessage);
-            checkSyncStatus(); // Re-check to update UI with failed state
+            checkSyncStatus();
         } finally {
             setLoading(false);
         }
@@ -257,11 +128,10 @@ export const PreviewScreen = () => {
                 try {
                     const result = await cloudService.uploadFile(newPath, newPath);
                     if (result) {
-                        setMetadata(newPath, result.etag, result.lastModified);
+                        setMetadata(newPath, result.etag, result.etag, result.lastModified);
                     }
                 } catch (error: any) {
                     console.error('Upload failed:', error);
-
                     setUploadState(newPath, 'failed');
                 }
             }
@@ -274,17 +144,124 @@ export const PreviewScreen = () => {
         }
     };
 
-    if (loading) {
-        return (
-            <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={theme.colors.primary} />
-            </View>
-        );
-    }
+    const checkSyncStatus = useCallback(async () => {
+        setSyncStatus('checking');
+        try {
+            const key = filePath;
+            const localMetadata = getMetadata(filePath);
+
+            // 1. Check Network Status (Priority)
+            const netState = await NetInfo.fetch();
+            if (netState.isConnected === false) {
+                setSyncStatus('offline');
+                return;
+            }
+
+            // 2. Check Upload State
+            if (localMetadata?.uploadState === 'uploading') {
+                setSyncStatus('checking');
+                return;
+            }
+
+            // 3. Check Cloud Status
+            const cloudMetadata = await cloudService.headFile(key);
+
+            // A. Cloud file does not exist -> Auto Upload
+            if (!cloudMetadata) {
+                if (await fsService.exists(filePath)) {
+                    console.log('Cloud file missing, auto-uploading...');
+                    handleUploadOverwrite();
+                }
+                return;
+            }
+
+            // B. Hash Match (Synced)
+            if (localMetadata?.localHash === cloudMetadata.etag) {
+                // Self-healing: update syncedHash to match
+                if (localMetadata?.syncedHash !== cloudMetadata.etag) {
+                    setMetadata(filePath, cloudMetadata.etag, localMetadata.localHash, localMetadata.lastModified || new Date().toISOString());
+                }
+                setSyncStatus('synced');
+                // Clear failed state if it was a false alarm
+                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
+                    setUploadState(filePath, null);
+                }
+                return;
+            }
+
+            // C. Hash Mismatch (Conflict/Inconsistent)
+            // C1. Only Cloud Updated (localHash == syncedHash) -> Auto Download
+            if (localMetadata?.localHash === localMetadata?.syncedHash) {
+                console.log('Cloud newer, auto-downloading...');
+                handleOverwriteLocal();
+                return;
+            }
+
+            // C2. Only Local Updated (cloud.etag == syncedHash) -> Auto Upload
+            if (cloudMetadata.etag === localMetadata?.syncedHash) {
+                console.log('Local newer, auto-uploading...');
+                handleUploadOverwrite();
+                return;
+            }
+
+            // C3. Bidirectional Conflict -> Show UI
+            setSyncStatus('conflict');
+
+        } catch (error) {
+            console.error('Error checking sync status:', error);
+
+            const localMetadata = getMetadata(filePath);
+            if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
+                setSyncStatus('conflict');
+                return;
+            }
+
+            try {
+                if (await fsService.exists(filePath)) {
+                    setSyncStatus('offline');
+                    return;
+                }
+            } catch (_) { }
+            setSyncStatus('error');
+        }
+    }, [filePath, getMetadata, setUploadState, setMetadata]);
+
+    const loadFile = useCallback(async () => {
+        try {
+            const exists = await fsService.exists(filePath);
+            if (exists) {
+                const fileContent = await fsService.readFile(filePath);
+                setContent(fileContent);
+            }
+        } catch (_) {
+            Alert.alert('Error', 'Failed to load file');
+        } finally {
+            setLoading(false);
+        }
+    }, [filePath]);
+
+    useEffect(() => {
+        const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string; success?: boolean }) => {
+            if (data.filePath === filePath) {
+                checkSyncStatus();
+            }
+        });
+
+        return () => {
+            subscription.remove();
+        };
+    }, [filePath, checkSyncStatus]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadFile();
+            checkSyncStatus();
+        }, [loadFile, checkSyncStatus])
+    );
 
     return (
-        <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
+        <View style={[styles.container, { paddingBottom: insets.bottom }]}>
+            <View style={[styles.header, { paddingTop: insets.top + theme.spacing.s }]}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
                     <Text style={styles.headerButtonText}>{t('common.back')}</Text>
                 </TouchableOpacity>
@@ -304,78 +281,79 @@ export const PreviewScreen = () => {
                 </TouchableOpacity>
             </View>
 
-            {syncStatus === 'offline' && (
-                <View style={styles.banner}>
-                    <Text style={styles.bannerText}>
-                        {t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
-                    </Text>
-                    <View style={styles.bannerButtons}>
-                        <TouchableOpacity onPress={checkSyncStatus} style={styles.bannerButton}>
-                            <Text style={styles.bannerButtonText}>{t('common.retry') || '重试连接'}</Text>
-                        </TouchableOpacity>
-                    </View>
+            {loading ? (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color={theme.colors.primary} />
                 </View>
+            ) : (
+                <>
+                    {syncStatus === 'offline' && (
+                        <View style={styles.banner}>
+                            <Text style={styles.bannerText}>
+                                {t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
+                                {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') ? ' (上次上传失败)' : ''}
+                            </Text>
+                            <View style={styles.bannerButtons}>
+                                <TouchableOpacity onPress={checkSyncStatus} style={styles.bannerButton}>
+                                    <Text style={styles.bannerButtonText}>{t('common.retry') || '重试连接'}</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    )}
+
+                    {syncStatus === 'conflict' && (
+                        <View style={styles.banner}>
+                            <Text style={styles.bannerText}>
+                                {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed')
+                                    ? '上传失败'
+                                    : '本地和云端已同时修改'}
+                            </Text>
+                            <View style={styles.bannerButtons}>
+                                {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') ? (
+                                    <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
+                                        <Text style={styles.bannerButtonText}>重试</Text>
+                                    </TouchableOpacity>
+                                ) : (
+                                    <>
+                                        <TouchableOpacity onPress={handleOverwriteLocal} style={styles.bannerButton}>
+                                            <Text style={styles.bannerButtonText}>使用云端版本覆盖本地</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
+                                            <Text style={styles.bannerButtonText}>保存本地为副本</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
+                                            <Text style={styles.bannerButtonText}>上传本地覆盖云端</Text>
+                                        </TouchableOpacity>
+                                    </>
+                                )}
+                            </View>
+                        </View>
+                    )}
+
+                    <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+                        <Markdown
+                            style={markdownThemes[markdownTheme] || markdownThemes.default}
+                            rules={rules}
+                        >
+                            {(() => {
+                                if (!content) return '# 空文件\n\n点击编辑按钮开始编写';
+                                const frontMatterRegex = /^(?:---\s*[\r\n]+)([\s\S]*?)(?:[\r\n]+---\s*[\r\n]+|$)/;
+                                const match = content.match(frontMatterRegex);
+
+                                if (match) {
+                                    const metadataContent = match[1].trim();
+                                    const afterFrontMatterContent = content.substring(match[0].length);
+                                    const processedMetadata = `\`\`\`yaml\n${metadataContent}\n\`\`\`\n`;
+                                    return processedMetadata + afterFrontMatterContent;
+                                }
+
+                                return content;
+                            })()}
+                        </Markdown>
+                    </ScrollView>
+                </>
             )}
-
-            {syncStatus === 'conflict' && conflictType && (
-                <View style={styles.banner}>
-                    <Text style={styles.bannerText}>
-                        {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') && (
-                            fileMetadata?.uploadState === 'conflict-failed'
-                                ? '上传失败：云端文件已更改\n'
-                                : '上传失败\n'
-                        )}
-                        {conflictType === 'cloudNewer' ? '云端有新版本' : '本地更改未同步'}
-                    </Text>
-                    <View style={styles.bannerButtons}>
-                        {conflictType === 'cloudNewer' ? (
-                            <>
-                                <TouchableOpacity onPress={handleOverwriteLocal} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>使用云端版本</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>保存副本</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : (
-                            <>
-                                <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>上传到云端</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>保存副本</Text>
-                                </TouchableOpacity>
-                            </>
-                        )}
-                    </View>
-                </View>
-            )}
-
-            <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
-                <Markdown
-                    style={markdownThemes[markdownTheme] || markdownThemes.default}
-                    rules={rules}
-                >
-                    {(() => {
-    if (!content) return '# 空文件\n\n点击编辑按钮开始编写';
-    // 尝试匹配文件开头的 YAML Front Matter
-    const frontMatterRegex = /^(?:---\s*[\r\n]+)([\s\S]*?)(?:[\r\n]+---\s*[\r\n]+|$)/;
-    const match = content.match(frontMatterRegex);
-
-    if (match) {
-        const metadataContent = match[1].trim(); // 获取 --- 之间的内容，并去除首尾空白
-        const afterFrontMatterContent = content.substring(match[0].length); // 获取 Front Matter 之后的所有内容
-
-        // 将元数据内容包裹在 ```yaml 代码块中
-        const processedMetadata = `\`\`\`yaml\n${metadataContent}\n\`\`\`\n`;
-        return processedMetadata + afterFrontMatterContent;
-    }
-
-    return content;
-})()}
-                </Markdown>
-            </ScrollView>
-        </SafeAreaView>
+        </View>
     );
 };
 
@@ -439,12 +417,14 @@ const styles = StyleSheet.create({
     bannerButtons: {
         flexDirection: 'row',
         gap: 8,
+        flexWrap: 'wrap',
     },
     bannerButton: {
         backgroundColor: theme.colors.primary,
         paddingHorizontal: 12,
         paddingVertical: 6,
         borderRadius: 4,
+        marginBottom: 4,
     },
     bannerButtonText: {
         color: 'white',
@@ -455,5 +435,10 @@ const styles = StyleSheet.create({
         paddingTop: 16,
         paddingBottom: theme.spacing.l,
     },
+    image: {
+        width: '100%',
+        height: 200,
+        resizeMode: 'contain',
+        marginVertical: theme.spacing.s,
+    },
 });
-

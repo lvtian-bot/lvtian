@@ -58,7 +58,8 @@
     "restore": "Restore",
     "discardChangesPrompt": "Discard changes?",
     "saveChangesPrompt": "Do you want to save changes?",
-    "dontSave": "Don't Save"
+    "dontSave": "Don't Save",
+    "close": "Close"
   },
   "settings": {
     "saveAndValidate": "Validate and Save",
@@ -72,6 +73,17 @@
       "notEmpty": "All configuration fields are required."
     },
     "cosConfig": "COS Configuration",
+    "cloudProvider": {
+      "tencentCOS": "Tencent Cloud COS",
+      "subtitle": "Configure your cloud storage to sync notes",
+      "authInfo": "Authentication Info",
+      "secretId": "SecretId",
+      "secretKey": "SecretKey",
+      "bucketConfig": "Bucket Configuration",
+      "bucketName": "Bucket Name",
+      "region": "Region",
+      "helpText": "Please ensure you have enabled COS service in Tencent Cloud Console and obtained the correct keys and bucket information."
+    },
     "saveCos": "Validate and Save COS Config",
     "saveFlashNote": "Save Flash Note Config",
     "flashNote": "Flash Note Settings",
@@ -84,6 +96,10 @@
       "none": "None"
     },
     "markdownStyle": "Markdown Style",
+    "cloudRepoConfig": "Cloud Storage",
+    "configured": "Configured",
+    "flashNoteConfig": "Flash Note Configuration",
+    "current": "Current:",
     "themes": {
       "default": "Default",
       "github": "GitHub",

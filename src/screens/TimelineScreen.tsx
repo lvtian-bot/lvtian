@@ -12,11 +12,9 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useShareStore } from '../store/useShareStore';
-import { FlashNoteInputModal } from '../components/FlashNoteInputModal'; // Import the new modal
+import { FlashNoteInputModal } from '../components/FlashNoteInputModal';
 import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
-
 import { UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudService';
-
 import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
 
@@ -25,8 +23,6 @@ interface FlashNote {
     timestamp: string;
     content: string;
 }
-
-
 
 type TimelineScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -43,7 +39,6 @@ export const TimelineScreen = () => {
     const { t } = useTranslation();
     const { getMetadata, setMetadata, setUploadState } = useFileMetadataStore();
 
-    // State for the flash note input modal
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [editingNoteId, setEditingNoteId] = useState<string | undefined>(undefined);
     const [editingNoteContent, setEditingNoteContent] = useState<string | undefined>(undefined);
@@ -61,79 +56,148 @@ export const TimelineScreen = () => {
         setNotes(parsedNotes);
     }, []);
 
+    // Helper: Perform Download
+    const performDownload = useCallback(async (filePath: string) => {
+        try {
+            setIsUpdating(true);
+            const result = await cloudService.downloadFile(filePath, filePath);
+            setMetadata(filePath, result.etag, result.etag, result.lastModified);
+
+            const content = await fsService.readFile(filePath);
+            parseAndSetNotes(content);
+            return true;
+        } catch (error) {
+            console.error('Download failed:', error);
+            Alert.alert('Error', 'Failed to download file');
+            return false;
+        } finally {
+            setIsUpdating(false);
+        }
+    }, [parseAndSetNotes, setMetadata]);
+
+    // Helper: Perform Upload
+    const performUpload = useCallback(async (filePath: string) => {
+        try {
+            setIsUpdating(true);
+            setUploadState(filePath, 'uploading');
+            const result = await cloudService.uploadFile(filePath, filePath);
+            if (result) {
+                setMetadata(filePath, result.etag, result.etag, result.lastModified);
+                return true;
+            }
+            return false;
+        } catch (error: any) {
+            console.error('Upload failed:', error);
+            setUploadState(filePath, 'failed');
+            return false;
+        } finally {
+            setIsUpdating(false);
+        }
+    }, [setMetadata, setUploadState]);
+
     const checkSyncStatus = useCallback(async (filePath: string) => {
         setSyncStatus('checking');
 
-        // No delay needed, we rely on events now
-
-
         try {
-            // const { cloudService } = require('../services/CloudService');
             const key = filePath;
             const localMetadata = getMetadata(filePath);
 
-            // 1. Check Upload State
+            // 1. Check Cloud Config (Priority 1)
+            if (!cloudService.isConfigured()) {
+                console.log('[TimelineScreen] Cloud not configured');
+                setSyncStatus('not-configured');
+                setConflictType(null);
+                return;
+            }
+
+            // 2. Check Network Status (Priority 2)
+            const netState = await NetInfo.fetch();
+            if (netState.isConnected === false) {
+                setSyncStatus('offline');
+                setConflictType(null);
+                return;
+            }
+
+            // 3. Check Upload State
             if (localMetadata?.uploadState === 'uploading') {
                 setSyncStatus('checking');
                 setConflictType(null);
                 return;
             }
 
-            // 2. Check Network
-            const netState = await NetInfo.fetch();
-            if (netState.isConnected === false) {
-                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                    setSyncStatus('conflict');
-                    setConflictType('localNewer');
-                } else {
-                    setSyncStatus('offline');
-                    setConflictType(null);
-                }
-                return;
-            }
-
-            // 3. Check Cloud Config (after network, to allow AsyncStorage to load)
-            if (!cloudService.isConfigured()) {
-                console.log('[TimelineScreen] Cloud not configured');
-                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                    setSyncStatus('conflict');
-                    setConflictType('localNewer');
-                } else {
-                    setSyncStatus('not-configured');
-                    setConflictType(null);
-                }
-                return;
-            }
-
             // 4. Check Cloud File
             const cloudMetadata = await cloudService.headFile(key);
 
+            // A. Cloud file missing (404) -> Auto Upload
             if (!cloudMetadata) {
                 if (await fsService.exists(filePath)) {
-                    setSyncStatus('conflict');
+                    console.log('Cloud file missing, auto-uploading...');
+                    await performUpload(filePath);
+                    // Re-check status after upload
+                    const newMetadata = await cloudService.headFile(key);
+                    if (newMetadata) {
+                        setSyncStatus('synced');
+                        setConflictType(null);
+                    } else {
+                        // Still missing or upload failed
+                        if (getMetadata(filePath)?.uploadState === 'failed') {
+                            setSyncStatus('conflict');
+                            setConflictType('localNewer');
+                        }
+                    }
+                }
+                return;
+            }
+
+            // B. Hash Match (Synced)
+            if (localMetadata?.localHash === cloudMetadata.etag) {
+                // Self-healing
+                if (localMetadata?.syncedHash !== cloudMetadata.etag) {
+                    setMetadata(filePath, cloudMetadata.etag, localMetadata.localHash, localMetadata.lastModified || new Date().toISOString());
+                }
+                setSyncStatus('synced');
+                setConflictType(null);
+                if (localMetadata?.uploadState === 'failed') {
+                    setUploadState(filePath, null);
+                }
+                return;
+            }
+
+            // C. Hash Mismatch (Conflict/Inconsistent)
+            // C1. Only Cloud Updated (localHash == syncedHash) -> Auto Download
+            if (localMetadata?.localHash === localMetadata?.syncedHash) {
+                console.log('Cloud newer, auto-downloading...');
+                const success = await performDownload(filePath);
+                if (success) {
+                    setSyncStatus('synced');
+                    setConflictType(null);
+                }
+                return;
+            }
+
+            // C2. Only Local Updated (cloud.etag == syncedHash) -> Auto Upload
+            if (cloudMetadata.etag === localMetadata?.syncedHash) {
+                console.log('Local newer, auto-uploading...');
+                const success = await performUpload(filePath);
+                if (success) {
+                    setSyncStatus('synced');
+                    setConflictType(null);
+                } else {
+                    setSyncStatus('conflict'); // Upload failed
                     setConflictType('localNewer');
                 }
                 return;
             }
 
-            if (localMetadata?.etag === cloudMetadata.etag) {
-                setSyncStatus('synced');
-                setConflictType(null);
-                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                    setUploadState(filePath, null);
-                }
-            } else {
-                setSyncStatus('conflict');
-                const localFileStat = await fsService.stat(filePath);
-                const localMtime = localFileStat?.mtime || new Date(0);
-                const cloudMtime = new Date(cloudMetadata.lastModified);
-                setConflictType(cloudMtime > localMtime ? 'cloudNewer' : 'localNewer');
-            }
+            // C3. Bidirectional Conflict -> Show UI
+            setSyncStatus('conflict');
+            setConflictType('cloudNewer'); // Prioritize cloud newer to prevent overwrite
+
         } catch (error) {
             console.error('Error checking sync status:', error);
             const localMetadata = getMetadata(filePath);
 
-            if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
+            if (localMetadata?.uploadState === 'failed') {
                 setSyncStatus('conflict');
                 setConflictType('localNewer');
                 return;
@@ -148,20 +212,43 @@ export const TimelineScreen = () => {
             } catch { }
             setSyncStatus('error');
         }
-    }, [getMetadata, setUploadState]);
+    }, [getMetadata, setUploadState, setMetadata, performUpload, performDownload]);
+
+    const handleOverwriteLocal = useCallback(async () => {
+        const filePath = getFlashNotePath();
+        const success = await performDownload(filePath);
+        if (success) {
+            setSyncStatus('synced');
+            setConflictType(null);
+        }
+    }, [getFlashNotePath, performDownload]);
+
+    const handleUploadOverwrite = useCallback(async () => {
+        const filePath = getFlashNotePath();
+        const success = await performUpload(filePath);
+        if (success) {
+            checkSyncStatus(filePath);
+        } else {
+            checkSyncStatus(filePath);
+        }
+    }, [getFlashNotePath, performUpload, checkSyncStatus]);
 
     const tryRestoreFromCloud = useCallback(async (filePath: string) => {
         try {
             setIsUpdating(true);
-            // const { cloudService } = require('../services/CloudService');
             const key = filePath;
+
+            if (!cloudService.isConfigured()) {
+                setSyncStatus('not-configured');
+                return;
+            }
 
             const metadata = await cloudService.headFile(key);
             if (metadata) {
                 await cloudService.downloadFile(key, filePath);
                 const content = await fsService.readFile(filePath);
                 parseAndSetNotes(content);
-                setMetadata(filePath, metadata.etag, metadata.lastModified);
+                setMetadata(filePath, metadata.etag, metadata.etag, metadata.lastModified);
                 setSyncStatus('synced');
             } else {
                 setSyncStatus('error');
@@ -182,7 +269,6 @@ export const TimelineScreen = () => {
             if (exists) {
                 const content = await fsService.readFile(filePath);
                 parseAndSetNotes(content);
-                // Sync check is now handled separately in useFocusEffect
             } else {
                 await tryRestoreFromCloud(filePath);
             }
@@ -191,53 +277,12 @@ export const TimelineScreen = () => {
         }
     }, [getFlashNotePath, parseAndSetNotes, tryRestoreFromCloud]);
 
-    const handleOverwriteLocal = async () => {
-        try {
-            setIsUpdating(true);
-            const filePath = getFlashNotePath();
-            const key = filePath;
-            // const { cloudService } = require('../services/CloudService');
-            const result = await cloudService.downloadFile(key, filePath);
-            setMetadata(filePath, result.etag, result.lastModified);
-            setSyncStatus('synced');
-            setConflictType(null);
-
-            const content = await fsService.readFile(filePath);
-            parseAndSetNotes(content);
-        } catch {
-            Alert.alert('Error', 'Failed to overwrite local file');
-        } finally {
-            setIsUpdating(false);
-        }
-    };
-
-    const handleUploadOverwrite = async () => {
-        try {
-            setIsUpdating(true);
-            const filePath = getFlashNotePath();
-            setUploadState(filePath, 'uploading');
-            const result = await cloudService.uploadFile(filePath, filePath);
-            if (result) {
-                setMetadata(filePath, result.etag, result.lastModified);
-            }
-            checkSyncStatus(filePath);
-            setIsUpdating(false);
-        } catch {
-            const filePath = getFlashNotePath();
-            setUploadState(filePath, 'failed');
-            checkSyncStatus(filePath);
-            setIsUpdating(false);
-        }
-    };
-
     const handleSaveCopy = async () => {
         try {
             setIsUpdating(true);
             const filePath = getFlashNotePath();
-            const key = filePath; // In this app structure, key is often same as filePath relative to root
+            const key = filePath;
 
-            // 1. Rename local file (backup) and upload it
-            // This moves the local 'flash_notes.md' to 'flash_notes_conflict_xxx.md'
             const normalizedPath = normalizePath(filePath);
             const fileName = normalizedPath.split('/').pop() || '';
             const dir = normalizedPath.replace(fileName, '');
@@ -247,13 +292,12 @@ export const TimelineScreen = () => {
 
             await fsService.moveFile(normalizedPath, backupPath);
 
-            // Upload the renamed file to cloud
             if (cloudService.isConfigured()) {
                 setUploadState(backupPath, 'uploading');
                 try {
                     const result = await cloudService.uploadFile(backupPath, backupPath);
                     if (result) {
-                        setMetadata(backupPath, result.etag, result.lastModified);
+                        setMetadata(backupPath, result.etag, result.etag, result.lastModified);
                     }
                 } catch (error) {
                     console.error('Upload backup failed:', error);
@@ -262,20 +306,15 @@ export const TimelineScreen = () => {
             }
 
             const backupFileName = backupPath.split('/').pop();
-
-            // 2. Download the CLOUD version of the original file to restore main timeline
-            // Since local file was moved, we can download fresh
             const result = await cloudService.downloadFile(key, filePath);
 
-            // 3. Update Metadata & UI to show the fresh cloud content
-            setMetadata(filePath, result.etag, result.lastModified);
+            setMetadata(filePath, result.etag, result.etag, result.lastModified);
             setSyncStatus('synced');
             setConflictType(null);
 
             const content = await fsService.readFile(filePath);
             parseAndSetNotes(content);
 
-            // 4. Notify user
             Alert.alert(
                 t('common.success'),
                 t('timeline.conflictResolvedAsCopy', { backupFileName }) || `本地更改已另存为副本: ${backupFileName}\n首页已刷新为云端最新版本`
@@ -312,7 +351,7 @@ export const TimelineScreen = () => {
     const handleDeleteFlashNote = async (noteToDelete: FlashNote) => {
         Alert.alert(
             t('common.confirm'),
-            t('browser.confirmDelete', { fileName: noteToDelete.id }), // Re-using browser string for now
+            t('browser.confirmDelete', { fileName: noteToDelete.id }),
             [
                 { text: t('common.cancel'), style: 'cancel' },
                 {
@@ -358,37 +397,20 @@ export const TimelineScreen = () => {
     };
 
     useFocusEffect(useCallback(() => {
-        // Step 1: Load and display content first (user experience priority)
         loadNotes();
-
-        // Step 2: Check sync status
         const filePath = getFlashNotePath();
-
-
-        // Only check sync status if cloud service is fully initialized
         if (cloudService.isInitialized()) {
-            console.log('[TimelineScreen] Cloud initialized, checking sync status immediately');
             checkSyncStatus(filePath);
-        } else {
-            console.log('[TimelineScreen] Cloud not initialized yet, waiting for event...');
-            // We don't check yet, we wait for the event
         }
     }, [loadNotes, getFlashNotePath, checkSyncStatus]));
 
-
-    // Listen for flash note updates (e.g. from share intent)
     React.useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(FLASH_NOTES_UPDATED_EVENT, () => {
-            console.log('Flash notes updated event received, reloading...');
             loadNotes();
         });
-
-        return () => {
-            subscription.remove();
-        };
+        return () => subscription.remove();
     }, [loadNotes]);
 
-    // Listen for upload completion
     React.useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string }) => {
             const currentFilePath = getFlashNotePath();
@@ -396,53 +418,32 @@ export const TimelineScreen = () => {
                 checkSyncStatus(currentFilePath);
             }
         });
-
-        return () => {
-            subscription.remove();
-        };
+        return () => subscription.remove();
     }, [checkSyncStatus, getFlashNotePath]);
 
-    // Listen for cloud initialization completion
     React.useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, () => {
-            console.log('[TimelineScreen] Cloud init completed event received, checking sync status...');
             const filePath = getFlashNotePath();
             checkSyncStatus(filePath);
         });
-
-        return () => {
-            subscription.remove();
-        };
+        return () => subscription.remove();
     }, [checkSyncStatus, getFlashNotePath]);
 
-
-    // Subscribe to share content updates
     React.useEffect(() => {
         const handleShareContent = (content: string | null) => {
             if (content) {
-                console.log('[TimelineScreen] Share content detected via subscription, opening modal');
                 setEditingNoteId(undefined);
                 setEditingNoteContent(content);
                 setIsModalVisible(true);
-                // Clear the pending content immediately to prevent duplicate triggers
                 useShareStore.getState().clearPendingShare();
             }
         };
-
-        // Check initial value
         handleShareContent(useShareStore.getState().pendingShareContent);
-
-        // Subscribe to changes
         const unsubscribe = useShareStore.subscribe((state) => {
             handleShareContent(state.pendingShareContent);
         });
-
-
-        return () => {
-            unsubscribe();
-        };
+        return () => unsubscribe();
     }, []);
-
 
     React.useLayoutEffect(() => {
         navigation.setOptions({
@@ -466,7 +467,6 @@ export const TimelineScreen = () => {
 
     return (
         <View style={styles.container}>
-            {/* Show not-configured banner when cloud service is not set up */}
             {syncStatus === 'not-configured' && (
                 <View style={styles.infoBanner}>
                     <Text style={styles.infoBannerText}>
@@ -474,17 +474,16 @@ export const TimelineScreen = () => {
                     </Text>
                     <View style={styles.bannerButtons}>
                         <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} style={styles.infoBannerButton}>
-
                             <Text style={styles.infoBannerButtonText}>{'前往设置'}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
             )}
-            {/* Show offline banner when device is offline */}
             {syncStatus === 'offline' && (
                 <View style={styles.banner}>
                     <Text style={styles.bannerText}>
                         {t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
+                        {fileMetadata?.uploadState === 'failed' ? ' (上次上传失败)' : ''}
                     </Text>
                     <View style={styles.bannerButtons}>
                         <TouchableOpacity onPress={() => checkSyncStatus(currentFilePath)} style={styles.bannerButton}>
@@ -493,18 +492,20 @@ export const TimelineScreen = () => {
                     </View>
                 </View>
             )}
-            {syncStatus === 'conflict' && conflictType && (
+            {syncStatus === 'conflict' && (
                 <View style={styles.banner}>
                     <Text style={styles.bannerText}>
-                        {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') && (
-                            fileMetadata?.uploadState === 'conflict-failed'
-                                ? '上传失败：云端文件已更改\n'
-                                : '上传失败\n'
-                        )}
-                        {conflictType === 'cloudNewer' ? '云端有新版本' : '本地更改未同步'}
+                        {fileMetadata?.uploadState === 'failed'
+                            ? '上传失败'
+                            : '本地和云端已同时修改'
+                        }
                     </Text>
                     <View style={styles.bannerButtons}>
-                        {conflictType === 'cloudNewer' ? (
+                        {fileMetadata?.uploadState === 'failed' ? (
+                            <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
+                                <Text style={styles.bannerButtonText}>重试</Text>
+                            </TouchableOpacity>
+                        ) : (
                             <>
                                 <TouchableOpacity onPress={handleOverwriteLocal} style={styles.bannerButton}>
                                     <Text style={styles.bannerButtonText}>使用云端版本</Text>
@@ -512,14 +513,8 @@ export const TimelineScreen = () => {
                                 <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
                                     <Text style={styles.bannerButtonText}>保存副本</Text>
                                 </TouchableOpacity>
-                            </>
-                        ) : (
-                            <>
                                 <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>上传到云端</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>保存副本</Text>
+                                    <Text style={styles.bannerButtonText}>上传覆盖</Text>
                                 </TouchableOpacity>
                             </>
                         )}

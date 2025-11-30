@@ -25,7 +25,8 @@ import { Breadcrumb } from '../components/Breadcrumb';
 import { theme } from '../utils/theme';
 import { RootStackParamList } from '../types/navigation';
 import { FileItem, fsService } from '../services/FileSystemService';
-import { cloudService } from '../services/CloudService';
+import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
+import { DeviceEventEmitter } from 'react-native';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useFileListStore } from '../store/useFileListStore';
 
@@ -74,8 +75,37 @@ export const BrowserScreen = () => {
             setStatus('unconfigured');
             return;
         }
-        setStatus('loading');
+
+        // 1. Optimistic Load: Try to load from cache immediately
+        const cachedCloudFiles = getCachedList(prefix);
+        if (cachedCloudFiles) {
+            const fileList: ExtendedFileItem[] = cachedCloudFiles.map((item): ExtendedFileItem => ({
+                name: item.key.endsWith('/')
+                    ? item.key.split('/').slice(-2, -1)[0] + '/'
+                    : item.key.split('/').pop() ?? item.key,
+                path: item.key,
+                size: item.size,
+                isDirectory: item.key.endsWith('/'),
+                mtime: new Date(item.lastModified),
+                isCached: true,
+            }));
+
+            fileList.sort((a, b) => {
+                if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+
+            setFiles(fileList);
+            setFiles(fileList);
+            setStatus('success');
+        } else {
+            // No cache, clear files and show full screen loading
+            setFiles([]);
+            setStatus('loading');
+        }
+
         try {
+            // 2. Network Load: Fetch from cloud
             const cloudFiles = await cloudService.listFiles(prefix);
 
             // Cache the successful list
@@ -90,7 +120,7 @@ export const BrowserScreen = () => {
                 size: item.size,
                 isDirectory: item.key.endsWith('/'),
                 mtime: new Date(item.lastModified),
-                isCached: true, // Online files are "cached" in the sense they are available (or downloadable)
+                isCached: true,
             }));
 
             fileList.sort((a, b) => {
@@ -102,79 +132,44 @@ export const BrowserScreen = () => {
             setStatus('success');
         } catch (error: any) {
             console.error('Failed to load cloud files:', error);
+
+            // If we already have files (from cache), we just switch to offline mode indicator
+            // but keep the files visible.
+            if (files.length > 0) {
+                setIsOfflineMode(true);
+                setStatus('success'); // Keep showing the list
+                return;
+            }
+
             setIsOfflineMode(true);
 
-            // Try to load from cache + local files
+            // Try to load from local files if we have nothing yet
             try {
-                const cachedCloudFiles = getCachedList(prefix);
+                // We already tried cache above, so here we only check local FS
+                // But wait, the original logic merged cache + local. 
+                // Since we already tried cache, let's just check local FS for any additional files?
+                // Or if cache was empty/null, we try local.
+
                 const localFiles = await fsService.listFiles(prefix);
-                const localFileNames = new Set(localFiles.map(f => f.name));
 
-                let mergedFiles: ExtendedFileItem[] = [];
-
-                if (cachedCloudFiles) {
-                    // We have a cached list, use it as the source of truth for "what exists"
-                    mergedFiles = cachedCloudFiles.map((item): ExtendedFileItem => {
-                        const name = item.key.endsWith('/')
-                            ? item.key.split('/').slice(-2, -1)[0] + '/'
-                            : item.key.split('/').pop() ?? item.key;
-
-                        // Check if this file exists locally
-                        // For directories, we assume they exist if they are in the list? 
-                        // Or we check if local has that dir?
-                        // fsService.listFiles returns directories too.
-                        const isCached = localFileNames.has(name);
-
+                if (localFiles.length > 0) {
+                    const mergedFiles = localFiles.map(f => {
+                        const rootPath = fsService.getRootPath();
+                        let relativePath = f.path;
+                        if (relativePath.startsWith(rootPath)) {
+                            relativePath = relativePath.substring(rootPath.length);
+                        }
+                        relativePath = relativePath.replace(/^\/+/, '');
+                        if (f.isDirectory && !relativePath.endsWith('/')) {
+                            relativePath += '/';
+                        }
                         return {
-                            name: name,
-                            path: item.key,
-                            size: item.size,
-                            isDirectory: item.key.endsWith('/'),
-                            mtime: new Date(item.lastModified),
-                            isCached: item.key.endsWith('/') ? true : isCached, // Folders always "cached" (clickable) to navigate?
-                            // Actually if folder is not locally present, we can't list its contents offline unless we have cache for THAT folder too.
-                            // But let's allow clicking, it will try to load that folder's cache.
+                            ...f,
+                            path: relativePath,
+                            isCached: true,
                         };
                     });
-                } else {
-                    // No cache. Check if local directory exists to decide if we should show empty list or error.
-                    let useLocal = localFiles.length > 0 || prefix === '';
-                    if (!useLocal) {
-                        try {
-                            useLocal = await fsService.exists(prefix);
-                        } catch { }
-                    }
 
-                    if (useLocal) {
-                        const rootPath = fsService.getRootPath();
-                        mergedFiles = localFiles.map(f => {
-                            let relativePath = f.path;
-                            if (relativePath.startsWith(rootPath)) {
-                                relativePath = relativePath.substring(rootPath.length);
-                            }
-                            relativePath = relativePath.replace(/^\/+/, '');
-                            if (f.isDirectory && !relativePath.endsWith('/')) {
-                                relativePath += '/';
-                            }
-                            return {
-                                ...f,
-                                path: relativePath,
-                                isCached: true,
-                            };
-                        });
-
-                        // If we decided to use local, we show success even if empty
-                        mergedFiles.sort((a, b) => {
-                            if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-                            return a.name.localeCompare(b.name);
-                        });
-                        setFiles(mergedFiles);
-                        setStatus('success');
-                        return;
-                    }
-                }
-
-                if (mergedFiles.length > 0 || (cachedCloudFiles && cachedCloudFiles.length === 0)) {
                     mergedFiles.sort((a, b) => {
                         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
                         return a.name.localeCompare(b.name);
@@ -185,7 +180,7 @@ export const BrowserScreen = () => {
                 }
 
             } catch (localError) {
-                console.log('Failed to load local/cached files:', localError);
+                console.log('Failed to load local files:', localError);
             }
 
             let message = t('browser.error.default');
@@ -199,7 +194,21 @@ export const BrowserScreen = () => {
             setErrorMessage(message);
             setStatus('error');
         }
-    }, [prefix, t, getCachedList, setCachedList]);
+    }, [prefix, t, getCachedList, setCachedList, files.length]);
+
+    // Listen for upload completion events and refresh the file list
+    useEffect(() => {
+        const subscription = DeviceEventEmitter.addListener(
+            UPLOAD_COMPLETED_EVENT,
+            () => {
+                // Refresh the file list when an upload completes
+                loadFiles();
+            }
+        );
+
+        // Clean up the listener
+        return () => subscription.remove();
+    }, [loadFiles]);
 
     const handlePathPress = (newPath: string) => {
         setPrefix(newPath);
@@ -467,7 +476,7 @@ export const BrowserScreen = () => {
 
                         // Set the metadata for the newly downloaded file
                         const { setMetadata } = useFileMetadataStore.getState();
-                        setMetadata(item.path, result.etag, result.lastModified);
+                        setMetadata(item.path, result.etag, result.etag, result.lastModified);
 
                         setStatus('success');
                         navigation.navigate('Preview', { filePath: item.path });
@@ -485,46 +494,55 @@ export const BrowserScreen = () => {
     };
 
     const renderContent = () => {
-        switch (status) {
-            case 'loading':
-            case 'idle':
-                return <ActivityIndicator style={styles.messageContainer} size="large" />;
-            case 'error':
-                return <MessageView title={t('browser.loadingFailedTitle')} message={errorMessage} buttonText={t('browser.retry')} onButtonPress={loadFiles} />;
-            case 'unconfigured':
-                return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} />;
-            case 'success':
-                return (
-                    <View style={styles.fileListContainer}>
-                        {isOfflineMode && (
-                            <View style={styles.offlineBanner}>
-                                <Text style={styles.offlineBannerText}>{t('browser.offlineMode') || 'Offline Mode - Showing cached list'}</Text>
-                            </View>
-                        )}
-                        <FlatList
-                            ref={flatListRef}
-                            data={files}
-                            renderItem={({ item }) => (
-                                <FileListItem
-                                    item={item}
-                                    onPress={handleFilePress}
-                                    onLongPress={handleFileLongPress}
-                                    isCached={item.isCached}
-                                />
-                            )}
-                            keyExtractor={(item) => item.path}
-                            refreshControl={<RefreshControl refreshing={false} onRefresh={loadFiles} />}
-                            ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
-                            onScroll={(event) => {
-                                const scrollY = event.nativeEvent.contentOffset.y;
-                                currentScrollY.current = scrollY;
-                                scrollPositionsRef.current[prefix] = scrollY;
-                            }}
-                            scrollEventThrottle={16}
-                        />
-                    </View>
-                );
+        // If we have files, show the list regardless of status (unless unconfigured)
+        // This allows showing cached data while loading (optimistic UI)
+        if (status === 'unconfigured') {
+            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} />;
         }
+
+        if (files.length > 0) {
+            return (
+                <View style={styles.fileListContainer}>
+                    {isOfflineMode && (
+                        <View style={styles.offlineBanner}>
+                            <Text style={styles.offlineBannerText}>{t('browser.offlineMode') || 'Offline Mode - Showing cached list'}</Text>
+                        </View>
+                    )}
+                    <FlatList
+                        ref={flatListRef}
+                        data={files}
+                        renderItem={({ item }) => (
+                            <FileListItem
+                                item={item}
+                                onPress={handleFilePress}
+                                onLongPress={handleFileLongPress}
+                                isCached={item.isCached}
+                            />
+                        )}
+                        keyExtractor={(item) => item.path}
+                        refreshControl={<RefreshControl refreshing={status === 'loading'} onRefresh={loadFiles} />}
+                        ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
+                        onScroll={(event) => {
+                            const scrollY = event.nativeEvent.contentOffset.y;
+                            currentScrollY.current = scrollY;
+                            scrollPositionsRef.current[prefix] = scrollY;
+                        }}
+                        scrollEventThrottle={16}
+                    />
+                </View>
+            );
+        }
+
+        // Only show full screen loader if we have no files and are loading
+        if (status === 'loading' || status === 'idle') {
+            return <ActivityIndicator style={styles.messageContainer} size="large" />;
+        }
+
+        if (status === 'error') {
+            return <MessageView title={t('browser.loadingFailedTitle')} message={errorMessage} buttonText={t('browser.retry')} onButtonPress={loadFiles} />;
+        }
+
+        return null;
     };
 
     // 准备操作菜单的选项

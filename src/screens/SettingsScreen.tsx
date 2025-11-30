@@ -1,256 +1,137 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView, ActivityIndicator } from 'react-native';
-import * as Keychain from 'react-native-keychain';
+// 更新主设置页面：仿微信设计 + 独立卡片优化
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
-import { TencentCOSProvider } from '../services/TencentCOSProvider'; // Import provider for testing
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../types/navigation';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+
+type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export const SettingsScreen = () => {
     const { t } = useTranslation();
-    const { cosConfig, setCosConfig, flashNoteConfig, setFlashNoteConfig, markdownTheme, setMarkdownTheme } = useSettingsStore();
+    const { markdownTheme, setMarkdownTheme } = useSettingsStore();
+    const navigation = useNavigation<SettingsScreenNavigationProp>();
+    const { cosConfig } = useSettingsStore();
 
-    const [secretId, setSecretId] = useState('');
-    const [secretKey, setSecretKey] = useState('');
-    const [bucket, setBucket] = useState(cosConfig.bucket);
-    const [region, setRegion] = useState(cosConfig.region);
-    const [flashNotePath, setFlashNotePath] = useState(flashNoteConfig.path);
-    const [flashNoteFilename, setFlashNoteFilename] = useState(flashNoteConfig.filename);
-    const [flashNoteSuffix, setFlashNoteSuffix] = useState(flashNoteConfig.suffix);
-    const [isCosLoading, setIsCosLoading] = useState(false);
-    const [isFlashNoteLoading, setIsFlashNoteLoading] = useState(false);
-
-    useEffect(() => {
-        loadCredentials();
-    }, []);
-
-    const loadCredentials = async () => {
-        try {
-            const credentials = await Keychain.getGenericPassword();
-            if (credentials) {
-                setSecretId(credentials.username);
-                setSecretKey(credentials.password);
-            }
-        } catch (error) {
-            console.error('Failed to load credentials', error);
-        }
-    };
-
-    const handleSaveCosConfig = async () => {
-        if (!secretId || !secretKey || !bucket || !region) {
-            Alert.alert(t('settings.failure'), t('settings.error.notEmpty'));
-            return;
-        }
-
-        setIsCosLoading(true);
-
-        try {
-            console.log('Validating new COS configuration...');
-            const testProvider = new TencentCOSProvider(secretId, secretKey, bucket, region);
-
-            await new Promise((resolve, reject) => {
-                // @ts-ignore
-                testProvider.cos.getBucket({ Bucket: bucket, Region: region, MaxKeys: 0 }, (err, data) => {
-                    if (err) return reject(err);
-                    resolve(data);
-                });
-            });
-
-            console.log('Validation successful.');
-
-            await Keychain.setGenericPassword(secretId, secretKey);
-            setCosConfig({ bucket, region });
-
-            Alert.alert(t('settings.success'), t('settings.success'));
-
-        } catch (error: any) {
-            console.error('Failed to save settings:', error);
-            let errorMessage = t('settings.error.validation');
-            if (error && error.code) {
-                switch (error.code) {
-                    case 'SignatureDoesNotMatch':
-                        errorMessage = t('settings.error.auth');
-                        break;
-                    case 'NoSuchBucket':
-                        errorMessage = t('settings.error.bucket');
-                        break;
-                    case 'NetworkError':
-                        errorMessage = t('settings.error.network');
-                        break;
-                }
-            }
-            Alert.alert(t('settings.failure'), errorMessage);
-        } finally {
-            setIsCosLoading(false);
-        }
-    };
-
-    const handleSaveFlashNoteConfig = () => {
-        if (!flashNotePath || !flashNoteFilename) {
-            Alert.alert(t('settings.failure'), t('settings.error.notEmpty'));
-            return;
-        }
-        setIsFlashNoteLoading(true);
-        // No validation needed for local paths for now, or simple check
-        setFlashNoteConfig({ path: flashNotePath, filename: flashNoteFilename, suffix: flashNoteSuffix });
-        setIsFlashNoteLoading(false);
-        Alert.alert(t('settings.success'), t('settings.success'));
-    };
+    // Markdown主题选择模态框
+    const [themeModalVisible, setThemeModalVisible] = useState(false);
+    const themes = Object.keys(markdownThemes) as MarkdownThemeKey[];
 
     return (
         <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
-            <Text style={styles.header}>{t('settings.cosConfig')}</Text>
 
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>Secret ID</Text>
-                <TextInput
-                    style={styles.input}
-                    value={secretId}
-                    onChangeText={setSecretId}
-                    placeholder="AKID..."
-                    secureTextEntry
-                />
-            </View>
+            {/* 云端仓库配置卡片 - 保持突出设计 */}
+            <TouchableOpacity
+                style={styles.cloudCard}
+                onPress={() => navigation.navigate('CloudRepoConfig')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.cloudCardContent}>
+                    <View style={styles.cloudHeaderRow}>
+                        <View style={styles.cloudTitleContainer}>
+                            <Icon name="cloud-sync" size={28} color={theme.colors.primary} style={styles.cloudIcon} />
+                            <Text style={styles.cloudTitle}>{t('settings.cloudRepoConfig')}</Text>
+                        </View>
+                        <View style={styles.cloudServiceTag}>
+                            <Text style={styles.cloudServiceName}>{t('settings.cloudProvider.tencentCOS')}</Text>
+                        </View>
+                    </View>
 
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>Secret Key</Text>
-                <TextInput
-                    style={styles.input}
-                    value={secretKey}
-                    onChangeText={setSecretKey}
-                    placeholder="Key..."
-                    secureTextEntry
-                />
-            </View>
-
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>Bucket</Text>
-                <TextInput
-                    style={styles.input}
-                    value={bucket}
-                    onChangeText={setBucket}
-                    placeholder="example-1250000000"
-                />
-            </View>
-
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>Region</Text>
-                <TextInput
-                    style={styles.input}
-                    value={region}
-                    onChangeText={setRegion}
-                    placeholder="ap-guangzhou"
-                />
-            </View>
-
-            <TouchableOpacity style={styles.button} onPress={handleSaveCosConfig} disabled={isCosLoading}>
-                {isCosLoading ? (
-                    <ActivityIndicator color={theme.colors.white} />
-                ) : (
-                    <Text style={styles.buttonText}>{t('settings.saveCos')}</Text>
-                )}
-            </TouchableOpacity>
-
-            <View style={styles.divider} />
-
-            <Text style={styles.header}>{t('settings.flashNote')}</Text>
-
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>{t('settings.flashNotePath')}</Text>
-                <TextInput
-                    style={styles.input}
-                    value={flashNotePath}
-                    onChangeText={setFlashNotePath}
-                    placeholder="notes/"
-                />
-            </View>
-
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>{t('settings.flashNoteFilename')}</Text>
-                <TextInput
-                    style={styles.input}
-                    value={flashNoteFilename}
-                    onChangeText={setFlashNoteFilename}
-                    placeholder="flash_notes.md"
-                />
-            </View>
-
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>{t('settings.flashNoteSuffix')}</Text>
-                <Text style={styles.description}>{t('settings.flashNoteSuffixDesc')}</Text>
-
-                <View style={styles.suffixPresets}>
-                    <TouchableOpacity
-                        style={[styles.presetButton, flashNoteSuffix === '' && styles.presetButtonActive]}
-                        onPress={() => setFlashNoteSuffix('')}
-                    >
-                        <Text style={[styles.presetButtonText, flashNoteSuffix === '' && styles.presetButtonTextActive]}>
-                            {t('settings.suffixPresets.none')}
+                    <View style={styles.cloudStatusRow}>
+                        <Text style={styles.cloudStatusText}>
+                            {cosConfig.bucket
+                                ? `${t('settings.configured')} · ${cosConfig.bucket}`
+                                : t('settings.cloudProvider.subtitle')}
                         </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.presetButton, flashNoteSuffix === '\n>' && styles.presetButtonActive]}
-                        onPress={() => setFlashNoteSuffix('\n>')}
-                    >
-                        <Text style={[styles.presetButtonText, flashNoteSuffix === '\n>' && styles.presetButtonTextActive]}>
-                            \n&gt;
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.presetButton, flashNoteSuffix === '\n> ' && styles.presetButtonActive]}
-                        onPress={() => setFlashNoteSuffix('\n> ')}
-                    >
-                        <Text style={[styles.presetButtonText, flashNoteSuffix === '\n> ' && styles.presetButtonTextActive]}>
-                            \n&gt;
-                        </Text>
-                    </TouchableOpacity>
+                        <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                    </View>
                 </View>
-
-                <Text style={styles.label}>{t('settings.customSuffix')}</Text>
-                <TextInput
-                    style={styles.input}
-                    value={flashNoteSuffix}
-                    onChangeText={setFlashNoteSuffix}
-                    placeholder="\n> "
-                    multiline
-                />
-            </View>
-
-            <TouchableOpacity style={styles.button} onPress={handleSaveFlashNoteConfig} disabled={isFlashNoteLoading}>
-                {isFlashNoteLoading ? (
-                    <ActivityIndicator color={theme.colors.white} />
-                ) : (
-                    <Text style={styles.buttonText}>{t('settings.saveFlashNote')}</Text>
-                )}
             </TouchableOpacity>
 
-            <View style={styles.divider} />
+            {/* 闪念笔记配置 - 独立小卡片 */}
+            <TouchableOpacity
+                style={styles.smallCard}
+                onPress={() => navigation.navigate('FlashNoteConfig')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.smallCardLeft}>
+                    <Icon name="flash-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Text style={styles.smallCardTitle}>{t('settings.flashNoteConfig')}</Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
 
-            <Text style={styles.header}>{t('settings.markdownStyle')}</Text>
-            <View style={styles.themeContainer}>
-                {(Object.keys(markdownThemes) as MarkdownThemeKey[]).map((themeKey) => (
-                    <TouchableOpacity
-                        key={themeKey}
-                        style={[
-                            styles.themeButton,
-                            markdownTheme === themeKey && styles.themeButtonActive,
-                        ]}
-                        onPress={() => setMarkdownTheme(themeKey)}
-                    >
-                        <Text
-                            style={[
-                                styles.themeButtonText,
-                                markdownTheme === themeKey && styles.themeButtonTextActive,
-                            ]}
+            {/* Markdown主题设置 - 独立小卡片 */}
+            <TouchableOpacity
+                style={styles.smallCard}
+                onPress={() => setThemeModalVisible(true)}
+                activeOpacity={0.8}
+            >
+                <View style={styles.smallCardLeft}>
+                    <Icon name="palette-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Text style={styles.smallCardTitle}>{t('settings.markdownStyle')}</Text>
+                </View>
+                <View style={styles.smallCardRight}>
+                    <Text style={styles.smallCardSubtitle}>{t(`settings.themes.${markdownTheme}`)}</Text>
+                    <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                </View>
+            </TouchableOpacity>
+
+            {/* Markdown主题选择模态框 */}
+            <Modal
+                visible={themeModalVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setThemeModalVisible(false)}
+            >
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setThemeModalVisible(false)}
+                >
+                    <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+                        <Text style={styles.modalTitle}>{t('settings.markdownStyle')}</Text>
+                        <FlatList
+                            data={themes}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={[
+                                        styles.themeItem,
+                                        markdownTheme === item && styles.themeItemActive
+                                    ]}
+                                    onPress={() => {
+                                        setMarkdownTheme(item);
+                                        setThemeModalVisible(false);
+                                    }}
+                                >
+                                    <Text style={[
+                                        styles.themeItemText,
+                                        markdownTheme === item && styles.themeItemTextActive
+                                    ]}>
+                                        {t(`settings.themes.${item}`)}
+                                    </Text>
+                                    {markdownTheme === item && (
+                                        <Icon name="check" size={20} color={theme.colors.primary} />
+                                    )}
+                                </TouchableOpacity>
+                            )}
+                            keyExtractor={item => item}
+                            style={styles.themeList}
+                        />
+                        <TouchableOpacity
+                            style={styles.closeButton}
+                            onPress={() => setThemeModalVisible(false)}
                         >
-                            {t(`settings.themes.${themeKey}`)}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
-            </View>
-
-            <View style={styles.divider} />
+                            <Text style={styles.closeButtonText}>{t('common.close')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
 
         </ScrollView>
     );
@@ -259,103 +140,164 @@ export const SettingsScreen = () => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        padding: theme.spacing.m,
         backgroundColor: theme.colors.background,
+        paddingTop: theme.spacing.m,
     },
-    header: {
-        fontSize: theme.typography.h2.fontSize,
-        fontWeight: 'bold',
-        marginBottom: theme.spacing.m,
-        color: theme.colors.text,
-    },
-    inputGroup: {
-        marginBottom: theme.spacing.m,
-    },
-    label: {
-        fontSize: theme.typography.body.fontSize,
-        marginBottom: theme.spacing.xs,
-        color: theme.colors.textSecondary,
-    },
-    input: {
+    // 云端存储卡片样式
+    cloudCard: {
         backgroundColor: theme.colors.surface,
-        padding: theme.spacing.s,
-        borderRadius: 4,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        fontSize: 16,
-        color: theme.colors.text,
+        marginHorizontal: theme.spacing.m,
+        marginBottom: theme.spacing.l,
+        borderRadius: 12,
+        padding: theme.spacing.l,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        elevation: 2,
     },
-    button: {
-        backgroundColor: theme.colors.primary,
-        padding: theme.spacing.m,
-        borderRadius: 8,
+    cloudCardContent: {
+        flexDirection: 'column',
+    },
+    cloudHeaderRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        marginTop: theme.spacing.s,
-    },
-    buttonText: {
-        color: theme.colors.white,
-        fontSize: 16,
-        fontWeight: 'bold',
-    },
-    divider: {
-        height: 1,
-        backgroundColor: theme.colors.border,
-        marginVertical: theme.spacing.l,
-    },
-    themeContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: theme.spacing.s,
-    },
-    themeButton: {
-        paddingVertical: theme.spacing.s,
-        paddingHorizontal: theme.spacing.m,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface,
-    },
-    themeButtonActive: {
-        backgroundColor: theme.colors.primary,
-        borderColor: theme.colors.primary,
-    },
-    themeButtonText: {
-        color: theme.colors.text,
-        fontSize: 14,
-    },
-    themeButtonTextActive: {
-        color: theme.colors.white,
-        fontWeight: 'bold',
-    },
-    description: {
-        fontSize: theme.typography.caption.fontSize,
-        color: theme.colors.textSecondary,
-        marginBottom: theme.spacing.s,
-    },
-    suffixPresets: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: theme.spacing.s,
         marginBottom: theme.spacing.m,
     },
-    presetButton: {
-        paddingVertical: theme.spacing.xs,
-        paddingHorizontal: theme.spacing.m,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface,
+    cloudTitleContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
-    presetButtonActive: {
-        backgroundColor: theme.colors.primary,
-        borderColor: theme.colors.primary,
+    cloudIcon: {
+        marginRight: theme.spacing.s,
     },
-    presetButtonText: {
+    cloudTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
         color: theme.colors.text,
-        fontSize: 13,
     },
-    presetButtonTextActive: {
+    cloudServiceTag: {
+        backgroundColor: theme.colors.primaryLight,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 4,
+    },
+    cloudServiceName: {
+        fontSize: 12,
+        color: theme.colors.primary,
+        fontWeight: '600',
+    },
+    cloudStatusRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    cloudStatusText: {
+        fontSize: 14,
+        color: theme.colors.textSecondary,
+    },
+    // 独立小卡片样式
+    smallCard: {
+        backgroundColor: theme.colors.surface,
+        marginHorizontal: theme.spacing.m, // 与云端卡片保持一致的边距
+        marginBottom: theme.spacing.s, // 卡片间距
+        borderRadius: 12,
+        paddingVertical: 16, // 较窄的高度
+        paddingHorizontal: theme.spacing.m,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.03,
+        shadowRadius: 2,
+        elevation: 1,
+    },
+    smallCardLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    smallCardIcon: {
+        marginRight: theme.spacing.m,
+        width: 24,
+        textAlign: 'center',
+        // color is set inline to theme.colors.textSecondary
+    },
+    smallCardTitle: {
+        fontSize: 16,
+        color: theme.colors.text,
+    },
+    smallCardRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    smallCardSubtitle: {
+        fontSize: 14,
+        color: theme.colors.textSecondary,
+        marginRight: 4,
+    },
+    // Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    modalContent: {
+        width: '80%',
+        backgroundColor: theme.colors.white,
+        borderRadius: 16,
+        padding: theme.spacing.l,
+        maxHeight: '60%',
+        elevation: 5,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        marginBottom: theme.spacing.l,
+        textAlign: 'center',
+        color: theme.colors.text,
+    },
+    themeList: {
+        flexGrow: 0,
+    },
+    themeItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: theme.spacing.m,
+        paddingHorizontal: theme.spacing.s,
+        borderBottomWidth: 1,
+        borderBottomColor: theme.colors.border,
+    },
+    themeItemActive: {
+        backgroundColor: theme.colors.primaryLight + '40',
+        borderRadius: 8,
+        borderBottomWidth: 0,
+    },
+    themeItemText: {
+        fontSize: 16,
+        color: theme.colors.text,
+    },
+    themeItemTextActive: {
+        color: theme.colors.primary,
+        fontWeight: 'bold',
+    },
+    closeButton: {
+        marginTop: theme.spacing.l,
+        backgroundColor: theme.colors.primary,
+        paddingVertical: theme.spacing.m,
+        borderRadius: 12,
+        alignItems: 'center',
+    },
+    closeButtonText: {
         color: theme.colors.white,
+        fontSize: 16,
         fontWeight: 'bold',
     },
 });

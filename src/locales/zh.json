@@ -66,7 +66,8 @@
     "restore": "恢复",
     "discardChangesPrompt": "是否放弃更改？",
     "saveChangesPrompt": "是否保存更改？",
-    "dontSave": "暂不保存"
+    "dontSave": "暂不保存",
+    "close": "关闭"
   },
   "settings": {
     "saveAndValidate": "验证并保存配置",
@@ -80,6 +81,17 @@
       "notEmpty": "所有配置项都不能为空"
     },
     "cosConfig": "COS 设置",
+    "cloudProvider": {
+      "tencentCOS": "腾讯云 COS",
+      "subtitle": "配置您的云端存储以同步笔记",
+      "authInfo": "认证信息",
+      "secretId": "SecretId",
+      "secretKey": "SecretKey",
+      "bucketConfig": "存储桶配置",
+      "bucketName": "存储桶名称",
+      "region": "地域 (Region)",
+      "helpText": "请确保您已在腾讯云控制台开启 COS 服务，并获取了正确的密钥和存储桶信息。"
+    },
     "saveCos": "验证并保存 COS 配置",
     "saveFlashNote": "保存闪念笔记配置",
     "flashNote": "闪念笔记设置",
@@ -92,6 +104,10 @@
       "none": "无"
     },
     "markdownStyle": "Markdown 样式",
+    "cloudRepoConfig": "云端存储",
+    "configured": "已配置",
+    "flashNoteConfig": "闪念笔记设置",
+    "current": "当前:",
     "themes": {
       "default": "默认",
       "github": "GitHub",

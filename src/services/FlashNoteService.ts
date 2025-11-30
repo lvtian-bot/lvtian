@@ -105,6 +105,7 @@ class FlashNoteService {
         // Ensure directory exists before writing
         await this.ensureDirectoryExists(filePath);
         await fsService.writeFile(filePath, newContent);
+        useFileMetadataStore.getState().markFileAsModified(filePath);
 
         // Upload to cloud if configured (async, don't wait)
         if (cloudService.isConfigured()) {
@@ -114,7 +115,7 @@ class FlashNoteService {
             // Start upload in background
             cloudService.uploadFile(filePath, filePath).then(result => {
                 if (result) {
-                    setMetadata(filePath, result.etag, result.lastModified);
+                    setMetadata(filePath, result.etag, result.etag, result.lastModified);
                 }
                 // Notify UI that upload completed
                 DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
@@ -150,6 +151,7 @@ class FlashNoteService {
             const newContent = newBlocks.join('');
             await this.ensureDirectoryExists(filePath);
             await fsService.writeFile(filePath, newContent);
+            useFileMetadataStore.getState().markFileAsModified(filePath);
 
             // Upload to cloud if configured (async, don't wait)
             if (cloudService.isConfigured()) {
@@ -159,7 +161,7 @@ class FlashNoteService {
                 // Start upload in background
                 cloudService.uploadFile(filePath, filePath).then(result => {
                     if (result) {
-                        setMetadata(filePath, result.etag, result.lastModified);
+                        setMetadata(filePath, result.etag, result.etag, result.lastModified);
                     }
                     DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
                 }).catch(error => {
@@ -203,6 +205,7 @@ class FlashNoteService {
         const newContent = newLines.join('\n');
         await this.ensureDirectoryExists(filePath);
         await fsService.writeFile(filePath, newContent);
+        useFileMetadataStore.getState().markFileAsModified(filePath);
 
         // Upload to cloud if configured
         if (cloudService.isConfigured()) {
@@ -210,7 +213,7 @@ class FlashNoteService {
                 const result = await cloudService.uploadFile(filePath, filePath);
                 if (result) {
                     const { setMetadata } = useFileMetadataStore.getState();
-                    setMetadata(filePath, result.etag, result.lastModified);
+                    setMetadata(filePath, result.etag, result.etag, result.lastModified);
                 }
             } catch (error) {
                 console.error('Upload failed:', error);
