@@ -1,10 +1,10 @@
-import React, { useState, useCallback } from 'react';
-import NetInfo from "@react-native-community/netinfo";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback, useEffect, useLayoutEffect } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, DeviceEventEmitter, ActivityIndicator } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { fsService } from '../services/FileSystemService';
-import { cloudService } from '../services/CloudService';
+import { cloudService, UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudService';
+
 import { theme } from '../utils/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
@@ -13,317 +13,167 @@ import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useShareStore } from '../store/useShareStore';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal';
-import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
-import { UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudService';
-import { DeviceEventEmitter } from 'react-native';
+import { flashNoteService, FLASH_NOTES_UPDATED_EVENT, FlashNote } from '../services/FlashNoteService';
 import { normalizePath } from '../utils/pathUtils';
-
-interface FlashNote {
-    id: string;
-    timestamp: string;
-    content: string;
-}
+import { ActionSheetModal, ActionItem } from '../components/ActionSheetModal';
+import { useCloudSync } from '../hooks/useCloudSync';
+import { HeaderSyncStatus } from '../components/HeaderSyncStatus';
 
 type TimelineScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error' | 'offline' | 'not-configured';
-type ConflictType = 'cloudNewer' | 'localNewer' | null;
-
 export const TimelineScreen = () => {
     const [notes, setNotes] = useState<FlashNote[]>([]);
-    const [isUpdating, setIsUpdating] = useState(false);
-    const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
-    const [conflictType, setConflictType] = useState<ConflictType>(null);
     const navigation = useNavigation<TimelineScreenNavigationProp>();
     const { flashNoteConfig } = useSettingsStore();
     const { t } = useTranslation();
-    const { getMetadata, setMetadata, setUploadState } = useFileMetadataStore();
+
+    // Infinite Scroll State
+    const [allFilePaths, setAllFilePaths] = useState<string[]>([]);
+    const [loadedFilePaths, setLoadedFilePaths] = useState<string[]>([]);
+    const [nextFileIndex, setNextFileIndex] = useState(0);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
 
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [editingNoteId, setEditingNoteId] = useState<string | undefined>(undefined);
     const [editingNoteContent, setEditingNoteContent] = useState<string | undefined>(undefined);
+
+    // ActionSheet state
+    const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
+    const [selectedNote, setSelectedNote] = useState<FlashNote | null>(null);
 
     const getFlashNotePath = useCallback(() => {
         const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
         return normalizePath(path);
     }, [flashNoteConfig]);
 
-    const currentFilePath = flashNoteConfig.path ? normalizePath(`${flashNoteConfig.path}/${flashNoteConfig.filename}`) : normalizePath(flashNoteConfig.filename);
+    const currentFilePath = getFlashNotePath();
     const fileMetadata = useFileMetadataStore(state => state.metadata[currentFilePath]);
 
-    const parseAndSetNotes = useCallback((content: string) => {
-        const parsedNotes = flashNoteService.parseNotes(content);
-        setNotes(parsedNotes);
+    // Use the new hook with ALL loaded files
+    // We default to currentFilePath if loadedFilePaths is empty to ensure at least one file is tracked initially
+    const syncPaths = loadedFilePaths.length > 0 ? loadedFilePaths : [currentFilePath];
+    const { syncStatus, conflictType, isSyncing, checkSync, performAutoSync, resolveConflict } = useCloudSync(syncPaths);
+
+    // Load ALL available file paths (Main + History)
+    const loadFilePaths = useCallback(async () => {
+        try {
+            const paths = await flashNoteService.getSortedFilePaths();
+            setAllFilePaths(paths);
+            return paths;
+        } catch (error) {
+            console.error('Failed to load file paths:', error);
+            return [];
+        }
     }, []);
 
-    // Helper: Perform Download
-    const performDownload = useCallback(async (filePath: string) => {
+    // Load content from a specific file and append/prepend to notes
+    const loadFileContent = async (filePath: string): Promise<FlashNote[]> => {
         try {
-            setIsUpdating(true);
-            const result = await cloudService.downloadFile(filePath, filePath);
-            setMetadata(filePath, result.etag, result.etag, result.lastModified);
-
-            const content = await fsService.readFile(filePath);
-            parseAndSetNotes(content);
-            return true;
-        } catch (error) {
-            console.error('Download failed:', error);
-            Alert.alert('Error', 'Failed to download file');
-            return false;
-        } finally {
-            setIsUpdating(false);
-        }
-    }, [parseAndSetNotes, setMetadata]);
-
-    // Helper: Perform Upload
-    const performUpload = useCallback(async (filePath: string) => {
-        try {
-            setIsUpdating(true);
-            setUploadState(filePath, 'uploading');
-            const result = await cloudService.uploadFile(filePath, filePath);
-            if (result) {
-                setMetadata(filePath, result.etag, result.etag, result.lastModified);
-                return true;
-            }
-            return false;
-        } catch (error: any) {
-            console.error('Upload failed:', error);
-            setUploadState(filePath, 'failed');
-            return false;
-        } finally {
-            setIsUpdating(false);
-        }
-    }, [setMetadata, setUploadState]);
-
-    const checkSyncStatus = useCallback(async (filePath: string) => {
-        setSyncStatus('checking');
-
-        try {
-            const key = filePath;
-            const localMetadata = getMetadata(filePath);
-
-            // 1. Check Cloud Config (Priority 1)
-            if (!cloudService.isConfigured()) {
-                console.log('[TimelineScreen] Cloud not configured');
-                setSyncStatus('not-configured');
-                setConflictType(null);
-                return;
-            }
-
-            // 2. Check Network Status (Priority 2)
-            const netState = await NetInfo.fetch();
-            if (netState.isConnected === false) {
-                setSyncStatus('offline');
-                setConflictType(null);
-                return;
-            }
-
-            // 3. Check Upload State
-            if (localMetadata?.uploadState === 'uploading') {
-                setSyncStatus('checking');
-                setConflictType(null);
-                return;
-            }
-
-            // 4. Check Cloud File
-            const cloudMetadata = await cloudService.headFile(key);
-
-            // A. Cloud file missing (404) -> Auto Upload
-            if (!cloudMetadata) {
-                if (await fsService.exists(filePath)) {
-                    console.log('Cloud file missing, auto-uploading...');
-                    await performUpload(filePath);
-                    // Re-check status after upload
-                    const newMetadata = await cloudService.headFile(key);
-                    if (newMetadata) {
-                        setSyncStatus('synced');
-                        setConflictType(null);
-                    } else {
-                        // Still missing or upload failed
-                        if (getMetadata(filePath)?.uploadState === 'failed') {
-                            setSyncStatus('conflict');
-                            setConflictType('localNewer');
-                        }
-                    }
-                }
-                return;
-            }
-
-            // B. Hash Match (Synced)
-            if (localMetadata?.localHash === cloudMetadata.etag) {
-                // Self-healing
-                if (localMetadata?.syncedHash !== cloudMetadata.etag) {
-                    setMetadata(filePath, cloudMetadata.etag, localMetadata.localHash, localMetadata.lastModified || new Date().toISOString());
-                }
-                setSyncStatus('synced');
-                setConflictType(null);
-                if (localMetadata?.uploadState === 'failed') {
-                    setUploadState(filePath, null);
-                }
-                return;
-            }
-
-            // C. Hash Mismatch (Conflict/Inconsistent)
-            // C1. Only Cloud Updated (localHash == syncedHash) -> Auto Download
-            if (localMetadata?.localHash === localMetadata?.syncedHash) {
-                console.log('Cloud newer, auto-downloading...');
-                const success = await performDownload(filePath);
-                if (success) {
-                    setSyncStatus('synced');
-                    setConflictType(null);
-                }
-                return;
-            }
-
-            // C2. Only Local Updated (cloud.etag == syncedHash) -> Auto Upload
-            if (cloudMetadata.etag === localMetadata?.syncedHash) {
-                console.log('Local newer, auto-uploading...');
-                const success = await performUpload(filePath);
-                if (success) {
-                    setSyncStatus('synced');
-                    setConflictType(null);
-                } else {
-                    setSyncStatus('conflict'); // Upload failed
-                    setConflictType('localNewer');
-                }
-                return;
-            }
-
-            // C3. Bidirectional Conflict -> Show UI
-            setSyncStatus('conflict');
-            setConflictType('cloudNewer'); // Prioritize cloud newer to prevent overwrite
-
-        } catch (error) {
-            console.error('Error checking sync status:', error);
-            const localMetadata = getMetadata(filePath);
-
-            if (localMetadata?.uploadState === 'failed') {
-                setSyncStatus('conflict');
-                setConflictType('localNewer');
-                return;
-            }
-
-            try {
-                if (await fsService.exists(filePath)) {
-                    setSyncStatus('offline');
-                    setConflictType(null);
-                    return;
-                }
-            } catch { }
-            setSyncStatus('error');
-        }
-    }, [getMetadata, setUploadState, setMetadata, performUpload, performDownload]);
-
-    const handleOverwriteLocal = useCallback(async () => {
-        const filePath = getFlashNotePath();
-        const success = await performDownload(filePath);
-        if (success) {
-            setSyncStatus('synced');
-            setConflictType(null);
-        }
-    }, [getFlashNotePath, performDownload]);
-
-    const handleUploadOverwrite = useCallback(async () => {
-        const filePath = getFlashNotePath();
-        const success = await performUpload(filePath);
-        if (success) {
-            checkSyncStatus(filePath);
-        } else {
-            checkSyncStatus(filePath);
-        }
-    }, [getFlashNotePath, performUpload, checkSyncStatus]);
-
-    const tryRestoreFromCloud = useCallback(async (filePath: string) => {
-        try {
-            setIsUpdating(true);
-            const key = filePath;
-
-            if (!cloudService.isConfigured()) {
-                setSyncStatus('not-configured');
-                return;
-            }
-
-            const metadata = await cloudService.headFile(key);
-            if (metadata) {
-                await cloudService.downloadFile(key, filePath);
+            if (await fsService.exists(filePath)) {
                 const content = await fsService.readFile(filePath);
-                parseAndSetNotes(content);
-                setMetadata(filePath, metadata.etag, metadata.etag, metadata.lastModified);
-                setSyncStatus('synced');
-            } else {
-                setSyncStatus('error');
+                return flashNoteService.parseNotes(content, filePath);
             }
         } catch (error) {
-            console.log('Cloud restore failed', error);
-            setSyncStatus('error');
-        } finally {
-            setIsUpdating(false);
+            console.error(`Failed to load content from ${filePath}:`, error);
         }
-    }, [parseAndSetNotes, setMetadata]);
+        return [];
+    };
 
-    const loadNotes = useCallback(async () => {
+    // Initial Load: Get paths, load ONLY the first file (Main)
+    const loadInitialData = useCallback(async () => {
+        setIsRefreshing(true);
         try {
-            const filePath = getFlashNotePath();
-            const exists = await fsService.exists(filePath);
-
-            if (exists) {
-                const content = await fsService.readFile(filePath);
-                parseAndSetNotes(content);
+            const paths = await loadFilePaths();
+            if (paths.length > 0) {
+                const firstPath = paths[0];
+                const initialNotes = await loadFileContent(firstPath);
+                setNotes(initialNotes);
+                setLoadedFilePaths([firstPath]);
+                setNextFileIndex(1); // Next file to load is at index 1
+                setHasMore(paths.length > 1);
             } else {
-                await tryRestoreFromCloud(filePath);
+                setNotes([]);
+                setLoadedFilePaths([]);
+                setHasMore(false);
             }
-        } catch (error) {
-            console.error('Failed to load flash notes', error);
+        } finally {
+            setIsRefreshing(false);
         }
-    }, [getFlashNotePath, parseAndSetNotes, tryRestoreFromCloud]);
+    }, [loadFilePaths]);
+
+    // Load More: Load the next file in the list
+    const handleLoadMore = async () => {
+        if (isLoadingMore || !hasMore || nextFileIndex >= allFilePaths.length) return;
+
+        setIsLoadingMore(true);
+        try {
+            const nextPath = allFilePaths[nextFileIndex];
+            const newNotes = await loadFileContent(nextPath);
+
+            setNotes(prev => {
+                // Merge and sort to be safe, though usually appending is enough if files are time-ordered
+                const combined = [...prev, ...newNotes];
+                // Remove duplicates based on ID just in case
+                const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
+                return unique.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+            });
+
+            setLoadedFilePaths(prev => [...prev, nextPath]);
+            setNextFileIndex(prev => prev + 1);
+            setHasMore(nextFileIndex + 1 < allFilePaths.length);
+        } catch (error) {
+            console.error('Failed to load more notes:', error);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    };
+
+    // Reload currently loaded files (e.g. after sync or edit)
+    // We re-read all currently loaded files to ensure UI reflects latest state
+    const refreshLoadedData = useCallback(async () => {
+        if (loadedFilePaths.length === 0) {
+            await loadInitialData();
+            return;
+        }
+
+        try {
+            let allNotes: FlashNote[] = [];
+            for (const path of loadedFilePaths) {
+                const fileNotes = await loadFileContent(path);
+                allNotes = [...allNotes, ...fileNotes];
+            }
+            // Sort desc
+            allNotes.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+            setNotes(allNotes);
+        } catch (error) {
+            console.error('Failed to refresh data:', error);
+        }
+    }, [loadedFilePaths, loadInitialData]);
+
+
+    const handleOverwriteLocal = async () => {
+        await resolveConflict('useCloud');
+        await refreshLoadedData();
+    };
+
+    const handleUploadOverwrite = async () => {
+        await resolveConflict('useLocal');
+    };
 
     const handleSaveCopy = async () => {
         try {
-            setIsUpdating(true);
-            const filePath = getFlashNotePath();
-            const key = filePath;
-
-            const normalizedPath = normalizePath(filePath);
-            const fileName = normalizedPath.split('/').pop() || '';
-            const dir = normalizedPath.replace(fileName, '');
-            const timestamp = new Date().getTime();
-            const newName = `${fileName.replace('.md', '')}_old_${timestamp}.md`;
-            const backupPath = normalizePath(`${dir}${newName}`);
-
-            await fsService.moveFile(normalizedPath, backupPath);
-
-            if (cloudService.isConfigured()) {
-                setUploadState(backupPath, 'uploading');
-                try {
-                    const result = await cloudService.uploadFile(backupPath, backupPath);
-                    if (result) {
-                        setMetadata(backupPath, result.etag, result.etag, result.lastModified);
-                    }
-                } catch (error) {
-                    console.error('Upload backup failed:', error);
-                    setUploadState(backupPath, 'failed');
-                }
-            }
-
-            const backupFileName = backupPath.split('/').pop();
-            const result = await cloudService.downloadFile(key, filePath);
-
-            setMetadata(filePath, result.etag, result.etag, result.lastModified);
-            setSyncStatus('synced');
-            setConflictType(null);
-
-            const content = await fsService.readFile(filePath);
-            parseAndSetNotes(content);
-
+            await resolveConflict('saveCopy');
+            await refreshLoadedData();
+            const backupFileName = `${currentFilePath.split('/').pop()}_old...`; // Approx name
             Alert.alert(
                 t('common.success'),
-                t('timeline.conflictResolvedAsCopy', { backupFileName }) || `本地更改已另存为副本: ${backupFileName}\n首页已刷新为云端最新版本`
+                t('timeline.conflictResolvedAsCopy', { backupFileName }) || `本地更改已另存为副本。\n首页已刷新为云端最新版本`
             );
         } catch (error) {
             console.error('Save copy failed:', error);
             Alert.alert('Error', 'Failed to save copy and restore');
-        } finally {
-            setIsUpdating(false);
         }
     };
 
@@ -334,7 +184,7 @@ export const TimelineScreen = () => {
             } else {
                 await flashNoteService.addNote(content);
             }
-            loadNotes();
+            refreshLoadedData();
             setIsModalVisible(false);
         } catch (error) {
             console.error('Failed to save flash note', error);
@@ -359,7 +209,7 @@ export const TimelineScreen = () => {
                     onPress: async () => {
                         try {
                             await flashNoteService.deleteNote(noteToDelete.id);
-                            loadNotes();
+                            refreshLoadedData();
                         } catch (error) {
                             console.error('Failed to delete flash note:', error);
                             Alert.alert(t('common.error'), t('timeline.deleteError'));
@@ -371,65 +221,83 @@ export const TimelineScreen = () => {
     };
 
     const handleNoteLongPress = (item: FlashNote) => {
-        Alert.alert(
-            item.id,
-            undefined,
-            [
-                {
-                    text: t('common.delete'),
-                    onPress: () => handleDeleteFlashNote(item),
-                    style: 'destructive',
+        setSelectedNote(item);
+        setIsActionSheetVisible(true);
+    };
+
+    const getActionSheetActions = (): ActionItem[] => {
+        if (!selectedNote) return [];
+
+        return [
+            {
+                label: t('common.copy'),
+                icon: 'content-copy',
+                onPress: () => {
+                    Clipboard.setString(selectedNote.content.trim());
+                    Alert.alert(t('common.notice'), '闪念笔记已复制到剪贴板');
                 },
-                {
-                    text: t('common.edit'),
-                    onPress: () => {
-                        setEditingNoteId(item.id);
-                        setEditingNoteContent(item.content.trim());
-                        setIsModalVisible(true);
-                    },
+            },
+            {
+                label: t('common.edit'),
+                icon: 'edit',
+                onPress: () => {
+                    setEditingNoteId(selectedNote.id);
+                    setEditingNoteContent(selectedNote.content.trim());
+                    setIsModalVisible(true);
                 },
-                {
-                    text: t('common.cancel'),
-                    style: 'cancel',
-                },
-            ]
-        );
+            },
+            {
+                label: t('common.delete'),
+                icon: 'delete',
+                onPress: () => handleDeleteFlashNote(selectedNote),
+                destructive: true,
+            },
+        ];
     };
 
     useFocusEffect(useCallback(() => {
-        loadNotes();
-        const filePath = getFlashNotePath();
-        if (cloudService.isInitialized()) {
-            checkSyncStatus(filePath);
+        // On focus, if we haven't loaded anything, load initial.
+        // If we have loaded something, maybe just refresh?
+        // For simplicity, let's refresh what we have.
+        if (loadedFilePaths.length === 0) {
+            loadInitialData();
+        } else {
+            refreshLoadedData();
         }
-    }, [loadNotes, getFlashNotePath, checkSyncStatus]));
 
-    React.useEffect(() => {
+        if (cloudService.isInitialized()) {
+            performAutoSync();
+        }
+    }, [loadInitialData, refreshLoadedData, performAutoSync, loadedFilePaths.length]));
+
+    useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(FLASH_NOTES_UPDATED_EVENT, () => {
-            loadNotes();
+            refreshLoadedData();
         });
         return () => subscription.remove();
-    }, [loadNotes]);
+    }, [refreshLoadedData]);
 
-    React.useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string }) => {
-            const currentFilePath = getFlashNotePath();
-            if (data.filePath === currentFilePath) {
-                checkSyncStatus(currentFilePath);
+    useEffect(() => {
+        // Trigger auto-sync when cloud initializes (fixes infinite spinner on startup)
+        const initSub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, () => {
+            performAutoSync();
+        });
+
+        // UPLOAD_COMPLETED_EVENT logic is now mostly handled by useCloudSync for status updates
+        // BUT we still need to reload content if the file changed (e.g. download success)
+        const uploadSub = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string; success?: boolean }) => {
+            // If the uploaded/downloaded file is one of the currently loaded files, refresh
+            if (loadedFilePaths.includes(data.filePath) && data.success) {
+                refreshLoadedData();
             }
         });
-        return () => subscription.remove();
-    }, [checkSyncStatus, getFlashNotePath]);
+        return () => {
+            initSub.remove();
+            uploadSub.remove();
+        };
+    }, [refreshLoadedData, performAutoSync, loadedFilePaths]);
 
-    React.useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, () => {
-            const filePath = getFlashNotePath();
-            checkSyncStatus(filePath);
-        });
-        return () => subscription.remove();
-    }, [checkSyncStatus, getFlashNotePath]);
-
-    React.useEffect(() => {
+    useEffect(() => {
         const handleShareContent = (content: string | null) => {
             if (content) {
                 setEditingNoteId(undefined);
@@ -445,14 +313,14 @@ export const TimelineScreen = () => {
         return () => unsubscribe();
     }, []);
 
-    React.useLayoutEffect(() => {
+    useLayoutEffect(() => {
         navigation.setOptions({
             title: t('timeline.title'),
             headerRight: () => (
-                <HeaderRight isUpdating={isUpdating} syncStatus={syncStatus} />
+                <HeaderSyncStatus isSyncing={isSyncing} syncStatus={syncStatus} conflictType={conflictType} />
             ),
         });
-    }, [navigation, t, syncStatus, isUpdating]);
+    }, [navigation, t, syncStatus, isSyncing, conflictType]);
 
     const renderItem = ({ item }: { item: FlashNote }) => (
         <TouchableOpacity
@@ -463,6 +331,32 @@ export const TimelineScreen = () => {
                 <Text style={styles.content}>{item.content.trim()}</Text>
             </View>
         </TouchableOpacity>
+    );
+
+    const renderFooter = () => {
+        if (!isLoadingMore && !hasMore) {
+            return (
+                <View style={styles.footer}>
+                    <Text style={styles.footerText}>-- End of Timeline --</Text>
+                </View>
+            );
+        }
+        if (isLoadingMore) {
+            return (
+                <View style={styles.footer}>
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                </View>
+            );
+        }
+        return null;
+    };
+
+    // Helper to determine if we should show the conflict banner (only for bidirectional or failure)
+    const shouldShowConflictBanner = syncStatus === 'conflict' && (
+        conflictType === 'bidirectional' ||
+        !conflictType || // Fallback if type missing
+        fileMetadata?.uploadState === 'failed' ||
+        fileMetadata?.uploadState === 'conflict-failed'
     );
 
     return (
@@ -486,24 +380,24 @@ export const TimelineScreen = () => {
                         {fileMetadata?.uploadState === 'failed' ? ' (上次上传失败)' : ''}
                     </Text>
                     <View style={styles.bannerButtons}>
-                        <TouchableOpacity onPress={() => checkSyncStatus(currentFilePath)} style={styles.bannerButton}>
+                        <TouchableOpacity onPress={checkSync} style={styles.bannerButton}>
                             <Text style={styles.bannerButtonText}>{t('common.retry') || '重试连接'}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
             )}
-            {syncStatus === 'conflict' && (
+            {shouldShowConflictBanner && (
                 <View style={styles.banner}>
                     <Text style={styles.bannerText}>
                         {fileMetadata?.uploadState === 'failed'
                             ? '上传失败'
-                            : '本地和云端已同时修改'
+                            : '本地和云端已同时修改 (冲突)'
                         }
                     </Text>
                     <View style={styles.bannerButtons}>
-                        {fileMetadata?.uploadState === 'failed' ? (
+                        {(fileMetadata?.uploadState === 'failed') ? (
                             <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                <Text style={styles.bannerButtonText}>重试</Text>
+                                <Text style={styles.bannerButtonText}>上传本地覆盖云端</Text>
                             </TouchableOpacity>
                         ) : (
                             <>
@@ -526,6 +420,11 @@ export const TimelineScreen = () => {
                 renderItem={renderItem}
                 keyExtractor={(item, index) => `${item.id}-${index}`}
                 contentContainerStyle={styles.listContent}
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={renderFooter}
+                refreshing={isRefreshing}
+                onRefresh={loadInitialData}
             />
             <TouchableOpacity
                 style={styles.fab}
@@ -541,6 +440,16 @@ export const TimelineScreen = () => {
                 onSave={handleSaveFlashNote}
                 onCancel={handleCancelFlashNote}
             />
+
+            <ActionSheetModal
+                visible={isActionSheetVisible}
+                title={selectedNote?.content ? (selectedNote.content.length > 30 ? selectedNote.content.substring(0, 30) + '...' : selectedNote.content) : undefined}
+                actions={getActionSheetActions()}
+                onCancel={() => {
+                    setIsActionSheetVisible(false);
+                    setSelectedNote(null);
+                }}
+            />
         </View>
     );
 };
@@ -551,33 +460,34 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.background,
     },
     listContent: {
-        padding: theme.spacing.m,
-        paddingBottom: 100,
+        padding: theme.spacing.md,
+        paddingBottom: 80,
     },
     card: {
         backgroundColor: theme.colors.surface,
-        padding: theme.spacing.m,
-        borderRadius: 8,
-        marginBottom: theme.spacing.m,
+        borderRadius: theme.radius.md,
+        padding: theme.spacing.md,
+        marginBottom: theme.spacing.md,
+        shadowColor: theme.colors.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
     },
     timestamp: {
-        fontSize: theme.typography.caption.fontSize,
+        fontSize: 12,
         color: theme.colors.textSecondary,
         marginBottom: theme.spacing.xs,
     },
     content: {
-        fontSize: theme.typography.body.fontSize,
-        color: theme.colors.text,
-    },
-    headerButton: {
-        color: theme.colors.primary,
         fontSize: 16,
-        marginRight: theme.spacing.m,
+        color: theme.colors.text,
+        lineHeight: 24,
     },
     fab: {
         position: 'absolute',
-        right: theme.spacing.l,
-        bottom: theme.spacing.l,
+        right: theme.spacing.lg,
+        bottom: theme.spacing.lg,
         width: 56,
         height: 56,
         borderRadius: 28,
@@ -585,73 +495,68 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         elevation: 4,
-        shadowColor: '#000',
+        shadowColor: theme.colors.black,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.25,
-        shadowRadius: 3.84,
-    },
-    headerRight: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginRight: theme.spacing.s,
-    },
-    syncIcon: {
-        fontSize: 16,
+        shadowRadius: 4,
     },
     banner: {
-        backgroundColor: '#FFF3CD',
-        padding: theme.spacing.s,
+        backgroundColor: '#FFF3CD', // Light warning yellow
+        padding: theme.spacing.md,
         borderBottomWidth: 1,
-        borderBottomColor: '#FFEEBA',
-        alignItems: 'center',
+        borderBottomColor: theme.colors.warning,
     },
     bannerText: {
-        color: '#856404',
-        marginBottom: theme.spacing.s,
+        color: theme.colors.text,
+        fontSize: 14,
+        marginBottom: theme.spacing.sm,
     },
     bannerButtons: {
         flexDirection: 'row',
-        gap: theme.spacing.m,
+        flexWrap: 'wrap',
     },
     bannerButton: {
-        backgroundColor: '#856404',
-        paddingHorizontal: theme.spacing.m,
+        backgroundColor: theme.colors.warning,
+        paddingHorizontal: theme.spacing.md,
         paddingVertical: theme.spacing.xs,
-        borderRadius: 4,
+        borderRadius: theme.radius.sm,
+        marginRight: theme.spacing.sm,
+        marginBottom: theme.spacing.sm,
     },
     bannerButtonText: {
-        color: 'white',
+        color: theme.colors.black,
         fontSize: 12,
+        fontWeight: 'bold',
     },
     infoBanner: {
-        backgroundColor: '#D1ECF1',
-        padding: theme.spacing.s,
+        backgroundColor: '#D1ECF1', // Light info blue
+        padding: theme.spacing.md,
         borderBottomWidth: 1,
-        borderBottomColor: '#BEE5EB',
-        alignItems: 'center',
+        borderBottomColor: theme.colors.info,
     },
     infoBannerText: {
-        color: '#0C5460',
-        marginBottom: theme.spacing.s,
+        color: theme.colors.text,
+        fontSize: 14,
+        marginBottom: theme.spacing.sm,
     },
     infoBannerButton: {
-        backgroundColor: '#0C5460',
-        paddingHorizontal: theme.spacing.m,
+        backgroundColor: theme.colors.info,
+        paddingHorizontal: theme.spacing.md,
         paddingVertical: theme.spacing.xs,
-        borderRadius: 4,
+        borderRadius: theme.radius.sm,
     },
     infoBannerButtonText: {
-        color: 'white',
+        color: theme.colors.white,
         fontSize: 12,
+        fontWeight: 'bold',
+    },
+    footer: {
+        paddingVertical: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    footerText: {
+        color: theme.colors.textSecondary,
+        fontSize: 14,
     },
 });
-
-const HeaderRight = ({ isUpdating, syncStatus }: { isUpdating: boolean, syncStatus: SyncStatus }) => (
-    <View style={styles.headerRight}>
-        {isUpdating && <ActivityIndicator size="small" color={theme.colors.primary} />}
-        {!isUpdating && syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
-        {!isUpdating && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
-        {!isUpdating && (syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
-        {!isUpdating && syncStatus === 'not-configured' && <Text style={styles.syncIcon}>ℹ️</Text>}
-    </View>
-);

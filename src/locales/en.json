@@ -2,9 +2,27 @@
   "tabs": {
     "timeline": "Flash Notes",
     "browser": "Knowledge Base",
+    "todo": "Todos",
     "settings": "Settings"
   },
-  "browser": {
+      "todo": {
+        "title": "Todos",
+        "inProgress": "In Progress",
+        "todo": "To Do",
+        "finished": "Finished",
+        "changeStatus": "Change Status",
+        "statusTodo": "To Do",
+        "statusInProgress": "In Progress",
+        "statusDone": "Done",
+        "statusCanceled": "Canceled",
+        "empty": "No todos found",
+        "updateStatusFailed": "Failed to update status",
+        "updateContentFailed": "Failed to update content",
+        "setAsDone": "Set as Done",
+        "setAsInProgress": "Set as In Progress",
+        "setAsCanceled": "Set as Canceled/Terminated",
+        "loadMoreHistoryTodos": "Load more historical todos"
+      },  "browser": {
     "goBack": "Back",
     "emptyTitle": "Empty",
     "emptyMessage": "There are no files in your cloud storage yet.",
@@ -59,7 +77,9 @@
     "discardChangesPrompt": "Discard changes?",
     "saveChangesPrompt": "Do you want to save changes?",
     "dontSave": "Don't Save",
-    "close": "Close"
+    "close": "Close",
+    "copy": "Copy",
+    "loadMore": "Load More"
   },
   "settings": {
     "saveAndValidate": "Validate and Save",
@@ -100,15 +120,59 @@
     "configured": "Configured",
     "flashNoteConfig": "Flash Note Configuration",
     "current": "Current:",
+    "cacheManager": "Cache Manager",
+    "historyFolderPath": "History Folder Path",
+    "historyFolderPathDesc": "Optional. Folder path for historical flash notes. Leave empty to use the same path as the main file. E.g.: archive/flash_notes",
     "themes": {
       "default": "Default",
       "github": "GitHub",
       "solarized": "Solarized",
-      "night": "Night Mode"
+      "night": "Night"
     }
   },
-  "fileItem": {
-    "folder": "Folder",
-    "kb": "KB"
+  "cache": {
+    "title": "Cache Manager",
+    "totalSize": "Total Cache Size",
+    "safeToClear": "Safe to clear",
+    "clearSafeCache": "Clear Safe Cache",
+    "empty": "No cached files found",
+    "loadFailed": "Failed to load cache files",
+    "deleteFailed": "Failed to delete file",
+    "clearFailed": "Failed to clear cache",
+    "clearSuccess": "Cache cleared successfully",
+    "unsafeDeleteTitle": "Unsynced File",
+    "unsafeDeleteMessage": "This file has not been synced to the cloud. Deleting it will result in permanent data loss. Are you sure?",
+    "clearAllTitle": "Clear Cache",
+    "clearAllMessage": "Are you sure you want to clear {size} of cached files? Unsynced files will be preserved.",
+    "noSafeFiles": "No files safe to clear",
+    "showFlashNotes": "Show Flash Note Files"
+  },
+      "fileItem": {
+        "folder": "Folder",
+        "kb": "KB"
+      },
+      "flashNoteConfigScreen": {
+        "saveSyncFailed": "Save or sync failed",
+        "saveFailed": "Save failed",
+        "configSavedHistorySynced": "Configuration saved, history files synced.",
+        "saveSuccessHistorySyncFailed": "Save successful, but failed to sync history files.",
+        "mainFileConfig": "Main File Configuration",
+        "mergePathExample": "Merged path, e.g.: notes/flash_notes.md",
+        "saveSyncMainFile": "Save and Sync Main File",
+        "formatSuffix": "Format Suffix",
+        "reference": "(Reference)",
+        "referenceWithSpace": "(Reference + Space)",
+        "saveSuffixConfig": "Save Suffix Configuration",
+        "historyArchive": "History Archive",
+        "historyFileRecognitionMode": "History File Recognition Mode",
+        "historyFileRecognitionDesc": "Automatically load historical files matching the rules (in reverse order by filename)",
+        "noHistory": "Do not load history",
+        "dashYYYYMM": "-YYYYMM (e.g.: -202411)",
+        "underscoreYYYYMM": "_YYYYMM (e.g.: _202411)",
+        "dashYYYY": "-YYYY (e.g.: -2024)",
+        "chineseYYYYMM": "-YYYY年M月 (e.g.: -2024年11月)",
+        "saveSyncHistoryArchive": "Save and Sync History Archive",
+        "syncingMainFile": "Syncing main file...",
+        "scanningDownloadingHistory": "Scanning and downloading history archives..."
+      }
   }
-}

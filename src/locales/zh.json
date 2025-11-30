@@ -2,9 +2,27 @@
   "tabs": {
     "timeline": "闪念笔记",
     "browser": "知识库",
+    "todo": "待办事项",
     "settings": "设置"
   },
-  "browser": {
+      "todo": {
+        "title": "待办事项",
+        "inProgress": "进行中",
+        "todo": "未完成",
+        "finished": "已完成",
+        "changeStatus": "修改状态",
+        "statusTodo": "未完成",
+        "statusInProgress": "进行中",
+        "statusDone": "已完成",
+        "statusCanceled": "已取消",
+        "empty": "没有待办事项",
+        "updateStatusFailed": "更新状态失败",
+        "updateContentFailed": "更新内容失败",
+        "setAsDone": "设为已完成",
+        "setAsInProgress": "设为进行中",
+        "setAsCanceled": "设为已取消/终止",
+        "loadMoreHistoryTodos": "加载更多历史待办"
+      },  "browser": {
     "goBack": "返回",
     "emptyTitle": "空空如也",
     "emptyMessage": "您的云存储中还没有任何文件。",
@@ -67,7 +85,9 @@
     "discardChangesPrompt": "是否放弃更改？",
     "saveChangesPrompt": "是否保存更改？",
     "dontSave": "暂不保存",
-    "close": "关闭"
+    "close": "关闭",
+    "copy": "复制",
+    "loadMore": "加载更多"
   },
   "settings": {
     "saveAndValidate": "验证并保存配置",
@@ -103,11 +123,14 @@
     "suffixPresets": {
       "none": "无"
     },
-    "markdownStyle": "Markdown 样式",
+    "markdownStyle": "Markdown样式",
     "cloudRepoConfig": "云端存储",
     "configured": "已配置",
     "flashNoteConfig": "闪念笔记设置",
     "current": "当前:",
+    "cacheManager": "本地缓存管理",
+    "historyFolderPath": "历史文件路径",
+    "historyFolderPathDesc": "可选。用于存放历史闪念笔记的文件夹路径。留空则表示与主文件路径相同。例如: archive/flash_notes",
     "themes": {
       "default": "默认",
       "github": "GitHub",
@@ -115,11 +138,49 @@
       "night": "夜间模式"
     }
   },
-  "fileItem": {
-    "folder": "文件夹",
-    "kb": "KB"
+  "cache": {
+    "title": "缓存管理",
+    "totalSize": "总缓存大小",
+    "safeToClear": "可清理",
+    "clearSafeCache": "一键清理",
+    "empty": "没有发现缓存文件",
+    "loadFailed": "加载缓存文件失败",
+    "deleteFailed": "删除文件失败",
+    "clearFailed": "清理缓存失败",
+    "clearSuccess": "缓存清理成功",
+    "unsafeDeleteTitle": "未同步文件",
+    "unsafeDeleteMessage": "该文件尚未同步到云端，删除将导致数据永久丢失。确定要删除吗？",
+    "clearAllTitle": "清理缓存",
+    "clearAllMessage": "确定要清理 {size} 的缓存文件吗？未同步的文件将被保留。",
+    "noSafeFiles": "没有可清理的文件",
+    "showFlashNotes": "显示闪念笔记文件"
   },
-  "preview": {
-    "offlineMode": "当前处于离线模式，显示文件为本地缓存，可能不是最新版本"
-  }
+    "fileItem": {
+      "folder": "文件夹",
+      "kb": "KB"
+    },
+    "flashNoteConfigScreen": {
+      "saveSyncFailed": "保存或同步失败",
+      "saveFailed": "保存失败",
+      "configSavedHistorySynced": "配置已保存，历史文件同步完成",
+      "saveSuccessHistorySyncFailed": "保存成功，但同步历史文件失败",
+      "mainFileConfig": "主文件配置",
+      "mergePathExample": "合并路径，例：notes/flash_notes.md",
+      "saveSyncMainFile": "保存并同步主文件",
+      "formatSuffix": "格式后缀",
+      "reference": "(引用)",
+      "referenceWithSpace": "(引用+空格)",
+      "saveSuffixConfig": "保存后缀配置",
+      "historyArchive": "历史存档",
+      "historyFileRecognitionMode": "历史文件识别模式",
+      "historyFileRecognitionDesc": "自动加载符合规则的历史文件（按文件名倒序）",
+      "noHistory": "不加载历史",
+      "dashYYYYMM": "-YYYYMM (如: -202411)",
+      "underscoreYYYYMM": "_YYYYMM (如: _202411)",
+      "dashYYYY": "-YYYY (如: -2024)",
+      "chineseYYYYMM": "-YYYY年M月 (如: -2024年11月)",
+      "saveSyncHistoryArchive": "保存并同步历史归档",
+      "syncingMainFile": "正在同步主文件...",
+      "scanningDownloadingHistory": "正在扫描并下载历史归档..."
+    }
 }

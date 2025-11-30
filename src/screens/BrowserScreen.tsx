@@ -27,8 +27,8 @@ import { RootStackParamList } from '../types/navigation';
 import { FileItem, fsService } from '../services/FileSystemService';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { DeviceEventEmitter } from 'react-native';
-import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useFileListStore } from '../store/useFileListStore';
+import { syncService } from '../services/SyncService';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type Status = 'idle' | 'loading' | 'success' | 'error' | 'unconfigured';
@@ -56,249 +56,152 @@ export const BrowserScreen = () => {
     const [isOfflineMode, setIsOfflineMode] = useState(false);
     const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
 
-    // 文件操作相关状态
+    // Restored File Action States
     const [selectedFile, setSelectedFile] = useState<ExtendedFileItem | null>(null);
     const [showActionSheet, setShowActionSheet] = useState(false);
     const [showRenameDialog, setShowRenameDialog] = useState(false);
     const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
 
-    // 滚动位置记录
-    const scrollPositionsRef = useRef<Record<string, number>>({});
     const flatListRef = useRef<FlatList>(null);
-    const currentScrollY = useRef(0);
 
     const navigation = useNavigation<NavigationProp>();
     const { setCachedList, getCachedList } = useFileListStore();
 
+    // Helper to format file list safely
+    const formatFileList = useCallback((list: any[]): ExtendedFileItem[] => {
+        return list
+            .filter(item => item && item.key)
+            .map((item): ExtendedFileItem => ({
+                name: item.key.endsWith('/')
+                    ? item.key.split('/').slice(-2, -1)[0] + '/'
+                    : item.key.split('/').pop() ?? item.key,
+                path: item.key,
+                size: item.size || 0,
+                isDirectory: item.key.endsWith('/'),
+                mtime: item.lastModified ? new Date(item.lastModified) : new Date(),
+                isCached: true,
+            }))
+            .sort((a, b) => {
+                if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+    }, []);
+
     const loadFiles = useCallback(async () => {
+        console.log('[BrowserScreen] loadFiles, prefix:', prefix);
+        
         if (!cloudService.isConfigured()) {
             setStatus('unconfigured');
             return;
         }
 
-        // 1. Optimistic Load: Try to load from cache immediately
-        const cachedCloudFiles = getCachedList(prefix);
-        if (cachedCloudFiles) {
-            const fileList: ExtendedFileItem[] = cachedCloudFiles.map((item): ExtendedFileItem => ({
-                name: item.key.endsWith('/')
-                    ? item.key.split('/').slice(-2, -1)[0] + '/'
-                    : item.key.split('/').pop() ?? item.key,
-                path: item.key,
-                size: item.size,
-                isDirectory: item.key.endsWith('/'),
-                mtime: new Date(item.lastModified),
-                isCached: true,
-            }));
-
-            fileList.sort((a, b) => {
-                if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-                return a.name.localeCompare(b.name);
-            });
-
-            setFiles(fileList);
-            setFiles(fileList);
-            setStatus('success');
-        } else {
-            // No cache, clear files and show full screen loading
-            setFiles([]);
+        // 1. Try Cache First (Fast Render)
+        try {
+            const cachedCloudFiles = getCachedList(prefix);
+            if (cachedCloudFiles && cachedCloudFiles.length > 0) {
+                console.log('[BrowserScreen] Showing cached files:', cachedCloudFiles.length);
+                setFiles(formatFileList(cachedCloudFiles));
+                setStatus('success'); // Show immediately
+            } else {
+                setStatus('loading');
+            }
+        } catch (e) {
+            console.warn('[BrowserScreen] Cache read error:', e);
             setStatus('loading');
         }
 
+        // 2. Fetch Cloud (Network Update)
         try {
-            // 2. Network Load: Fetch from cloud
+            console.log('[BrowserScreen] Fetching from cloud...');
             const cloudFiles = await cloudService.listFiles(prefix);
+            console.log('[BrowserScreen] Cloud fetch success, count:', cloudFiles.length);
 
-            // Cache the successful list
             setCachedList(prefix, cloudFiles);
             setIsOfflineMode(false);
-
-            const fileList: ExtendedFileItem[] = cloudFiles.map((item): ExtendedFileItem => ({
-                name: item.key.endsWith('/')
-                    ? item.key.split('/').slice(-2, -1)[0] + '/'
-                    : item.key.split('/').pop() ?? item.key,
-                path: item.key,
-                size: item.size,
-                isDirectory: item.key.endsWith('/'),
-                mtime: new Date(item.lastModified),
-                isCached: true,
-            }));
-
-            fileList.sort((a, b) => {
-                if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-                return a.name.localeCompare(b.name);
-            });
-
-            setFiles(fileList);
+            setFiles(formatFileList(cloudFiles));
             setStatus('success');
-        } catch (error: any) {
-            console.error('Failed to load cloud files:', error);
 
-            // If we already have files (from cache), we just switch to offline mode indicator
-            // but keep the files visible.
+        } catch (error: any) {
+            console.error('[BrowserScreen] Cloud load failed:', error);
+            
+            // If we have files (from cache), just show offline banner
             if (files.length > 0) {
                 setIsOfflineMode(true);
-                setStatus('success'); // Keep showing the list
-                return;
+                return; // Keep showing cached files
             }
 
+            // Simplified Error Handling: NO local FS fallback for now to reduce complexity
             setIsOfflineMode(true);
-
-            // Try to load from local files if we have nothing yet
-            try {
-                // We already tried cache above, so here we only check local FS
-                // But wait, the original logic merged cache + local. 
-                // Since we already tried cache, let's just check local FS for any additional files?
-                // Or if cache was empty/null, we try local.
-
-                const localFiles = await fsService.listFiles(prefix);
-
-                if (localFiles.length > 0) {
-                    const mergedFiles = localFiles.map(f => {
-                        const rootPath = fsService.getRootPath();
-                        let relativePath = f.path;
-                        if (relativePath.startsWith(rootPath)) {
-                            relativePath = relativePath.substring(rootPath.length);
-                        }
-                        relativePath = relativePath.replace(/^\/+/, '');
-                        if (f.isDirectory && !relativePath.endsWith('/')) {
-                            relativePath += '/';
-                        }
-                        return {
-                            ...f,
-                            path: relativePath,
-                            isCached: true,
-                        };
-                    });
-
-                    mergedFiles.sort((a, b) => {
-                        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-                        return a.name.localeCompare(b.name);
-                    });
-                    setFiles(mergedFiles);
-                    setStatus('success');
-                    return;
-                }
-
-            } catch (localError) {
-                console.log('Failed to load local files:', localError);
-            }
-
+            
             let message = t('browser.error.default');
-            if (error && error.code) {
-                switch (error.code) {
-                    case 'SignatureDoesNotMatch': message = t('browser.error.auth'); break;
-                    case 'NoSuchBucket': message = t('browser.error.bucket'); break;
-                    case 'NetworkError': message = t('browser.error.network'); break;
-                }
-            }
+            if (error?.code === 'SignatureDoesNotMatch') message = t('browser.error.auth');
+            else if (error?.code === 'NoSuchBucket') message = t('browser.error.bucket');
+            else if (error?.code === 'NetworkError') message = t('browser.error.network');
+            
             setErrorMessage(message);
             setStatus('error');
         }
-    }, [prefix, t, getCachedList, setCachedList, files.length]);
+    }, [prefix, t, getCachedList, setCachedList, formatFileList, files.length]);
 
-    // Listen for upload completion events and refresh the file list
+    // Event Listeners
     useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(
-            UPLOAD_COMPLETED_EVENT,
-            () => {
-                // Refresh the file list when an upload completes
-                loadFiles();
-            }
-        );
-
-        // Clean up the listener
-        return () => subscription.remove();
+        const sub = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, loadFiles);
+        return () => sub.remove();
     }, [loadFiles]);
 
-    const handlePathPress = (newPath: string) => {
-        setPrefix(newPath);
-    };
-
-    // Set header options (title and add button)
+    // Header Options
     useEffect(() => {
         navigation.setOptions({
             title: t('tabs.browser'),
             headerRight: () => (
-                <TouchableOpacity
-                    onPress={() => setIsCreateModalVisible(true)}
-                    style={styles.headerButton}
-                >
+                <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
                     <Icon name="note-add" size={24} color={theme.colors.primary} />
                 </TouchableOpacity>
             ),
         });
     }, [navigation, t]);
 
+    // Create File Logic
     const handleCreateFile = async (filename: string) => {
         setIsCreateModalVisible(false);
-
-        let finalFilename = filename;
-        if (!finalFilename.toLowerCase().endsWith('.md')) {
-            finalFilename += '.md';
-        }
-
+        let finalFilename = filename.trim();
+        if (!finalFilename) return;
+        if (!finalFilename.toLowerCase().endsWith('.md')) finalFilename += '.md';
+        
         const fullPath = prefix + finalFilename;
-
         try {
-            // Check if file already exists
             const exists = await fsService.exists(fullPath);
             if (exists) {
-                Alert.alert(t('common.error'), t('browser.fileAlreadyExists') || 'File already exists');
+                Alert.alert(t('common.error'), t('browser.fileAlreadyExists') || 'File exists');
                 return;
             }
-
-            // Navigate to editor with new file path
             navigation.navigate('Editor', { filePath: fullPath });
         } catch (error) {
-            console.error('Error checking file existence:', error);
             Alert.alert(t('common.error'), String(error));
         }
     };
 
-    // 恢复滚动位置
-    useEffect(() => {
-        if (status === 'success' && files.length > 0) {
-            const savedPosition = scrollPositionsRef.current[prefix];
-            if (savedPosition !== undefined) {
-                // 延迟恢复，确保列表已渲染
-                setTimeout(() => {
-                    flatListRef.current?.scrollToOffset({
-                        offset: savedPosition,
-                        animated: false,
-                    });
-                }, 100);
-            }
-        }
-    }, [status, prefix, files.length]);
-
-    // This effect will handle the hardware back button
+    // Back Handler
     useFocusEffect(
         useCallback(() => {
             const onBackPress = () => {
                 if (prefix) {
                     const parts = prefix.split('/').filter(Boolean);
                     parts.pop();
-                    const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : '';
-                    setPrefix(parentPrefix);
-                    return true; // Prevent default action
+                    setPrefix(parts.length > 0 ? parts.join('/') + '/' : '');
+                    return true;
                 }
-                return false; // Allow default action
+                return false;
             };
-
             const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-
             return () => subscription.remove();
         }, [prefix])
     );
 
-    useFocusEffect(useCallback(() => {
-        loadFiles();
-    }, [loadFiles]));
+    // Initial Load
+    useFocusEffect(useCallback(() => { loadFiles(); }, [loadFiles]));
 
     const handleDeleteFile = async (fileToDelete: FileItem) => {
-        console.log('=== handleDeleteFile called ===');
-        console.log('File to delete:', fileToDelete.name);
-
         try {
             Alert.alert(
                 t('common.confirm'),
@@ -309,36 +212,21 @@ export const BrowserScreen = () => {
                         text: t('common.confirm'),
                         onPress: async () => {
                             try {
-                                console.log('=== Starting delete operation ===');
-                                console.log('File to delete:', fileToDelete.name);
-                                console.log('File path:', fileToDelete.path);
-
-                                // Step 1: Delete from local file system first (safer - can recover from cloud)
-                                const localFileExists = await fsService.exists(fileToDelete.path);
-                                console.log('Local file exists:', localFileExists);
-
-                                if (localFileExists) {
-                                    await fsService.deleteFile(fileToDelete.path);
-                                    console.log('Local file deleted');
-                                }
-
-                                // Step 2: Delete from the cloud
-                                console.log('Starting cloud delete...');
+                                console.log('Deleting file:', fileToDelete.path);
+                                // 1. Delete from Cloud
                                 await cloudService.deleteFile(fileToDelete.path);
-                                console.log('Cloud delete successful!');
-
-                                // Temporarily remove Alert to avoid Android Activity issue
-                                console.log('Delete completed successfully');
-                                loadFiles(); // Refresh the list
+                                
+                                // 2. Try delete from Local (Clean up cache)
+                                const localExists = await fsService.exists(fileToDelete.path);
+                                if (localExists) {
+                                    await fsService.deleteFile(fileToDelete.path);
+                                }
+                                
+                                // 3. Refresh List
+                                loadFiles();
                             } catch (error) {
                                 console.error('Failed to delete file:', error);
-                                console.error('Error type:', typeof error);
-                                console.error('Error message:', error instanceof Error ? error.message : String(error));
-
-                                // Show error alert with delay to ensure Activity is ready
-                                setTimeout(() => {
-                                    Alert.alert(t('common.error'), t('browser.deleteFailed') + '\n' + (error instanceof Error ? error.message : String(error)));
-                                }, 500);
+                                Alert.alert(t('common.error'), t('browser.deleteFailed') + '\n' + String(error));
                             }
                         },
                     },
@@ -350,63 +238,49 @@ export const BrowserScreen = () => {
         }
     };
 
-    // 处理长按文件
-    const handleFileLongPress = (item: ExtendedFileItem) => {
-        // 文件夹不支持删除、重命名、移动操作
-        if (item.isDirectory) {
-            return;
-        }
-
-        setSelectedFile(item);
-        setShowActionSheet(true);
-    };
-
-    // 处理重命名
     const handleRename = async (newName: string) => {
         if (!selectedFile) return;
-
+        
+        const oldPath = selectedFile.path;
+        const pathParts = oldPath.split('/');
+        pathParts[pathParts.length - (selectedFile.isDirectory ? 2 : 1)] = newName;
+        const newPath = pathParts.join('/');
+        
         try {
-            const oldPath = selectedFile.path;
-            const pathParts = oldPath.split('/');
-            pathParts[pathParts.length - (selectedFile.isDirectory ? 2 : 1)] = newName;
-            const newPath = pathParts.join('/');
+            // 1. Rename Local if exists (to ensure content preservation for upload)
+            // If local doesn't exist, we need to download first?
+            // Actually, for rename, if we don't have local, we can technically copy+delete on cloud.
+            // But TencentCOSProvider doesn't expose copyObject yet. 
+            // So safe fallback: Ensure local exists -> Move Local -> Upload New -> Delete Old Cloud.
+            
+            let hasContent = await fsService.exists(oldPath);
+            if (!hasContent && !selectedFile.isDirectory) {
+                 // Download content first if missing locally
+                 await syncService.performDownload(oldPath);
+                 hasContent = true; 
+            }
 
-            // 重命名本地文件
-            const localExists = await fsService.exists(oldPath);
-            if (localExists) {
+            if (hasContent) {
                 await fsService.moveFile(oldPath, newPath);
+                await syncService.uploadFile(newPath);
+                await cloudService.deleteFile(oldPath);
+                
+                Alert.alert(t('common.success'), 'Rename successful');
+                loadFiles();
+            } else {
+                throw new Error('Cannot rename: Local file sync failed.');
             }
-
-            // 重命名云端文件（通过复制+删除实现）
-            if (cloudService.isConfigured()) {
-                // 对于文件，需要下载后重新上传
-                if (!selectedFile.isDirectory) {
-                    // 确保本地文件存在
-                    if (!localExists) {
-                        await cloudService.downloadFile(oldPath, oldPath);
-                    }
-                    // 读取文件内容
-                    const content = await fsService.readFile(newPath);
-                    // 上传到新路径
-                    await cloudService.uploadFile(newPath, content);
-                    // 删除旧路径
-                    await cloudService.deleteFile(oldPath);
-                }
-            }
-
-            Alert.alert(t('common.success'), '重命名成功');
+        } catch (error) {
+            console.error('Rename failed:', error);
+            Alert.alert(t('common.error'), 'Rename failed: ' + String(error));
+        } finally {
             setShowRenameDialog(false);
             setSelectedFile(null);
-            loadFiles();
-        } catch (error) {
-            console.error('Failed to rename:', error);
-            Alert.alert(t('common.error'), '重命名失败：' + (error instanceof Error ? error.message : String(error)));
         }
     };
 
-    // 处理移动
     const handleMove = async (targetPath: string) => {
-        if (!selectedFile) return;
+         if (!selectedFile) return;
 
         try {
             const oldPath = selectedFile.path;
@@ -414,144 +288,78 @@ export const BrowserScreen = () => {
             const newPath = targetPath ? `${targetPath}${fileName}` : fileName;
 
             if (oldPath === newPath) {
-                Alert.alert(t('common.notice'), '目标位置与当前位置相同');
                 setShowDirectoryPicker(false);
                 setSelectedFile(null);
                 return;
             }
+            
+            // Similar logic to Rename: Move Local -> Upload New -> Delete Old Cloud
+            let hasContent = await fsService.exists(oldPath);
+            if (!hasContent && !selectedFile.isDirectory) {
+                 await syncService.performDownload(oldPath);
+                 hasContent = true;
+            }
 
-            // 移动本地文件
-            const localExists = await fsService.exists(oldPath);
-            if (localExists) {
+            if (hasContent) {
                 await fsService.moveFile(oldPath, newPath);
+                await syncService.uploadFile(newPath);
+                await cloudService.deleteFile(oldPath);
+
+                Alert.alert(t('common.success'), 'Move successful');
+                loadFiles();
+            } else {
+                 throw new Error('Cannot move: Local file sync failed.');
             }
 
-            // 移动云端文件
-            if (cloudService.isConfigured()) {
-                if (!selectedFile.isDirectory) {
-                    // 确保本地文件存在
-                    if (!localExists) {
-                        await cloudService.downloadFile(oldPath, oldPath);
-                    }
-                    // 读取文件内容
-                    const content = await fsService.readFile(newPath);
-                    // 上传到新路径
-                    await cloudService.uploadFile(newPath, content);
-                    // 删除旧路径
-                    await cloudService.deleteFile(oldPath);
-                }
-            }
-
-            Alert.alert(t('common.success'), '移动成功');
+        } catch (error) {
+            console.error('Move failed:', error);
+            Alert.alert(t('common.error'), 'Move failed: ' + String(error));
+        } finally {
             setShowDirectoryPicker(false);
             setSelectedFile(null);
-            loadFiles();
-        } catch (error) {
-            console.error('Failed to move:', error);
-            Alert.alert(t('common.error'), '移动失败：' + (error instanceof Error ? error.message : String(error)));
         }
     };
 
     const handleFilePress = async (item: ExtendedFileItem) => {
-        if (isOfflineMode && !item.isDirectory && !item.isCached) {
-            Alert.alert(t('common.notice'), t('browser.offlineFileNotCached') || 'File not cached locally');
-            return;
-        }
-
         if (item.isDirectory) {
             setPrefix(item.path);
         } else {
-            if (item.name.endsWith('.md')) {
-                try {
-                    const exists = await fsService.exists(item.path);
-                    if (exists) {
-                        navigation.navigate('Preview', { filePath: item.path });
+            try {
+                // Check local existence first
+                const exists = await fsService.exists(item.path);
+                if (exists) {
+                    navigation.navigate('Preview', { filePath: item.path });
+                } else {
+                    // Not found locally, download on demand
+                    setStatus('loading'); // Show spinner while downloading
+                    const success = await syncService.performDownload(item.path);
+                    
+                    if (success) {
+                         setStatus('success');
+                         navigation.navigate('Preview', { filePath: item.path });
                     } else {
-                        if (isOfflineMode) {
-                            Alert.alert(t('common.notice'), t('browser.offlineFileNotCached') || 'File not cached locally');
-                            return;
-                        }
-                        setStatus('loading');
-                        const result = await cloudService.downloadFile(item.path, item.path);
-
-                        // Set the metadata for the newly downloaded file
-                        const { setMetadata } = useFileMetadataStore.getState();
-                        setMetadata(item.path, result.etag, result.etag, result.lastModified);
-
-                        setStatus('success');
-                        navigation.navigate('Preview', { filePath: item.path });
+                         throw new Error(t('browser.error.downloadFailed') || 'Download failed');
                     }
-                } catch (error) {
-                    console.error('Failed to open file:', error);
-                    setStatus('success'); // Restore UI
-                    Alert.alert(t('browser.error.downloadFailed'), String(error));
                 }
-            } else {
-                console.log('Not a markdown file:', item.name);
-                Alert.alert(t('browser.info.notMarkdown'));
+            } catch (error) {
+                console.error('Failed to open file:', error);
+                setStatus('success'); // Restore UI
+                Alert.alert(t('common.error'), String(error));
             }
         }
     };
-
-    const renderContent = () => {
-        // If we have files, show the list regardless of status (unless unconfigured)
-        // This allows showing cached data while loading (optimistic UI)
-        if (status === 'unconfigured') {
-            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} />;
-        }
-
-        if (files.length > 0) {
-            return (
-                <View style={styles.fileListContainer}>
-                    {isOfflineMode && (
-                        <View style={styles.offlineBanner}>
-                            <Text style={styles.offlineBannerText}>{t('browser.offlineMode') || 'Offline Mode - Showing cached list'}</Text>
-                        </View>
-                    )}
-                    <FlatList
-                        ref={flatListRef}
-                        data={files}
-                        renderItem={({ item }) => (
-                            <FileListItem
-                                item={item}
-                                onPress={handleFilePress}
-                                onLongPress={handleFileLongPress}
-                                isCached={item.isCached}
-                            />
-                        )}
-                        keyExtractor={(item) => item.path}
-                        refreshControl={<RefreshControl refreshing={status === 'loading'} onRefresh={loadFiles} />}
-                        ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
-                        onScroll={(event) => {
-                            const scrollY = event.nativeEvent.contentOffset.y;
-                            currentScrollY.current = scrollY;
-                            scrollPositionsRef.current[prefix] = scrollY;
-                        }}
-                        scrollEventThrottle={16}
-                    />
-                </View>
-            );
-        }
-
-        // Only show full screen loader if we have no files and are loading
-        if (status === 'loading' || status === 'idle') {
-            return <ActivityIndicator style={styles.messageContainer} size="large" />;
-        }
-
-        if (status === 'error') {
-            return <MessageView title={t('browser.loadingFailedTitle')} message={errorMessage} buttonText={t('browser.retry')} onButtonPress={loadFiles} />;
-        }
-
-        return null;
+    
+    const handleFileLongPress = (item: ExtendedFileItem) => {
+        if (item.isDirectory) return;
+        setSelectedFile(item);
+        setShowActionSheet(true);
     };
-
-    // 准备操作菜单的选项
+    
     const getFileActions = (): FileAction[] => {
         if (!selectedFile) return [];
-
-        const actions: FileAction[] = [
+        return [
             {
-                label: '重命名',
+                label: 'Rename',
                 icon: 'edit',
                 onPress: () => {
                     setShowActionSheet(false);
@@ -559,7 +367,7 @@ export const BrowserScreen = () => {
                 },
             },
             {
-                label: '移动',
+                label: 'Move',
                 icon: 'drive-file-move',
                 onPress: () => {
                     setShowActionSheet(false);
@@ -567,7 +375,7 @@ export const BrowserScreen = () => {
                 },
             },
             {
-                label: '删除',
+                label: 'Delete',
                 icon: 'delete',
                 onPress: () => {
                     setShowActionSheet(false);
@@ -577,22 +385,62 @@ export const BrowserScreen = () => {
                 destructive: true,
             },
         ];
+    };
 
-        return actions;
+    const renderContent = () => {
+        if (status === 'unconfigured') {
+            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} />;
+        }
+
+        if (status === 'loading' && files.length === 0) {
+            return <ActivityIndicator style={styles.messageContainer} size="large" />;
+        }
+
+        if (status === 'error' && files.length === 0) {
+            return <MessageView title={t('browser.loadingFailedTitle')} message={errorMessage} buttonText={t('browser.retry')} onButtonPress={loadFiles} />;
+        }
+
+        return (
+            <View style={styles.fileListContainer}>
+                {isOfflineMode && (
+                    <View style={styles.offlineBanner}>
+                        <Text style={styles.offlineBannerText}>{t('browser.offlineMode') || 'Offline Mode'}</Text>
+                    </View>
+                )}
+                <FlatList
+                    ref={flatListRef}
+                    data={files}
+                    renderItem={({ item }) => (
+                        <FileListItem
+                            item={item}
+                            onPress={handleFilePress}
+                            onLongPress={handleFileLongPress}
+                            isCached={item.isCached}
+                        />
+                    )}
+                    keyExtractor={(item) => item.path}
+                    refreshControl={<RefreshControl refreshing={status === 'loading'} onRefresh={loadFiles} />}
+                    ListEmptyComponent={<MessageView title={t('browser.emptyTitle')} message={t('browser.emptyMessage')} />}
+                    removeClippedSubviews={false}
+                    initialNumToRender={15}
+                    maxToRenderPerBatch={15}
+                    windowSize={10}
+                />
+            </View>
+        );
     };
 
     return (
         <View style={styles.container}>
-            <Breadcrumb path={prefix} onPathPress={handlePathPress} />
+            <Breadcrumb path={prefix} onPathPress={setPrefix} />
             {renderContent()}
-
+            
             <CreateFileModal
                 visible={isCreateModalVisible}
                 onConfirm={handleCreateFile}
                 onCancel={() => setIsCreateModalVisible(false)}
             />
-
-            {/* 文件操作菜单 */}
+            
             {selectedFile && (
                 <>
                     <FileActionSheet
@@ -604,23 +452,19 @@ export const BrowserScreen = () => {
                             setSelectedFile(null);
                         }}
                     />
-
                     <RenameDialog
                         visible={showRenameDialog}
-                        currentName={selectedFile.name.replace(/\/$/, '')} // 移除文件夹名末尾的 /
+                        currentName={selectedFile.name.replace(/\/$/, '')}
                         onConfirm={handleRename}
                         onCancel={() => {
                             setShowRenameDialog(false);
                             setSelectedFile(null);
                         }}
                     />
-
                     <DirectoryPicker
                         visible={showDirectoryPicker}
                         currentPath={selectedFile.path}
-                        onConfirm={(targetPath) => {
-                            handleMove(targetPath);
-                        }}
+                        onConfirm={handleMove}
                         onCancel={() => {
                             setShowDirectoryPicker(false);
                             setSelectedFile(null);
@@ -639,23 +483,8 @@ const styles = StyleSheet.create({
     messageText: { color: theme.colors.textSecondary, fontSize: theme.typography.body.fontSize, textAlign: 'center', lineHeight: 22 },
     button: { backgroundColor: theme.colors.primary, paddingVertical: theme.spacing.s, paddingHorizontal: theme.spacing.l, borderRadius: 8, alignItems: 'center', marginTop: theme.spacing.l },
     buttonText: { color: theme.colors.white, fontSize: 16, fontWeight: 'bold' },
-    headerBackButton: { marginLeft: -5, padding: 10 },
-    headerBackButtonText: { color: theme.colors.primary, fontSize: 16 },
-    offlineBanner: {
-        backgroundColor: '#FFF3CD',
-        padding: 8,
-        alignItems: 'center',
-        borderBottomWidth: 1,
-        borderBottomColor: '#FFEEBA',
-    },
-    offlineBannerText: {
-        color: '#856404',
-        fontSize: 12,
-    },
-    fileListContainer: {
-        flex: 1,
-    },
-    headerButton: {
-        padding: 8,
-    },
+    headerButton: { padding: 8 },
+    offlineBanner: { backgroundColor: '#FFF3CD', padding: 8, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#FFEEBA' },
+    offlineBannerText: { color: '#856404', fontSize: 12 },
+    fileListContainer: { flex: 1 },
 });

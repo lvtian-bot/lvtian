@@ -60,11 +60,11 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
 
                     if (draftContent && draftContent !== (initialContent || '')) {
                         Alert.alert(
-                            t('common.draftFound') || '发现未保存的草稿',
-                            t('common.restoreDraftPrompt') || '是否恢复上次未保存的内容？',
+                            t('common.draftFound'),
+                            t('common.restoreDraftPrompt'),
                             [
                                 {
-                                    text: t('common.discard') || '丢弃',
+                                    text: t('common.discard'),
                                     style: 'destructive',
                                     onPress: async () => {
                                         await AsyncStorage.removeItem(draftKey);
@@ -73,7 +73,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                                     },
                                 },
                                 {
-                                    text: t('common.restore') || '恢复',
+                                    text: t('common.restore'),
                                     onPress: () => {
                                         setInputText(draftContent);
                                         isDraftLoaded.current = true;
@@ -148,11 +148,11 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const handleCancel = async () => {
         if (inputText !== (initialContent || '')) {
             Alert.alert(
-                t('common.confirm') || '确认',
-                t('common.saveChangesPrompt') || '是否保存更改？',
+                t('common.confirm'),
+                t('common.saveChangesPrompt'),
                 [
                     {
-                        text: t('common.dontSave') || '暂不保存',
+                        text: t('common.dontSave'),
                         style: 'destructive',
                         onPress: async () => {
                             // Clear draft on discard

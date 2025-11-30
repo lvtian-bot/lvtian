@@ -12,7 +12,11 @@ class FileSystemService {
     private rootPath: string;
 
     constructor() {
-        this.rootPath = RNFS.DocumentDirectoryPath; // Use DocumentDirectory for persistent storage
+        this.rootPath = `${RNFS.DocumentDirectoryPath}/mdnote_docs`;
+        // Ensure the root directory exists
+        this.createDirectoryRecursive(this.rootPath).catch(err => {
+            console.error('Failed to create root directory:', err);
+        });
     }
 
     /**

@@ -4,6 +4,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 
 import { TimelineScreen } from '../screens/TimelineScreen';
+import { TodoScreen } from '../screens/TodoScreen';
 import { BrowserScreen } from '../screens/BrowserScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { MainTabParamList } from '../types/navigation';
@@ -14,6 +15,10 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 
 const TimelineIcon = ({ color, size }: { color: string; size: number }) => (
     <Icon name="flash-on" color={color} size={size} />
+);
+
+const TodoIcon = ({ color, size }: { color: string; size: number }) => (
+    <Icon name="playlist-add-check" color={color} size={size} />
 );
 
 const BrowserIcon = ({ color, size }: { color: string; size: number }) => (
@@ -44,6 +49,15 @@ export const TabNavigator = () => {
                     headerShown: true,
                     title: t('tabs.timeline'),
                     tabBarIcon: TimelineIcon,
+                }}
+            />
+            <Tab.Screen
+                name="Todo"
+                component={TodoScreen}
+                options={{
+                    headerShown: true,
+                    title: t('tabs.todo') || '待办',
+                    tabBarIcon: TodoIcon,
                 }}
             />
             <Tab.Screen

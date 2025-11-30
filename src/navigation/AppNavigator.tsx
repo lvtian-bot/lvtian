@@ -5,6 +5,7 @@ import { PreviewScreen } from '../screens/PreviewScreen';
 import { EditorScreen } from '../screens/EditorScreen';
 import { CloudRepoConfigScreen } from '../screens/CloudRepoConfigScreen'; // 新增
 import { FlashNoteConfigScreen } from '../screens/FlashNoteConfigScreen'; // 新增
+import { CacheManagerScreen } from '../screens/CacheManagerScreen'; // 新增
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next'; // 新增
 
@@ -34,6 +35,15 @@ export const AppNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('settings.flashNoteConfig') || '闪念笔记设置' // 可以在i18n中配置
+                }}
+            />
+            {/* 新增：缓存管理页面 */}
+            <Stack.Screen
+                name="CacheManager"
+                component={CacheManagerScreen}
+                options={{
+                    headerShown: true,
+                    title: t('settings.cacheManager') || '缓存管理'
                 }}
             />
         </Stack.Navigator>

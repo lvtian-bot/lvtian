@@ -17,7 +17,11 @@ interface SettingsState {
         path: string;
         filename: string;
         suffix: string;
+        historyPattern?: 'none' | 'dash-yyyymm' | 'underscore-yyyymm' | 'dash-yyyy' | 'chinese-yyyymm';
+        historyFolderPath: string; // New field for separate history folder
     };
+    showFlashNotesInCache: boolean;
+    setShowFlashNotesInCache: (show: boolean) => void;
     setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
     markdownTheme: MarkdownThemeKey;
     setMarkdownTheme: (theme: MarkdownThemeKey) => void;
@@ -40,9 +44,13 @@ export const useSettingsStore = create<SettingsState>()(
                 path: '',
                 filename: 'flash_notes.md',
                 suffix: '',
+                historyPattern: 'none',
+                historyFolderPath: '', // Default to empty, meaning same as main path
             },
             setFlashNoteConfig: (config) =>
                 set((state) => ({ flashNoteConfig: { ...state.flashNoteConfig, ...config } })),
+            showFlashNotesInCache: false, // Default to not show flash notes in cache list
+            setShowFlashNotesInCache: (show) => set({ showFlashNotesInCache: show }),
             markdownTheme: 'default',
             setMarkdownTheme: (theme) => set({ markdownTheme: theme }),
             hasHydrated: false,

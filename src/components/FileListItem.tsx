@@ -50,9 +50,15 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onLon
                         ? t('fileItem.folder')
                         : `${(item.size / 1024).toFixed(1)} ${t('fileItem.kb')}`}{' '}
                     • {(() => {
-                        const d = new Date(item.mtime);
-                        const pad = (n: number) => n.toString().padStart(2, '0');
-                        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                        try {
+                            const d = item.mtime instanceof Date ? item.mtime : new Date(item.mtime || Date.now());
+                            if (isNaN(d.getTime())) return '-';
+                            
+                            const pad = (n: number) => n.toString().padStart(2, '0');
+                            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                        } catch (e) {
+                            return '-';
+                        }
                     })()}
                 </Text>
             </View>

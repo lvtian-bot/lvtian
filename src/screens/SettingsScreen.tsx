@@ -1,6 +1,6 @@
 // 更新主设置页面：仿微信设计 + 独立卡片优化
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList, Pressable } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
@@ -82,6 +82,19 @@ export const SettingsScreen = () => {
                 </View>
             </TouchableOpacity>
 
+            {/* 缓存管理 - 独立小卡片 */}
+            <TouchableOpacity
+                style={styles.smallCard}
+                onPress={() => navigation.navigate('CacheManager')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.smallCardLeft}>
+                    <Icon name="trash-can-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Text style={styles.smallCardTitle}>{t('settings.cacheManager')}</Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+
             {/* Markdown主题选择模态框 */}
             <Modal
                 visible={themeModalVisible}
@@ -94,7 +107,7 @@ export const SettingsScreen = () => {
                     activeOpacity={1}
                     onPress={() => setThemeModalVisible(false)}
                 >
-                    <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+                    <Pressable style={styles.modalContent} onPress={() => { }}>
                         <Text style={styles.modalTitle}>{t('settings.markdownStyle')}</Text>
                         <FlatList
                             data={themes}
@@ -129,7 +142,7 @@ export const SettingsScreen = () => {
                         >
                             <Text style={styles.closeButtonText}>{t('common.close')}</Text>
                         </TouchableOpacity>
-                    </View>
+                    </Pressable>
                 </TouchableOpacity>
             </Modal>
 

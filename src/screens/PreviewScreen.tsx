@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import NetInfo from "@react-native-community/netinfo";
 import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
@@ -9,31 +8,44 @@ import Markdown, { RenderRules } from 'react-native-markdown-display';
 import FastImage from 'react-native-fast-image';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
-import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
-import { useFileMetadataStore, LOCAL_MODIFIED_HASH } from '../store/useFileMetadataStore';
+import { UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
+import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes } from '../utils/markdownThemes';
-import { normalizePath } from '../utils/pathUtils';
+import { useCloudSync } from '../hooks/useCloudSync';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-type SyncStatus = 'checking' | 'synced' | 'conflict' | 'error' | 'offline';
 
 export const PreviewScreen = () => {
     const route = useRoute<PreviewScreenRouteProp>();
     const navigation = useNavigation<NavigationProp>();
     const { t } = useTranslation();
     const { filePath } = route.params;
-    const { getMetadata, setMetadata, setUploadState } = useFileMetadataStore();
+    // Removed unused getMetadata
     const { markdownTheme } = useSettingsStore();
     const fileMetadata = useFileMetadataStore(state => state.metadata[filePath]);
     const insets = useSafeAreaInsets();
 
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
-    const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
+    
+    // Use the new hook
+    const { syncStatus, conflictType, isSyncing, checkSync, performAutoSync, resolveConflict } = useCloudSync(filePath);
+
+    // Helper to determine if we should show the conflict banner (only for bidirectional or failure)
+    const shouldShowConflictBanner = syncStatus === 'conflict' && (
+        conflictType === 'bidirectional' ||
+        !conflictType || // Fallback
+        fileMetadata?.uploadState === 'failed' ||
+        fileMetadata?.uploadState === 'conflict-failed'
+    );
+
+    // Helper to determine effective sync state for icon
+    const isEffectivelySyncing = isSyncing || 
+        syncStatus === 'checking' || 
+        (syncStatus === 'conflict' && (conflictType === 'cloudNewer' || conflictType === 'localNewer'));
 
     const AutoImage = ({ source, style, accessibilityLabel }: any) => {
         const [ratio, setRatio] = useState<number | undefined>(undefined);
@@ -76,156 +88,6 @@ export const PreviewScreen = () => {
         },
     };
 
-    const handleOverwriteLocal = async () => {
-        try {
-            setLoading(true);
-            const result = await cloudService.downloadFile(filePath, filePath);
-            setMetadata(filePath, result.etag, result.etag, result.lastModified);
-            const newContent = await fsService.readFile(filePath);
-            setContent(newContent);
-            setSyncStatus('synced');
-        } catch (_) {
-            Alert.alert('Error', 'Failed to download cloud version');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleUploadOverwrite = async () => {
-        try {
-            setLoading(true);
-            setUploadState(filePath, 'uploading');
-            const result = await cloudService.uploadFile(filePath, filePath);
-            if (result) {
-                setMetadata(filePath, result.etag, result.etag, result.lastModified);
-            }
-            checkSyncStatus();
-        } catch (error: any) {
-            console.error('Upload failed:', error);
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            setUploadState(filePath, 'failed');
-            Alert.alert('Error', 'Failed to upload: ' + errorMessage);
-            checkSyncStatus();
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleSaveCopy = async () => {
-        try {
-            setLoading(true);
-            const normalizedPath = normalizePath(filePath);
-            const fileName = normalizedPath.split('/').pop() || '';
-            const dir = normalizedPath.replace(fileName, '');
-            const timestamp = new Date().getTime();
-            const newName = `${fileName.replace('.md', '')}_old_${timestamp}.md`;
-            const newPath = normalizePath(`${dir}${newName}`);
-
-            await fsService.moveFile(normalizedPath, newPath);
-
-            if (cloudService.isConfigured()) {
-                setUploadState(newPath, 'uploading');
-                try {
-                    const result = await cloudService.uploadFile(newPath, newPath);
-                    if (result) {
-                        setMetadata(newPath, result.etag, result.etag, result.lastModified);
-                    }
-                } catch (error: any) {
-                    console.error('Upload failed:', error);
-                    setUploadState(newPath, 'failed');
-                }
-            }
-
-            navigation.replace('Preview', { filePath: newPath });
-        } catch (_) {
-            Alert.alert('Error', 'Failed to save copy');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const checkSyncStatus = useCallback(async () => {
-        setSyncStatus('checking');
-        try {
-            const key = filePath;
-            const localMetadata = getMetadata(filePath);
-
-            // 1. Check Network Status (Priority)
-            const netState = await NetInfo.fetch();
-            if (netState.isConnected === false) {
-                setSyncStatus('offline');
-                return;
-            }
-
-            // 2. Check Upload State
-            if (localMetadata?.uploadState === 'uploading') {
-                setSyncStatus('checking');
-                return;
-            }
-
-            // 3. Check Cloud Status
-            const cloudMetadata = await cloudService.headFile(key);
-
-            // A. Cloud file does not exist -> Auto Upload
-            if (!cloudMetadata) {
-                if (await fsService.exists(filePath)) {
-                    console.log('Cloud file missing, auto-uploading...');
-                    handleUploadOverwrite();
-                }
-                return;
-            }
-
-            // B. Hash Match (Synced)
-            if (localMetadata?.localHash === cloudMetadata.etag) {
-                // Self-healing: update syncedHash to match
-                if (localMetadata?.syncedHash !== cloudMetadata.etag) {
-                    setMetadata(filePath, cloudMetadata.etag, localMetadata.localHash, localMetadata.lastModified || new Date().toISOString());
-                }
-                setSyncStatus('synced');
-                // Clear failed state if it was a false alarm
-                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                    setUploadState(filePath, null);
-                }
-                return;
-            }
-
-            // C. Hash Mismatch (Conflict/Inconsistent)
-            // C1. Only Cloud Updated (localHash == syncedHash) -> Auto Download
-            if (localMetadata?.localHash === localMetadata?.syncedHash) {
-                console.log('Cloud newer, auto-downloading...');
-                handleOverwriteLocal();
-                return;
-            }
-
-            // C2. Only Local Updated (cloud.etag == syncedHash) -> Auto Upload
-            if (cloudMetadata.etag === localMetadata?.syncedHash) {
-                console.log('Local newer, auto-uploading...');
-                handleUploadOverwrite();
-                return;
-            }
-
-            // C3. Bidirectional Conflict -> Show UI
-            setSyncStatus('conflict');
-
-        } catch (error) {
-            console.error('Error checking sync status:', error);
-
-            const localMetadata = getMetadata(filePath);
-            if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                setSyncStatus('conflict');
-                return;
-            }
-
-            try {
-                if (await fsService.exists(filePath)) {
-                    setSyncStatus('offline');
-                    return;
-                }
-            } catch (_) { }
-            setSyncStatus('error');
-        }
-    }, [filePath, getMetadata, setUploadState, setMetadata]);
-
     const loadFile = useCallback(async () => {
         try {
             const exists = await fsService.exists(filePath);
@@ -240,23 +102,58 @@ export const PreviewScreen = () => {
         }
     }, [filePath]);
 
+    const handleOverwriteLocal = async () => {
+        await resolveConflict('useCloud');
+        await loadFile();
+    };
+
+    const handleUploadOverwrite = async () => {
+        await resolveConflict('useLocal');
+    };
+
+    const handleSaveCopy = async () => {
+        try {
+            await resolveConflict('saveCopy');
+            // The file content is reloaded via loadFile, but the path hasn't changed.
+            // However, resolveConflict('saveCopy') renames the OLD file to backup and DOWNLOADS the new one to filePath.
+            // So we are still viewing the same filePath, but content is now cloud content.
+            // The backup is somewhere else. 
+            // The original logic navigated to newPath, but that was because it moved current file to backup
+            // and seemingly expected user to view the backup? 
+            // Wait, original logic: moveFile(current, backup) -> upload(backup) -> navigate(backup).
+            // This means user continues viewing the LOCAL version (which is now backup).
+            
+            // SyncService logic: moveFile(current, backup) -> upload(backup) -> download(cloud, current).
+            // This means 'current' (filePath) now has Cloud content. 'backup' has Local content.
+            
+            // If we want to mimic original behavior strictly (keep viewing local content), we should navigate to backup.
+            // BUT, usually 'Resolve Conflict -> Save Copy' means "I want to keep my changes safe, but accept cloud version as main".
+            // So staying on filePath (which is now Cloud version) seems more correct for a "Sync" resolution.
+            // And the backup is safe.
+            
+            // Let's stick to SyncService logic: View the now-synced file.
+            await loadFile();
+            Alert.alert(t('common.success'), 'Local changes saved to copy. Now viewing cloud version.');
+        } catch (_) {
+            Alert.alert('Error', 'Failed to save copy');
+        }
+    };
+
+    // Listen for upload completion to reload content if needed (e.g. if we just downloaded)
     useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string; success?: boolean }) => {
-            if (data.filePath === filePath) {
-                checkSyncStatus();
+            if (data.filePath === filePath && data.success) {
+                loadFile();
             }
         });
-
-        return () => {
-            subscription.remove();
-        };
-    }, [filePath, checkSyncStatus]);
+        return () => subscription.remove();
+    }, [filePath, loadFile]);
 
     useFocusEffect(
         useCallback(() => {
             loadFile();
-            checkSyncStatus();
-        }, [loadFile, checkSyncStatus])
+            performAutoSync();
+        }, [loadFile, performAutoSync])
     );
 
     return (
@@ -269,9 +166,10 @@ export const PreviewScreen = () => {
                     <Text style={styles.title} numberOfLines={2}>
                         {filePath.split('/').pop()}
                     </Text>
-                    {syncStatus === 'checking' && <ActivityIndicator size="small" color={theme.colors.primary} />}
-                    {syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
-                    {(syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
+                    {isEffectivelySyncing && <ActivityIndicator size="small" color={theme.colors.primary} />}
+                    {!isEffectivelySyncing && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
+                    {!isEffectivelySyncing && (syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
+                    {!isEffectivelySyncing && syncStatus === 'error' && <Text style={styles.syncIcon}>❌</Text>}
                 </View>
                 <TouchableOpacity
                     onPress={() => navigation.navigate('Editor', { filePath })}
@@ -294,24 +192,25 @@ export const PreviewScreen = () => {
                                 {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') ? ' (上次上传失败)' : ''}
                             </Text>
                             <View style={styles.bannerButtons}>
-                                <TouchableOpacity onPress={checkSyncStatus} style={styles.bannerButton}>
+                                <TouchableOpacity onPress={checkSync} style={styles.bannerButton}>
                                     <Text style={styles.bannerButtonText}>{t('common.retry') || '重试连接'}</Text>
                                 </TouchableOpacity>
                             </View>
                         </View>
                     )}
 
-                    {syncStatus === 'conflict' && (
+                    {shouldShowConflictBanner && (
                         <View style={styles.banner}>
                             <Text style={styles.bannerText}>
-                                {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed')
+                                {fileMetadata?.uploadState === 'failed'
                                     ? '上传失败'
-                                    : '本地和云端已同时修改'}
+                                    : '本地和云端已同时修改 (冲突)'
+                                }
                             </Text>
                             <View style={styles.bannerButtons}>
-                                {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') ? (
+                                {(fileMetadata?.uploadState === 'failed') ? (
                                     <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                        <Text style={styles.bannerButtonText}>重试</Text>
+                                        <Text style={styles.bannerButtonText}>上传本地覆盖云端</Text>
                                     </TouchableOpacity>
                                 ) : (
                                     <>

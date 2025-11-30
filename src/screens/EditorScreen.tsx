@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, DeviceEventEmitter, BackHandler } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, BackHandler } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,10 +8,10 @@ import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
-import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { theme } from '../utils/theme';
 import { normalizePath } from '../utils/pathUtils';
+import { syncService } from '../services/SyncService';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -27,7 +27,7 @@ export const EditorScreen = () => {
     const webViewRef = useRef<WebView>(null);
     const isDraftLoaded = useRef(false);
 
-    const { setMetadata, markFileAsModified } = useFileMetadataStore();
+    const { markFileAsModified } = useFileMetadataStore();
 
     const DRAFT_KEY = `editor_draft_${filePath}`;
 
@@ -111,7 +111,7 @@ export const EditorScreen = () => {
         setIsDirty(true);
     };
 
-    const handleManualSave = async (contentToSave: string) => {
+    const handleManualSave = useCallback(async (contentToSave: string) => {
         try {
             // 手动保存：写本地 + 触发云同步 + 返回预览页
             await fsService.writeFile(filePath, contentToSave);
@@ -123,39 +123,15 @@ export const EditorScreen = () => {
             setContent(contentToSave);
 
             // Upload to cloud if configured (wait for upload to complete before navigating back)
-            if (cloudService.isConfigured()) {
-                try {
-                    // Set persistent uploading state
-                    useFileMetadataStore.getState().setUploadState(filePath, 'uploading');
-
-                    // Get current metadata for triple hash mechanism
-                    const currentMetadata = useFileMetadataStore.getState().getMetadata(filePath);
-
-                    // Get expected hash for optimistic locking (use syncedHash as expected)
-                    const expectedEtag = currentMetadata?.syncedHash || undefined;
-
-                    // Wait for upload to complete
-                    const result = await cloudService.uploadFile(filePath, filePath, expectedEtag);
-                    if (result) {
-                        // setMetadata will implicitly set uploadState to 'success'
-                        // After successful sync, syncedHash and localHash should match cloud's result
-                        setMetadata(filePath, result.etag, result.etag, result.lastModified);
-                    }
-                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: true });
-                } catch (error: any) {
-                    console.error('Upload failed:', error);
-
-                    if (error.code === 'PreconditionFailed') {
-                        useFileMetadataStore.getState().setUploadState(filePath, 'conflict-failed');
-                    } else {
-                        useFileMetadataStore.getState().setUploadState(filePath, 'failed');
-                    }
-
-                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: false });
-
-                    // Show upload failure alert
-                    Alert.alert('上传失败', '文件已保存到本地，但云上传失败。您可以稍后重新同步。');
-                }
+            // syncService.uploadFile handles cloud configuration check internally
+            const success = await syncService.uploadFile(filePath, { withLock: true });
+            if (!success) {
+                 // 如果失败，已经在 syncService 内部处理了状态设置和事件发送
+                 // 但我们可能想给用户一个 Alert
+                 const metadata = useFileMetadataStore.getState().getMetadata(filePath);
+                 if (metadata?.uploadState === 'conflict-failed' || metadata?.uploadState === 'failed') {
+                     Alert.alert('上传失败', '文件已保存到本地，但云上传失败。您可以稍后重新同步。');
+                 }
             }
 
             // 返回预览页
@@ -163,7 +139,7 @@ export const EditorScreen = () => {
         } catch {
             Alert.alert('Error', 'Failed to save file');
         }
-    };
+    }, [filePath, markFileAsModified, DRAFT_KEY, navigation]);
 
     const handleBackPress = useCallback(() => {
         if (isDirty) {
@@ -192,7 +168,7 @@ export const EditorScreen = () => {
             return true; // Prevent default behavior
         }
         return false; // Allow default behavior
-    }, [isDirty, content, DRAFT_KEY, navigation, t]);
+    }, [isDirty, content, DRAFT_KEY, navigation, t, handleManualSave]);
 
     // Handle hardware back button
     useEffect(() => {

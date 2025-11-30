@@ -1,17 +1,33 @@
 import { fsService } from './FileSystemService';
-import { cloudService, UPLOAD_COMPLETED_EVENT } from './CloudService';
+import { cloudService } from './CloudService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
+import { syncService } from './SyncService';
+import { shadowFileService } from './ShadowFileService';
+import { mergeUtils } from '../utils/mergeUtils';
 
 export interface FlashNote {
     id: string;
     timestamp: string;
     content: string;
+    filePath: string; // Added source file path
+}
+
+export type TodoStatus = 'todo' | 'done' | 'in-progress' | 'canceled';
+
+export interface TodoItem {
+    id: string; // Combination of noteId and line index/content hash to be unique
+    noteId: string;
+    content: string;
+    status: TodoStatus;
+    rawLine: string;
+    filePath: string; // Added source file path
 }
 
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
+const TODO_REGEX = /^(\s*)-\s\[([ x/-])\]\s+(.*)$/;
 
 export const FLASH_NOTES_UPDATED_EVENT = 'FLASH_NOTES_UPDATED';
 export const SHARE_RECEIVED_EVENT = 'SHARE_RECEIVED_EVENT';
@@ -21,6 +37,95 @@ class FlashNoteService {
         const { flashNoteConfig } = useSettingsStore.getState();
         const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
         return normalizePath(path);
+    }
+
+    async getSortedFilePaths(): Promise<string[]> {
+        const { flashNoteConfig } = useSettingsStore.getState();
+        const mainFilename = flashNoteConfig.filename;
+        const dirPath = flashNoteConfig.path || '';
+        const fullMainPath = dirPath ? `${dirPath}/${mainFilename}` : mainFilename;
+        const normalizedMainPath = normalizePath(fullMainPath);
+
+        const historyPattern = flashNoteConfig.historyPattern || 'none';
+
+        if (historyPattern === 'none') {
+            return [normalizedMainPath];
+        }
+
+        const namePart = mainFilename.replace(/\.md$/i, '');
+        let regex: RegExp | null = null;
+
+        if (historyPattern === 'dash-yyyymm') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
+        } else if (historyPattern === 'underscore-yyyymm') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
+        } else if (historyPattern === 'dash-yyyy') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
+        } else if (historyPattern === 'chinese-yyyymm') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Match -YYYY年M月 or -YYYY年MM月
+            regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
+        }
+
+        if (!regex) {
+            return [normalizedMainPath];
+        }
+
+        try {
+            const scanDirPath = flashNoteConfig.historyFolderPath || dirPath; // Use historyFolderPath if set, else main path
+
+            // Check if directory exists before listing
+            if (!scanDirPath || !(await fsService.exists(scanDirPath))) {
+                return [normalizedMainPath];
+            }
+
+            const files = await fsService.listFiles(scanDirPath);
+            const historyFiles: string[] = [];
+
+            files.forEach(file => {
+                if (file.isDirectory) return;
+                // Important: If mainFilename is found in history folder, it means it's a copy
+                // We should still treat it as a history file if it matches pattern.
+                // The main path itself is always returned first, so we don't need to filter it out here
+                // unless we want to avoid duplicate entries if main file itself matches history pattern
+                // Let's filter if it's the exact main file path to avoid duplicates if main is in history folder
+                if (normalizePath(scanDirPath ? `${scanDirPath}/${file.name}` : file.name) === normalizedMainPath) return;
+
+                const match = file.name.match(regex!);
+                if (match) {
+                    const relativePath = scanDirPath ? `${scanDirPath}/${file.name}` : file.name;
+                    historyFiles.push(normalizePath(relativePath));
+                }
+            });
+
+            // Custom sort for Chinese date format to ensure correct order (e.g., 10月 > 2月)
+            if (historyPattern === 'chinese-yyyymm') {
+                historyFiles.sort((a, b) => {
+                    const getYearMonth = (path: string) => {
+                        const filename = path.split('/').pop() || '';
+                        const match = filename.match(regex!);
+                        if (match) {
+                            const year = parseInt(match[1], 10);
+                            const month = parseInt(match[2], 10);
+                            return year * 100 + month;
+                        }
+                        return 0;
+                    };
+                    return getYearMonth(b) - getYearMonth(a); // Descending order
+                });
+            } else {
+                historyFiles.sort((a, b) => b.localeCompare(a));
+            }
+
+            return [normalizedMainPath, ...historyFiles];
+
+        } catch (e) {
+            console.error('Failed to scan history files', e);
+            return [normalizedMainPath];
+        }
     }
 
     private async ensureDirectoryExists(filePath: string): Promise<void> {
@@ -39,7 +144,7 @@ class FlashNoteService {
         return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     }
 
-    parseNotes(content: string): FlashNote[] {
+    parseNotes(content: string, filePath: string = ''): FlashNote[] {
         const { flashNoteConfig } = useSettingsStore.getState();
         const suffix = flashNoteConfig.suffix || '';
 
@@ -59,7 +164,7 @@ class FlashNoteService {
                     parsedNotes.push(currentNote as FlashNote);
                 }
                 const timestamp = match[2].trim();
-                currentNote = { id: timestamp, timestamp: timestamp, content: '' };
+                currentNote = { id: timestamp, timestamp: timestamp, content: '', filePath: filePath };
             } else {
                 if (currentNote.id) {
                     // 过滤掉只包含 > 和空白字符的行
@@ -75,9 +180,42 @@ class FlashNoteService {
             parsedNotes.push(currentNote as FlashNote);
         }
 
-        console.log(`Parsed ${parsedNotes.length} notes. Latest: ${parsedNotes[0]?.timestamp}`);
+        // console.log(`Parsed ${parsedNotes.length} notes from ${filePath}. Latest: ${parsedNotes[0]?.timestamp}`);
         parsedNotes.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
         return parsedNotes;
+    }
+
+    extractTodos(notes: FlashNote[]): TodoItem[] {
+        const todos: TodoItem[] = [];
+
+        notes.forEach(note => {
+            const lines = note.content.split('\n');
+            lines.forEach((line, index) => {
+                const match = line.match(TODO_REGEX);
+                if (match) {
+                    const [, , mark, content] = match;
+                    let status: TodoStatus = 'todo';
+
+                    switch (mark) {
+                        case 'x': status = 'done'; break;
+                        case '/': status = 'in-progress'; break;
+                        case '-': status = 'canceled'; break;
+                        default: status = 'todo';
+                    }
+
+                    todos.push({
+                        id: `${note.id}-${index}`,
+                        noteId: note.id,
+                        content: content.trim(),
+                        status,
+                        rawLine: line,
+                        filePath: note.filePath
+                    });
+                }
+            });
+        });
+
+        return todos;
     }
 
     async addNote(content: string): Promise<void> {
@@ -108,24 +246,9 @@ class FlashNoteService {
         useFileMetadataStore.getState().markFileAsModified(filePath);
 
         // Upload to cloud if configured (async, don't wait)
-        if (cloudService.isConfigured()) {
-            const { setMetadata, setUploadState } = useFileMetadataStore.getState();
-            setUploadState(filePath, 'uploading');
-
-            // Start upload in background
-            cloudService.uploadFile(filePath, filePath).then(result => {
-                if (result) {
-                    setMetadata(filePath, result.etag, result.etag, result.lastModified);
-                }
-                // Notify UI that upload completed
-                DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
-            }).catch(error => {
-                console.error('Upload failed:', error);
-                setUploadState(filePath, 'failed');
-                // Notify UI that upload failed
-                DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
-            });
-        }
+        syncService.uploadFile(filePath, { useShadow: true }).catch(error => {
+            console.error('FlashNoteService addNote upload failed:', error);
+        });
 
         DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
@@ -154,26 +277,140 @@ class FlashNoteService {
             useFileMetadataStore.getState().markFileAsModified(filePath);
 
             // Upload to cloud if configured (async, don't wait)
-            if (cloudService.isConfigured()) {
-                const { setMetadata, setUploadState } = useFileMetadataStore.getState();
-                setUploadState(filePath, 'uploading');
-
-                // Start upload in background
-                cloudService.uploadFile(filePath, filePath).then(result => {
-                    if (result) {
-                        setMetadata(filePath, result.etag, result.etag, result.lastModified);
-                    }
-                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
-                }).catch(error => {
-                    console.error('Upload failed:', error);
-                    setUploadState(filePath, 'failed');
-                    DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath });
-                });
-            }
+            syncService.uploadFile(filePath, { useShadow: true }).catch(error => {
+                console.error('FlashNoteService updateNote upload failed:', error);
+            });
 
             DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
         } else {
             throw new Error('Note not found');
+        }
+    }
+
+    async updateTodoStatus(noteId: string, rawLine: string, newStatus: TodoStatus, filePath?: string): Promise<void> {
+        const targetPath = filePath || this.getFlashNotePath();
+        const currentContent = await fsService.readFile(targetPath);
+
+        // Find the note block
+        const noteBlocks = currentContent.split(/(?=^##\s)/m).filter(b => b.trim());
+        let noteFound = false;
+
+        const newBlocks = noteBlocks.map(block => {
+            if (block.trim().startsWith(`## ${noteId}`)) {
+                noteFound = true;
+                // Replace the specific line within this block
+                // We use rawLine to be safe, but we need to be careful about duplicate lines.
+                // However, since we are inside a specific note block (identified by ID/Timestamp), 
+                // risk is minimized.
+
+                // Construct new mark
+                let newMark = ' ';
+                switch (newStatus) {
+                    case 'done': newMark = 'x'; break;
+                    case 'in-progress': newMark = '/'; break;
+                    case 'canceled': newMark = '-'; break;
+                    default: newMark = ' ';
+                }
+
+                // Regex to match the specific line. 
+                // rawLine e.g. "- [ ] Buy milk"
+                // We want to replace "- [ ]" with "- [x]" but keep indentation and content
+
+                const match = rawLine.match(TODO_REGEX);
+                if (match) {
+                    const [, indent, , content] = match;
+                    const newLine = `${indent}- [${newMark}] ${content}`;
+                    // Replace only the first occurrence of rawLine in this block to avoid replacing duplicates incorrectly?
+                    // Actually, simple string replace on the block might be risky if multiple identical todos exist.
+                    // Let's try to split the block by lines and match.
+                    const lines = block.split('\n');
+                    let replaced = false;
+                    const newLines = lines.map(line => {
+                        // Trim right to avoid whitespace issues during comparison if needed, 
+                        // but rawLine usually comes from parsed content which might have stripped some chars?
+                        // FlashNoteService.parseNotes DOES NOT strip whitespace from lines, except maybe the suffix at the very end of the note.
+
+                        // Let's try exact match first
+                        if (!replaced && line === rawLine) {
+                            replaced = true;
+                            return newLine;
+                        }
+                        // Fallback: try matching trimmed version if exact match fails (e.g. whitespace diffs)
+                        if (!replaced && line.trim() === rawLine.trim()) {
+                            replaced = true;
+                            return newLine;
+                        }
+                        return line;
+                    });
+
+                    return newLines.join('\n');
+                }
+            }
+            return block;
+        });
+
+        if (noteFound) {
+            const newContent = newBlocks.join('');
+            await this.ensureDirectoryExists(targetPath);
+            await fsService.writeFile(targetPath, newContent);
+            useFileMetadataStore.getState().markFileAsModified(targetPath);
+
+            // Upload to cloud logic
+            syncService.uploadFile(targetPath, { useShadow: true }).catch(error => {
+                console.error('FlashNoteService updateTodoStatus upload failed:', error);
+            });
+
+            DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+        }
+    }
+
+    async updateTodoContent(noteId: string, rawLine: string, newContentText: string, filePath?: string): Promise<void> {
+        const targetPath = filePath || this.getFlashNotePath();
+        const currentContent = await fsService.readFile(targetPath);
+
+        const noteBlocks = currentContent.split(/(?=^##\s)/m).filter(b => b.trim());
+        let noteFound = false;
+
+        const newBlocks = noteBlocks.map(block => {
+            if (block.trim().startsWith(`## ${noteId}`)) {
+                noteFound = true;
+
+                const match = rawLine.match(TODO_REGEX);
+                if (match) {
+                    const [, indent, mark] = match;
+                    // Construct new line with same indentation and mark, but new content
+                    const newLine = `${indent}- [${mark}] ${newContentText}`;
+
+                    const lines = block.split('\n');
+                    let replaced = false;
+                    const newLines = lines.map(line => {
+                        if (!replaced && line === rawLine) {
+                            replaced = true;
+                            return newLine;
+                        }
+                        if (!replaced && line.trim() === rawLine.trim()) {
+                            replaced = true;
+                            return newLine;
+                        }
+                        return line;
+                    });
+                    return newLines.join('\n');
+                }
+            }
+            return block;
+        });
+
+        if (noteFound) {
+            const newContent = newBlocks.join('');
+            await this.ensureDirectoryExists(targetPath);
+            await fsService.writeFile(targetPath, newContent);
+            useFileMetadataStore.getState().markFileAsModified(targetPath);
+
+            syncService.uploadFile(targetPath, { useShadow: true }).catch(error => {
+                console.error('FlashNoteService updateTodoContent upload failed:', error);
+            });
+
+            DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
         }
     }
 
@@ -208,16 +445,167 @@ class FlashNoteService {
         useFileMetadataStore.getState().markFileAsModified(filePath);
 
         // Upload to cloud if configured
-        if (cloudService.isConfigured()) {
-            try {
-                const result = await cloudService.uploadFile(filePath, filePath);
-                if (result) {
-                    const { setMetadata } = useFileMetadataStore.getState();
-                    setMetadata(filePath, result.etag, result.etag, result.lastModified);
+        syncService.uploadFile(filePath, { useShadow: true }).catch(error => {
+            console.error('Upload failed:', error);
+        });
+
+        DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+    }
+
+    async syncMainFile(): Promise<void> {
+        const filePath = this.getFlashNotePath();
+
+        if (!cloudService.isConfigured()) {
+            console.log('Cloud not configured, skipping main file sync');
+            return;
+        }
+
+        try {
+            // Use SyncService to handle basic sync (CloudNewer -> Download, LocalNewer -> Upload)
+            // Enable shadow file updates
+            const syncResult = await syncService.syncFile(filePath, { useShadow: true });
+
+            if (syncResult === 'synced') {
+                DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+                return;
+            }
+
+            if (syncResult === 'conflict') {
+                // Handle Bidirectional Conflict with 3-Way Merge
+                console.log('Bidirectional conflict detected in main file. Attempting 3-way merge...');
+
+                // 1. Get Base (Shadow)
+                const baseContent = await shadowFileService.getShadow(filePath);
+                if (baseContent === null) {
+                    console.warn('No shadow file found for 3-way merge. Falling back to cloud overwrite (safe default) or manual resolution.');
+                    // Without base, we can't do 3-way. 
+                    // Option A: Union Merge (diff-match-patch without base) - risky?
+                    // Option B: Let user decide (keep current conflict state).
+                    // For now, let's just return and let the UI show conflict.
+                    return;
                 }
-            } catch (error) {
-                console.error('Upload failed:', error);
-                // TODO: Add to retry queue
+
+                // 2. Get Local
+                const localContent = await fsService.readFile(filePath);
+
+                // 3. Get Cloud (Download to temp)
+                // We don't have a direct "download to string" method exposed in cloudService yet, 
+                // but we can download to a temp file.
+                const tempPath = `${filePath}.cloud.tmp`;
+                await cloudService.downloadFile(filePath, tempPath);
+                const cloudContent = await fsService.readFile(tempPath);
+                await fsService.deleteFile(tempPath);
+
+                // 4. Merge
+                const mergeResult = mergeUtils.threeWayMerge(baseContent, localContent, cloudContent);
+
+                // 5. Apply Merge
+                await fsService.writeFile(filePath, mergeResult.mergedContent);
+                useFileMetadataStore.getState().markFileAsModified(filePath);
+
+                // 6. Upload Merged Content (and update shadow)
+                console.log('Merge successful. Uploading merged content...');
+                await syncService.uploadFile(filePath, { useShadow: true });
+
+                DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+            }
+
+        } catch (error) {
+            console.error('Failed to sync main file:', error);
+            // Don't throw, just log. UI will show error state via hooks.
+        }
+    }
+
+    async syncHistoryFiles(): Promise<void> {
+        const { flashNoteConfig } = useSettingsStore.getState();
+
+        if (!cloudService.isConfigured()) {
+            return;
+        }
+
+        if (flashNoteConfig.historyPattern === 'none') {
+            return;
+        }
+
+        const mainFilename = flashNoteConfig.filename;
+        const dirPath = flashNoteConfig.path || '';
+        const scanDirPath = flashNoteConfig.historyFolderPath || dirPath;
+
+        // Ensure local directory exists
+        if (scanDirPath && !(await fsService.exists(scanDirPath))) {
+            await fsService.createDirectory(scanDirPath);
+        }
+
+        // Construct regex for matching
+        const namePart = mainFilename.replace(/\.md$/i, '');
+        let regex: RegExp | null = null;
+
+        if (flashNoteConfig.historyPattern === 'dash-yyyymm') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
+        } else if (flashNoteConfig.historyPattern === 'underscore-yyyymm') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
+        } else if (flashNoteConfig.historyPattern === 'dash-yyyy') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
+        } else if (flashNoteConfig.historyPattern === 'chinese-yyyymm') {
+            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
+        }
+
+        if (!regex) return;
+
+        const allFilesSet = new Set<string>();
+
+        // 1. Scan Local Files
+        try {
+            if (await fsService.exists(scanDirPath)) {
+                const localFiles = await fsService.listFiles(scanDirPath);
+                localFiles.forEach(file => {
+                    if (file.isDirectory) return;
+                    // Skip main file if it's in the same directory
+                    if (normalizePath(scanDirPath ? `${scanDirPath}/${file.name}` : file.name) === normalizePath(dirPath ? `${dirPath}/${mainFilename}` : mainFilename)) return;
+
+                    if (regex!.test(file.name)) {
+                        allFilesSet.add(normalizePath(scanDirPath ? `${scanDirPath}/${file.name}` : file.name));
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('Error scanning local history:', e);
+        }
+
+        // 2. Scan Cloud Files
+        try {
+            let prefix = scanDirPath;
+            if (prefix && !prefix.endsWith('/')) prefix += '/';
+
+            console.log(`Scanning cloud files with prefix: ${prefix}`);
+            const cloudFiles = await cloudService.listFiles(prefix);
+
+            cloudFiles.forEach(file => {
+                const filename = file.key.split('/').pop();
+                if (!filename) return;
+                if (filename === mainFilename) return;
+
+                if (regex!.test(filename)) {
+                    allFilesSet.add(normalizePath(file.key));
+                }
+            });
+        } catch (error) {
+            console.error('Failed to scan cloud history files:', error);
+        }
+
+        // 3. Sync All Found Files
+        console.log(`Found ${allFilesSet.size} history files to sync.`);
+
+        // Process sequentially to avoid overwhelming network/CPU
+        for (const filePath of allFilesSet) {
+            try {
+                await syncService.syncFile(filePath, { useShadow: true });
+            } catch (e) {
+                console.error(`Failed to sync history file ${filePath}`, e);
             }
         }
 
