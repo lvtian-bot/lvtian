@@ -2,7 +2,8 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, SectionList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { flashNoteService, FLASH_NOTES_UPDATED_EVENT, TodoItem, TodoStatus } from '../services/FlashNoteService';
+import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
+import { TodoItem, Priority } from '../types/todo';
 import { fsService } from '../services/FileSystemService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
@@ -45,6 +46,9 @@ export const TodoScreen = () => {
     // ActionSheet state
     const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
     const [selectedTodo, setSelectedTodo] = useState<TodoItem | undefined>(undefined);
+
+    // State for delayed completion animation
+    const [completingItems, setCompletingItems] = useState<Set<string>>(new Set());
 
     // Use the multi-file sync hook
     const { syncStatus, conflictType, isSyncing, performAutoSync } = useCloudSync(syncTargetPaths);
@@ -144,17 +148,42 @@ export const TodoScreen = () => {
 
 
     const handleToggleStatus = async (item: TodoItem) => {
-        let newStatus: TodoStatus;
-        if (item.status === 'todo') {
-            newStatus = 'done'; // 未完成 -> 已完成
-        } else {
-            newStatus = 'todo'; // 其他所有状态 (已完成, 进行中, 已取消) -> 未完成
-        }
+        const itemKey = `${item.noteId}-${item.rawLine}`;
 
-        try {
-            await flashNoteService.updateTodoStatus(item.noteId, item.rawLine, newStatus, item.filePath);
-        } catch {
-            Alert.alert(t('common.error'), t('todo.updateStatusFailed'));
+        if (item.status === 'todo') {
+            // Completing: Add to completing set for animation
+            setCompletingItems(prev => new Set(prev).add(itemKey));
+
+            // Delay the actual update
+            setTimeout(async () => {
+                try {
+                    await flashNoteService.updateTodoStatus(item.noteId, item.rawLine, 'done', item.filePath);
+                    // Add a small buffer before removing the visual state to allow loadTodos to catch up
+                    // and prevent a brief flicker of the unchecked state
+                    setTimeout(() => {
+                        setCompletingItems(prev => {
+                            const next = new Set(prev);
+                            next.delete(itemKey);
+                            return next;
+                        });
+                    }, 100);
+                } catch {
+                    Alert.alert(t('common.error'), t('todo.updateStatusFailed'));
+                    // On error, remove immediately
+                    setCompletingItems(prev => {
+                        const next = new Set(prev);
+                        next.delete(itemKey);
+                        return next;
+                    });
+                }
+            }, 350); // 350ms delay
+        } else {
+            // Un-completing: Update immediately
+            try {
+                await flashNoteService.updateTodoStatus(item.noteId, item.rawLine, 'todo', item.filePath);
+            } catch {
+                Alert.alert(t('common.error'), t('todo.updateStatusFailed'));
+            }
         }
     };
 
@@ -164,13 +193,22 @@ export const TodoScreen = () => {
     };
 
     const handleSaveTodoContent = async (id: string | undefined, content: string) => {
-        if (!editingTodo) return;
         try {
-            await flashNoteService.updateTodoContent(editingTodo.noteId, editingTodo.rawLine, content, editingTodo.filePath);
+            if (id && editingTodo) {
+                // Editing existing todo
+                await flashNoteService.updateTodoContent(editingTodo.noteId, editingTodo.rawLine, content, editingTodo.filePath);
+            } else {
+                // Creating new todo
+                // Format: - [ ] content
+                const formattedContent = `- [ ] ${content}`;
+                await flashNoteService.addNote(formattedContent);
+            }
+
             setIsModalVisible(false);
             setEditingTodo(undefined);
+            // loadTodos will be triggered by event listener
         } catch (error) {
-            console.error('Failed to update todo content:', error);
+            console.error('Failed to save todo content:', error);
             Alert.alert(t('common.error'), t('todo.updateContentFailed'));
         }
     };
@@ -207,54 +245,99 @@ export const TodoScreen = () => {
     };
 
     const renderItem = ({ item }: { item: TodoItem }) => {
+        const itemKey = `${item.noteId}-${item.rawLine}`;
+        const isCompleting = completingItems.has(itemKey);
+
         let iconName = 'check-box-outline-blank';
         let iconColor = theme.colors.textSecondary;
         let textDecorationLine: 'none' | 'line-through' = 'none';
         let textColor = theme.colors.text;
         let fontSize = theme.typography.body.fontSize;
 
-        switch (item.status) {
-            case 'done':
-                iconName = 'check-box';
-                iconColor = theme.colors.success || '#4CAF50';
-                textDecorationLine = 'line-through';
-                textColor = theme.colors.textSecondary;
-                fontSize = 14; // Smaller font for done
-                break;
-            case 'in-progress':
-                iconName = 'hourglass-empty';
-                iconColor = theme.colors.primary;
-                break;
-            case 'canceled':
-                iconName = 'indeterminate-check-box';
-                iconColor = theme.colors.textSecondary;
-                textDecorationLine = 'line-through';
-                textColor = theme.colors.textSecondary;
-                fontSize = 14; // Smaller font for canceled
-                break;
+        // If completing, force the 'done' visual state
+        if (isCompleting || item.status === 'done') {
+            iconName = 'check-box';
+            iconColor = theme.colors.success || '#4CAF50';
+            textDecorationLine = 'line-through';
+            textColor = theme.colors.textSecondary;
+            fontSize = 14; // Smaller font for done
+        } else if (item.status === 'in-progress') {
+            iconName = 'hourglass-empty';
+            iconColor = theme.colors.primary;
+        } else if (item.status === 'canceled') {
+            iconName = 'indeterminate-check-box';
+            iconColor = theme.colors.textSecondary;
+            textDecorationLine = 'line-through';
+            textColor = theme.colors.textSecondary;
+            fontSize = 14; // Smaller font for canceled
         }
+
+        const getPriorityDisplay = (priority: Priority) => {
+            switch (priority) {
+                case 'highest': return { icon: 'error', label: t('priority.highest') || 'Highest', color: theme.colors.danger || '#F44336' };
+                case 'high': return { icon: 'keyboard-double-arrow-up', label: t('priority.high') || 'High', color: theme.colors.orange || '#FF9800' };
+                case 'medium': return { icon: 'keyboard-arrow-up', label: t('priority.medium') || 'Medium', color: theme.colors.warning || '#FFC107' };
+                case 'low': return { icon: 'keyboard-arrow-down', label: t('priority.low') || 'Low', color: theme.colors.info || '#2196F3' };
+                case 'lowest': return { icon: 'keyboard-double-arrow-down', label: t('priority.lowest') || 'Lowest', color: theme.colors.textSecondary || '#9E9E9E' };
+                default: return null;
+            }
+        };
+
+        const priorityInfo = getPriorityDisplay(item.priority);
 
         return (
             <View style={styles.itemContainer}>
-                <TouchableOpacity onPress={() => handleToggleStatus(item)} style={styles.iconContainer}>
-                    <Icon name={iconName} size={24} color={iconColor} />
-                </TouchableOpacity>
+                {/* Row 1: Date */}
+                <Text style={styles.noteTime}>{item.noteId}</Text>
+                
+                {/* Row 2: Checkbox + Content */}
+                <View style={styles.itemBody}>
+                    <TouchableOpacity onPress={() => handleToggleStatus(item)} style={styles.iconContainer}>
+                        <Icon name={iconName} size={24} color={iconColor} />
+                    </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.contentContainer}
-                    onPress={() => handleContentPress(item)}
-                    onLongPress={() => handleLongPress(item)}
-                >
-                    <Text style={[styles.itemText, { textDecorationLine, color: textColor, fontSize }]}>
-                        {item.content}
-                    </Text>
-                    <Text style={styles.noteTime}>{item.noteId}</Text>
-                </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.contentContainer}
+                        onPress={() => handleContentPress(item)}
+                        onLongPress={() => handleLongPress(item)}
+                    >
+                        <Text style={[styles.itemText, { textDecorationLine, color: textColor, fontSize }]}>
+                            {item.content}
+                        </Text>
+
+                        <View style={styles.metaRow}>
+                            {priorityInfo && (
+                                <View style={styles.priorityContainer}>
+                                    <Icon name={priorityInfo.icon} size={14} color={priorityInfo.color} style={styles.metaIcon} />
+                                    <Text style={[styles.metaText, { color: priorityInfo.color }]}>{priorityInfo.label}</Text>
+                                </View>
+                            )}
+                            {item.dueAt && (
+                                <View style={styles.dateContainer}>
+                                    <Text style={styles.metaEmoji}>📅</Text>
+                                    <Text style={styles.metaText}>{item.dueAt}</Text>
+                                </View>
+                            )}
+                            {item.completedAt && (
+                                <View style={styles.dateContainer}>
+                                    <Text style={styles.metaEmoji}>✅</Text>
+                                    <Text style={styles.metaText}>{item.completedAt}</Text>
+                                </View>
+                            )}
+                            {item.canceledAt && (
+                                <View style={styles.dateContainer}>
+                                    <Text style={styles.metaEmoji}>❌</Text>
+                                    <Text style={styles.metaText}>{item.canceledAt}</Text>
+                                </View>
+                            )}
+                        </View>
+                    </TouchableOpacity>
+                </View>
             </View>
         );
     };
 
-    const renderSectionHeader = ({ section: { title, type } }: { section: SectionData }) => {
+    const renderSectionHeader = ({ section: { title } }: { section: SectionData }) => {
         if (!title) return null; // Hide header for Todo
 
         return (
@@ -330,8 +413,11 @@ export const TodoScreen = () => {
                 visible={isModalVisible}
                 initialId={editingTodo?.id} // Use unique ID to manage draft keys
                 initialContent={editingTodo?.content}
+                initialPriority={editingTodo?.priority}
+                initialDueAt={editingTodo?.dueAt}
                 onSave={handleSaveTodoContent}
                 onCancel={() => { setIsModalVisible(false); setEditingTodo(undefined); }}
+                mode="todo"
             />
 
             <ActionSheetModal
@@ -343,6 +429,13 @@ export const TodoScreen = () => {
                     setSelectedTodo(undefined);
                 }}
             />
+
+            <TouchableOpacity
+                style={styles.fab}
+                onPress={() => { setEditingTodo(undefined); setIsModalVisible(true); }}
+            >
+                <Icon name="add" size={24} color={theme.colors.white} />
+            </TouchableOpacity>
         </View>
     );
 };
@@ -386,7 +479,7 @@ const styles = StyleSheet.create({
         marginLeft: theme.spacing.xs,
     },
     itemContainer: {
-        flexDirection: 'row',
+        flexDirection: 'column',
         alignItems: 'flex-start',
         padding: theme.spacing.m,
         backgroundColor: theme.colors.surface,
@@ -398,6 +491,11 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.20,
         shadowRadius: 1.41,
         elevation: 2,
+    },
+    itemBody: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        width: '100%',
     },
     iconContainer: {
         marginRight: theme.spacing.m,
@@ -412,7 +510,7 @@ const styles = StyleSheet.create({
     noteTime: {
         fontSize: 10,
         color: theme.colors.textSecondary,
-        marginTop: 2,
+        marginBottom: 4,
     },
     emptyContainer: {
         padding: theme.spacing.xl,
@@ -436,5 +534,44 @@ const styles = StyleSheet.create({
     sectionHeaderDoneContent: {
         flexDirection: 'row',
         alignItems: 'center',
+    },
+    fab: {
+        position: 'absolute',
+        right: theme.spacing.lg,
+        bottom: theme.spacing.lg,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: theme.colors.primary,
+        justifyContent: 'center',
+        alignItems: 'center',
+        elevation: 4,
+        shadowColor: theme.colors.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+    },
+    metaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 4,
+    },
+    metaIcon: {
+        marginRight: 2, // Reduced from 6 for tighter spacing with text
+    },
+    dateContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginRight: 8,
+    },
+    metaText: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        marginLeft: 2,
+    },
+    priorityContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginRight: 8,
     },
 });

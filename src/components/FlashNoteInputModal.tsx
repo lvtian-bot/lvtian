@@ -9,18 +9,23 @@ import {
     Platform,
     Dimensions,
     Alert,
+    Text,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
+import { Priority } from '../types/todo';
 
 interface FlashNoteInputModalProps {
     visible: boolean;
     initialId?: string; // For editing existing note
     initialContent?: string;
+    initialPriority?: Priority;
+    initialDueAt?: string;
     onSave: (id: string | undefined, content: string) => void;
     onCancel: () => void;
+    mode?: 'todo' | 'note';
 }
 
 const { height: screenHeight } = Dimensions.get('window');
@@ -36,12 +41,19 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     visible,
     initialId,
     initialContent,
+    initialPriority,
+    initialDueAt,
     onSave,
     onCancel,
+    mode = 'todo',
 }) => {
     const { t } = useTranslation();
     const [inputText, setInputText] = useState(initialContent || '');
+    const [priority, setPriority] = useState<Priority>(initialPriority || 'none');
+    const [dueAt, setDueAt] = useState<string | undefined>(initialDueAt);
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
+    const [showDateInput, setShowDateInput] = useState(false);
+
     const inputRef = useRef<TextInput>(null);
     const isDraftLoaded = useRef(false); // Ref to track if draft check is done to avoid overwriting with initialContent
 
@@ -96,8 +108,14 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             // Reset state before checking draft
             isDraftLoaded.current = false;
             checkDraft();
+
+            // Reset fields if not draft (draft logic handles text, but what about fields? 
+            // For simplicity, draft only restores text. Fields reset to initial.)
+            setPriority(initialPriority || 'none');
+            setDueAt(initialDueAt);
+            setShowDateInput(!!initialDueAt);
         }
-    }, [visible, initialId, initialContent, MIN_HEIGHT, t]);
+    }, [visible, initialId, initialContent, initialPriority, initialDueAt, MIN_HEIGHT, t]);
 
 
     // Auto-save draft
@@ -126,13 +144,32 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     }, [inputText, visible, initialId, initialContent]);
 
 
-    const handleSave = async () => {
+    const handleSaveWithTags = async () => {
         if (!inputText.trim()) {
             Alert.alert(t('common.error'), t('timeline.emptyNoteError'));
             return;
         }
 
-        // Clear draft on save
+        // Construct content with tags
+        let finalContent = inputText.trim();
+
+        // Add Priority Tag
+        if (priority !== 'none') {
+            switch (priority) {
+                case 'highest': finalContent += ' 🔺'; break;
+                case 'high': finalContent += ' ⏫'; break;
+                case 'medium': finalContent += ' 🔼'; break;
+                case 'low': finalContent += ' 🔽'; break;
+                case 'lowest': finalContent += ' ⏬'; break;
+            }
+        }
+
+        // Add Due Date Tag
+        if (dueAt) {
+            finalContent += ` 📅 ${dueAt}`;
+        }
+
+        // Clear draft
         try {
             const draftKey = initialId
                 ? `${FLASH_NOTE_DRAFT_EDIT_PREFIX}${initialId}`
@@ -142,7 +179,25 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             console.error('Failed to clear draft:', error);
         }
 
-        onSave(initialId, inputText);
+        onSave(initialId, finalContent);
+    };
+
+    const togglePriority = () => {
+        const order: Priority[] = ['none', 'highest', 'high', 'medium', 'low', 'lowest'];
+        const currentIndex = order.indexOf(priority);
+        const nextIndex = (currentIndex + 1) % order.length;
+        setPriority(order[nextIndex]);
+    };
+
+    const getPriorityDisplay = () => {
+        switch (priority) {
+            case 'highest': return { icon: 'error', label: t('priority.highest') || 'Highest', color: theme.colors.danger || '#F44336' };
+            case 'high': return { icon: 'keyboard-double-arrow-up', label: t('priority.high') || 'High', color: theme.colors.orange || '#FF9800' };
+            case 'medium': return { icon: 'keyboard-arrow-up', label: t('priority.medium') || 'Medium', color: theme.colors.warning || '#FFC107' };
+            case 'low': return { icon: 'keyboard-arrow-down', label: t('priority.low') || 'Low', color: theme.colors.info || '#2196F3' };
+            case 'lowest': return { icon: 'keyboard-double-arrow-down', label: t('priority.lowest') || 'Lowest', color: theme.colors.textSecondary || '#9E9E9E' };
+            default: return { icon: 'outlined-flag', label: t('priority.none') || 'Priority', color: theme.colors.textSecondary };
+        }
     };
 
     const handleCancel = async () => {
@@ -173,7 +228,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                     },
                     {
                         text: t('common.save'),
-                        onPress: handleSave,
+                        onPress: handleSaveWithTags,
                     },
                 ]
             );
@@ -181,6 +236,8 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             onCancel();
         }
     };
+
+    const priorityDisplay = getPriorityDisplay();
 
     return (
         <Modal
@@ -217,7 +274,51 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                         }}
                     />
                     <View style={styles.actionContainer}>
-                        <TouchableOpacity onPress={handleSave} style={styles.sendButton}>
+                        <View style={styles.toolbar}>
+                            {mode === 'todo' && (
+                                <>
+                                    <TouchableOpacity 
+                                        onPress={togglePriority} 
+                                        style={[
+                                            styles.priorityButton, 
+                                            { borderColor: priorityDisplay.color }
+                                        ]}
+                                    >
+                                        <Icon name={priorityDisplay.icon} size={16} color={priorityDisplay.color} />
+                                        <Text style={[styles.priorityButtonText, { color: priorityDisplay.color }]}>
+                                            {priorityDisplay.label}
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    {showDateInput || dueAt ? (
+                                        <View style={styles.dateInputContainer}>
+                                            <Icon name="event" size={20} color={theme.colors.primary} style={styles.dateIcon} />
+                                            <TextInput
+                                                style={styles.dateInput}
+                                                value={dueAt || ''}
+                                                onChangeText={setDueAt}
+                                                placeholder="YYYY-MM-DD"
+                                                placeholderTextColor={theme.colors.textSecondary}
+                                                keyboardType="numeric"
+                                                maxLength={10}
+                                                autoFocus
+                                                onBlur={() => { if (!dueAt) setShowDateInput(false); }}
+                                            />
+                                            {dueAt ? (
+                                                <TouchableOpacity onPress={() => { setDueAt(undefined); setShowDateInput(false); }} style={styles.clearDateButton}>
+                                                    <Icon name="close" size={16} color={theme.colors.textSecondary} />
+                                                </TouchableOpacity>
+                                            ) : null}
+                                        </View>
+                                    ) : (
+                                        <TouchableOpacity onPress={() => setShowDateInput(true)} style={styles.toolbarButton}>
+                                            <Icon name="event" size={24} color={theme.colors.textSecondary} />
+                                        </TouchableOpacity>
+                                    )}
+                                </>
+                            )}
+                        </View>
+                        <TouchableOpacity onPress={handleSaveWithTags} style={styles.sendButton}>
                             <Icon name="send" size={24} color={theme.colors.primary} />
                         </TouchableOpacity>
                     </View>
@@ -259,13 +360,59 @@ const styles = StyleSheet.create({
     actionContainer: {
         position: 'absolute',
         right: theme.spacing.l,
-        bottom: theme.spacing.xs, // Reduced from s (8) to xs (4)
+        bottom: theme.spacing.xs,
         flexDirection: 'row',
-        justifyContent: 'flex-end',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        left: theme.spacing.l, // Make it span full width minus padding
+    },
+    toolbar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    priorityButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 16,
+        borderWidth: 1,
+        marginRight: theme.spacing.s,
+        backgroundColor: theme.colors.background,
+    },
+    priorityButtonText: {
+        fontSize: 12,
+        fontWeight: '600',
+        marginLeft: 4,
+    },
+    toolbarButton: {
+        padding: theme.spacing.s,
+        marginRight: theme.spacing.s,
     },
     sendButton: {
         padding: theme.spacing.s,
-        backgroundColor: theme.colors.surface, // Optional: add background to button if needed, or keep transparent
+        backgroundColor: theme.colors.surface,
         borderRadius: 20,
+    },
+    dateInputContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: theme.colors.background,
+        borderRadius: 16,
+        paddingHorizontal: theme.spacing.s,
+        height: 40,
+        marginLeft: theme.spacing.s,
+    },
+    dateIcon: {
+        marginRight: 4,
+    },
+    dateInput: {
+        fontSize: 14,
+        color: theme.colors.text,
+        minWidth: 100,
+        paddingVertical: 0,
+    },
+    clearDateButton: {
+        padding: 4,
     },
 });

@@ -7,6 +7,8 @@ import { normalizePath } from '../utils/pathUtils';
 import { syncService } from './SyncService';
 import { shadowFileService } from './ShadowFileService';
 import { mergeUtils } from '../utils/mergeUtils';
+import { TodoItem, TodoStatus } from '../types/todo';
+import { TodoParser } from '../utils/TodoParser';
 
 export interface FlashNote {
     id: string;
@@ -15,19 +17,11 @@ export interface FlashNote {
     filePath: string; // Added source file path
 }
 
-export type TodoStatus = 'todo' | 'done' | 'in-progress' | 'canceled';
-
-export interface TodoItem {
-    id: string; // Combination of noteId and line index/content hash to be unique
-    noteId: string;
-    content: string;
-    status: TodoStatus;
-    rawLine: string;
-    filePath: string; // Added source file path
-}
+// TodoStatus and TodoItem are now imported from ../types/todo
+export { TodoItem, TodoStatus };
 
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
-const TODO_REGEX = /^(\s*)-\s\[([ x/-])\]\s+(.*)$/;
+// TODO_REGEX is now handled by TodoParser
 
 export const FLASH_NOTES_UPDATED_EVENT = 'FLASH_NOTES_UPDATED';
 export const SHARE_RECEIVED_EVENT = 'SHARE_RECEIVED_EVENT';
@@ -144,6 +138,12 @@ class FlashNoteService {
         return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     }
 
+    private getDateString(): string {
+        const now = new Date();
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    }
+
     parseNotes(content: string, filePath: string = ''): FlashNote[] {
         const { flashNoteConfig } = useSettingsStore.getState();
         const suffix = flashNoteConfig.suffix || '';
@@ -191,26 +191,9 @@ class FlashNoteService {
         notes.forEach(note => {
             const lines = note.content.split('\n');
             lines.forEach((line, index) => {
-                const match = line.match(TODO_REGEX);
-                if (match) {
-                    const [, , mark, content] = match;
-                    let status: TodoStatus = 'todo';
-
-                    switch (mark) {
-                        case 'x': status = 'done'; break;
-                        case '/': status = 'in-progress'; break;
-                        case '-': status = 'canceled'; break;
-                        default: status = 'todo';
-                    }
-
-                    todos.push({
-                        id: `${note.id}-${index}`,
-                        noteId: note.id,
-                        content: content.trim(),
-                        status,
-                        rawLine: line,
-                        filePath: note.filePath
-                    });
+                const todoItem = TodoParser.parse(line, note.id, note.filePath, index);
+                if (todoItem) {
+                    todos.push(todoItem);
                 }
             });
         });
@@ -298,51 +281,38 @@ class FlashNoteService {
         const newBlocks = noteBlocks.map(block => {
             if (block.trim().startsWith(`## ${noteId}`)) {
                 noteFound = true;
-                // Replace the specific line within this block
-                // We use rawLine to be safe, but we need to be careful about duplicate lines.
-                // However, since we are inside a specific note block (identified by ID/Timestamp), 
-                // risk is minimized.
 
-                // Construct new mark
-                let newMark = ' ';
-                switch (newStatus) {
-                    case 'done': newMark = 'x'; break;
-                    case 'in-progress': newMark = '/'; break;
-                    case 'canceled': newMark = '-'; break;
-                    default: newMark = ' ';
-                }
-
-                // Regex to match the specific line. 
-                // rawLine e.g. "- [ ] Buy milk"
-                // We want to replace "- [ ]" with "- [x]" but keep indentation and content
-
-                const match = rawLine.match(TODO_REGEX);
-                if (match) {
-                    const [, indent, , content] = match;
-                    const newLine = `${indent}- [${newMark}] ${content}`;
-                    // Replace only the first occurrence of rawLine in this block to avoid replacing duplicates incorrectly?
-                    // Actually, simple string replace on the block might be risky if multiple identical todos exist.
-                    // Let's try to split the block by lines and match.
-                    const lines = block.split('\n');
-                    let replaced = false;
-                    const newLines = lines.map(line => {
-                        // Trim right to avoid whitespace issues during comparison if needed, 
-                        // but rawLine usually comes from parsed content which might have stripped some chars?
-                        // FlashNoteService.parseNotes DOES NOT strip whitespace from lines, except maybe the suffix at the very end of the note.
-
-                        // Let's try exact match first
-                        if (!replaced && line === rawLine) {
+                const lines = block.split('\n');
+                let replaced = false;
+                const newLines = lines.map((line, index) => {
+                    // Try exact match or trimmed match
+                    if (!replaced && (line === rawLine || line.trim() === rawLine.trim())) {
+                        const todoItem = TodoParser.parse(line, noteId, targetPath, index);
+                        if (todoItem) {
                             replaced = true;
-                            return newLine;
-                        }
-                        // Fallback: try matching trimmed version if exact match fails (e.g. whitespace diffs)
-                        if (!replaced && line.trim() === rawLine.trim()) {
-                            replaced = true;
-                            return newLine;
-                        }
-                        return line;
-                    });
+                            todoItem.status = newStatus;
 
+                            const today = this.getDateString();
+
+                            if (newStatus === 'done') {
+                                todoItem.completedAt = today;
+                                todoItem.canceledAt = undefined;
+                            } else if (newStatus === 'canceled') {
+                                todoItem.canceledAt = today;
+                                todoItem.completedAt = undefined;
+                            } else {
+                                // Reset dates if moving back to todo/in-progress
+                                todoItem.completedAt = undefined;
+                                todoItem.canceledAt = undefined;
+                            }
+
+                            return TodoParser.serialize(todoItem);
+                        }
+                    }
+                    return line;
+                });
+
+                if (replaced) {
                     return newLines.join('\n');
                 }
             }
@@ -375,27 +345,39 @@ class FlashNoteService {
             if (block.trim().startsWith(`## ${noteId}`)) {
                 noteFound = true;
 
-                const match = rawLine.match(TODO_REGEX);
-                if (match) {
-                    const [, indent, mark] = match;
-                    // Construct new line with same indentation and mark, but new content
-                    const newLine = `${indent}- [${mark}] ${newContentText}`;
+                const lines = block.split('\n');
+                let replaced = false;
+                const newLines = lines.map((line, index) => {
+                    if (!replaced && (line === rawLine || line.trim() === rawLine.trim())) {
+                        const todoItem = TodoParser.parse(line, noteId, targetPath, index);
+                        if (todoItem) {
+                            replaced = true;
 
-                    const lines = block.split('\n');
-                    let replaced = false;
-                    const newLines = lines.map(line => {
-                        if (!replaced && line === rawLine) {
-                            replaced = true;
-                            return newLine;
+                            // Parse the new content text to extract potential tags (priority, due date)
+                            // We construct a dummy line to use the parser
+                            const dummyLine = `- [ ] ${newContentText}`;
+                            const parsedNew = TodoParser.parse(dummyLine, '', '', 0);
+
+                            if (parsedNew) {
+                                todoItem.content = parsedNew.content;
+                                todoItem.priority = parsedNew.priority;
+                                todoItem.dueAt = parsedNew.dueAt;
+                                // We preserve completedAt/canceledAt from the original item unless explicitly changed?
+                                // The parser for dummy line won't have them unless user typed them.
+                                // If user typed them, we might want to update them.
+                                if (parsedNew.completedAt) todoItem.completedAt = parsedNew.completedAt;
+                                if (parsedNew.canceledAt) todoItem.canceledAt = parsedNew.canceledAt;
+                            } else {
+                                // Fallback if parsing failed (unlikely)
+                                todoItem.content = newContentText;
+                            }
+
+                            return TodoParser.serialize(todoItem);
                         }
-                        if (!replaced && line.trim() === rawLine.trim()) {
-                            replaced = true;
-                            return newLine;
-                        }
-                        return line;
-                    });
-                    return newLines.join('\n');
-                }
+                    }
+                    return line;
+                });
+                return newLines.join('\n');
             }
             return block;
         });

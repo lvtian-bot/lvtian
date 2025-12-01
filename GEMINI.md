@@ -3,11 +3,10 @@
 This is a React Native application named "MDNote", designed as a cloud-first, local-accelerated Markdown note-taking app. It allows users to read and write notes directly from a cloud storage provider, with a focus on Tencent Cloud Object Storage (COS).
 
 ## 工作方式
-1. 所有的思考过程、回答、Task文档、Implementation Plan文档以及其他生成的Artifacts必须使用中文编写，即便我是用英文提问
+1. 【重要！！！】【IMPORTANT!!!】所有的回答、Task文档、Implementation Plan文档以及其他生成的Artifacts必须使用中文，即便我是用英文提问！！！
 2. 不得在经过我的同意之前，直接开始修改代码
 3. 对于我提出的问题，不得在没有了解相关信息的情况下通过猜测和推断回答，可以自行读取文件进行分析后回答
 4. 回答我的问题时要有结构化思路，不需要在回复中呈现过多的代码，更多的需要用自然语言说清楚方案逻辑和内容
-5. 命令行解释器是git bash，相关工具请使用与git bash兼容的命令行工具
 
 ## Building and Running
 

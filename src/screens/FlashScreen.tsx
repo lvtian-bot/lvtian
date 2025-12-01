@@ -432,7 +432,7 @@ export const FlashScreen = () => {
                 style={styles.fab}
                 onPress={() => { setEditingNoteId(undefined); setEditingNoteContent(undefined); setIsModalVisible(true); }}
             >
-                <Icon name="add" size={24} color={theme.colors.white} />
+                <Icon name="flash-on" size={24} color={theme.colors.white} />
             </TouchableOpacity>
 
             <FlashNoteInputModal
@@ -441,6 +441,7 @@ export const FlashScreen = () => {
                 initialContent={editingNoteContent}
                 onSave={handleSaveFlashNote}
                 onCancel={handleCancelFlashNote}
+                mode="note"
             />
 
             <ActionSheetModal

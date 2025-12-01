@@ -18,7 +18,7 @@ const FlashIcon = ({ color, size }: { color: string; size: number }) => (
 );
 
 const TodoIcon = ({ color, size }: { color: string; size: number }) => (
-    <Icon name="playlist-add-check" color={color} size={size} />
+    <Icon name="task-alt" color={color} size={size} />
 );
 
 const NoteIcon = ({ color, size }: { color: string; size: number }) => (
