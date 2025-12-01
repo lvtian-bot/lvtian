@@ -286,7 +286,11 @@ export const TodoScreen = () => {
         const priorityInfo = getPriorityDisplay(item.priority);
 
         return (
-            <View style={styles.itemContainer}>
+            <TouchableOpacity // Changed from View to TouchableOpacity
+                style={styles.itemContainer}
+                onPress={() => handleContentPress(item)}
+                onLongPress={() => handleLongPress(item)}
+            >
                 {/* Row 1: Date */}
                 <Text style={styles.noteTime}>{item.noteId}</Text>
                 
@@ -296,10 +300,8 @@ export const TodoScreen = () => {
                         <Icon name={iconName} size={24} color={iconColor} />
                     </TouchableOpacity>
 
-                    <TouchableOpacity
+                    <View // Changed from TouchableOpacity to View
                         style={styles.contentContainer}
-                        onPress={() => handleContentPress(item)}
-                        onLongPress={() => handleLongPress(item)}
                     >
                         <Text style={[styles.itemText, { textDecorationLine, color: textColor, fontSize }]}>
                             {item.content}
@@ -331,9 +333,9 @@ export const TodoScreen = () => {
                                 </View>
                             )}
                         </View>
-                    </TouchableOpacity>
+                    </View>
                 </View>
-            </View>
+            </TouchableOpacity>
         );
     };
 
