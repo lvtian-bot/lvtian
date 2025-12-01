@@ -16,3 +16,4 @@ extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autoli
 rootProject.name = 'MDNote'
 include ':app'
 includeBuild('../node_modules/@react-native/gradle-plugin')
+

@@ -5,7 +5,7 @@ import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navig
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import Markdown, { RenderRules } from 'react-native-markdown-display';
-import FastImage from 'react-native-fast-image';
+import FastImage from '@d11/react-native-fast-image';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
@@ -30,7 +30,7 @@ export const PreviewScreen = () => {
 
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
-    
+
     // Use the new hook
     const { syncStatus, conflictType, isSyncing, checkSync, performAutoSync, resolveConflict } = useCloudSync(filePath);
 
@@ -43,8 +43,8 @@ export const PreviewScreen = () => {
     );
 
     // Helper to determine effective sync state for icon
-    const isEffectivelySyncing = isSyncing || 
-        syncStatus === 'checking' || 
+    const isEffectivelySyncing = isSyncing ||
+        syncStatus === 'checking' ||
         (syncStatus === 'conflict' && (conflictType === 'cloudNewer' || conflictType === 'localNewer'));
 
     const AutoImage = ({ source, style, accessibilityLabel }: any) => {
@@ -122,15 +122,15 @@ export const PreviewScreen = () => {
             // and seemingly expected user to view the backup? 
             // Wait, original logic: moveFile(current, backup) -> upload(backup) -> navigate(backup).
             // This means user continues viewing the LOCAL version (which is now backup).
-            
+
             // SyncService logic: moveFile(current, backup) -> upload(backup) -> download(cloud, current).
             // This means 'current' (filePath) now has Cloud content. 'backup' has Local content.
-            
+
             // If we want to mimic original behavior strictly (keep viewing local content), we should navigate to backup.
             // BUT, usually 'Resolve Conflict -> Save Copy' means "I want to keep my changes safe, but accept cloud version as main".
             // So staying on filePath (which is now Cloud version) seems more correct for a "Sync" resolution.
             // And the backup is safe.
-            
+
             // Let's stick to SyncService logic: View the now-synced file.
             await loadFile();
             Alert.alert(t('common.success'), 'Local changes saved to copy. Now viewing cloud version.');
