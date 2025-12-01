@@ -47,7 +47,7 @@ const MessageView = ({ title, message, buttonText, onButtonPress }: { title: str
     </View>
 );
 
-export const BrowserScreen = () => {
+export const NoteScreen = () => {
     const { t } = useTranslation();
     const [files, setFiles] = useState<ExtendedFileItem[]>([]);
     const [status, setStatus] = useState<Status>('idle');
@@ -88,8 +88,8 @@ export const BrowserScreen = () => {
     }, []);
 
     const loadFiles = useCallback(async () => {
-        console.log('[BrowserScreen] loadFiles, prefix:', prefix);
-        
+        console.log('[NoteScreen] loadFiles, prefix:', prefix);
+
         if (!cloudService.isConfigured()) {
             setStatus('unconfigured');
             return;
@@ -123,7 +123,7 @@ export const BrowserScreen = () => {
 
         } catch (error: any) {
             console.error('[BrowserScreen] Cloud load failed:', error);
-            
+
             // If we have files (from cache), just show offline banner
             if (files.length > 0) {
                 setIsOfflineMode(true);
@@ -132,12 +132,12 @@ export const BrowserScreen = () => {
 
             // Simplified Error Handling: NO local FS fallback for now to reduce complexity
             setIsOfflineMode(true);
-            
+
             let message = t('browser.error.default');
             if (error?.code === 'SignatureDoesNotMatch') message = t('browser.error.auth');
             else if (error?.code === 'NoSuchBucket') message = t('browser.error.bucket');
             else if (error?.code === 'NetworkError') message = t('browser.error.network');
-            
+
             setErrorMessage(message);
             setStatus('error');
         }
@@ -152,14 +152,13 @@ export const BrowserScreen = () => {
     // Header Options
     useEffect(() => {
         navigation.setOptions({
-            title: t('tabs.browser'),
             headerRight: () => (
                 <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
                     <Icon name="note-add" size={24} color={theme.colors.primary} />
                 </TouchableOpacity>
             ),
         });
-    }, [navigation, t]);
+    }, [navigation]);
 
     // Create File Logic
     const handleCreateFile = async (filename: string) => {
@@ -167,7 +166,7 @@ export const BrowserScreen = () => {
         let finalFilename = filename.trim();
         if (!finalFilename) return;
         if (!finalFilename.toLowerCase().endsWith('.md')) finalFilename += '.md';
-        
+
         const fullPath = prefix + finalFilename;
         try {
             const exists = await fsService.exists(fullPath);
@@ -215,13 +214,13 @@ export const BrowserScreen = () => {
                                 console.log('Deleting file:', fileToDelete.path);
                                 // 1. Delete from Cloud
                                 await cloudService.deleteFile(fileToDelete.path);
-                                
+
                                 // 2. Try delete from Local (Clean up cache)
                                 const localExists = await fsService.exists(fileToDelete.path);
                                 if (localExists) {
                                     await fsService.deleteFile(fileToDelete.path);
                                 }
-                                
+
                                 // 3. Refresh List
                                 loadFiles();
                             } catch (error) {
@@ -240,31 +239,31 @@ export const BrowserScreen = () => {
 
     const handleRename = async (newName: string) => {
         if (!selectedFile) return;
-        
+
         const oldPath = selectedFile.path;
         const pathParts = oldPath.split('/');
         pathParts[pathParts.length - (selectedFile.isDirectory ? 2 : 1)] = newName;
         const newPath = pathParts.join('/');
-        
+
         try {
             // 1. Rename Local if exists (to ensure content preservation for upload)
             // If local doesn't exist, we need to download first?
             // Actually, for rename, if we don't have local, we can technically copy+delete on cloud.
             // But TencentCOSProvider doesn't expose copyObject yet. 
             // So safe fallback: Ensure local exists -> Move Local -> Upload New -> Delete Old Cloud.
-            
+
             let hasContent = await fsService.exists(oldPath);
             if (!hasContent && !selectedFile.isDirectory) {
-                 // Download content first if missing locally
-                 await syncService.performDownload(oldPath);
-                 hasContent = true; 
+                // Download content first if missing locally
+                await syncService.performDownload(oldPath);
+                hasContent = true;
             }
 
             if (hasContent) {
                 await fsService.moveFile(oldPath, newPath);
                 await syncService.uploadFile(newPath);
                 await cloudService.deleteFile(oldPath);
-                
+
                 Alert.alert(t('common.success'), 'Rename successful');
                 loadFiles();
             } else {
@@ -280,7 +279,7 @@ export const BrowserScreen = () => {
     };
 
     const handleMove = async (targetPath: string) => {
-         if (!selectedFile) return;
+        if (!selectedFile) return;
 
         try {
             const oldPath = selectedFile.path;
@@ -292,12 +291,12 @@ export const BrowserScreen = () => {
                 setSelectedFile(null);
                 return;
             }
-            
+
             // Similar logic to Rename: Move Local -> Upload New -> Delete Old Cloud
             let hasContent = await fsService.exists(oldPath);
             if (!hasContent && !selectedFile.isDirectory) {
-                 await syncService.performDownload(oldPath);
-                 hasContent = true;
+                await syncService.performDownload(oldPath);
+                hasContent = true;
             }
 
             if (hasContent) {
@@ -308,7 +307,7 @@ export const BrowserScreen = () => {
                 Alert.alert(t('common.success'), 'Move successful');
                 loadFiles();
             } else {
-                 throw new Error('Cannot move: Local file sync failed.');
+                throw new Error('Cannot move: Local file sync failed.');
             }
 
         } catch (error) {
@@ -333,12 +332,12 @@ export const BrowserScreen = () => {
                     // Not found locally, download on demand
                     setStatus('loading'); // Show spinner while downloading
                     const success = await syncService.performDownload(item.path);
-                    
+
                     if (success) {
-                         setStatus('success');
-                         navigation.navigate('Preview', { filePath: item.path });
+                        setStatus('success');
+                        navigation.navigate('Preview', { filePath: item.path });
                     } else {
-                         throw new Error(t('browser.error.downloadFailed') || 'Download failed');
+                        throw new Error(t('browser.error.downloadFailed') || 'Download failed');
                     }
                 }
             } catch (error) {
@@ -348,13 +347,13 @@ export const BrowserScreen = () => {
             }
         }
     };
-    
+
     const handleFileLongPress = (item: ExtendedFileItem) => {
         if (item.isDirectory) return;
         setSelectedFile(item);
         setShowActionSheet(true);
     };
-    
+
     const getFileActions = (): FileAction[] => {
         if (!selectedFile) return [];
         return [
@@ -434,13 +433,13 @@ export const BrowserScreen = () => {
         <View style={styles.container}>
             <Breadcrumb path={prefix} onPathPress={setPrefix} />
             {renderContent()}
-            
+
             <CreateFileModal
                 visible={isCreateModalVisible}
                 onConfirm={handleCreateFile}
                 onCancel={() => setIsCreateModalVisible(false)}
             />
-            
+
             {selectedFile && (
                 <>
                     <FileActionSheet

@@ -75,7 +75,7 @@ export const CacheManagerScreen = () => {
                     const scanDirPath = historyFolderPath || path || ''; // Use history folder if set, else main path
                     // Ensure the filePath starts with the expected directory for flash notes
                     if (normalizePath(filePath).startsWith(normalizePath(scanDirPath))) {
-                         return true;
+                        return true;
                     }
                 }
             }
@@ -202,7 +202,7 @@ export const CacheManagerScreen = () => {
 
     const performDelete = async (file: CacheFileItem) => {
         try {
-            await fsService.deleteFile(file.path);
+            await fsService.deleteFile(file.relativePath);
             loadFiles();
         } catch (error) {
             console.error('Failed to delete file:', error);

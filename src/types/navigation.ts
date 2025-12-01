@@ -1,9 +1,9 @@
 import { NavigatorScreenParams } from '@react-navigation/native';
 
 export type MainTabParamList = {
-    Timeline: undefined;
+    Flash: undefined;
     Todo: undefined;
-    Browser: undefined;
+    Note: undefined;
     Settings: undefined;
 };
 

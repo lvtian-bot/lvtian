@@ -37,6 +37,11 @@ class SyncService {
         const localMetadata = getMetadata(filePath);
 
         // 1. 检查云端配置
+        // 必须先检查是否初始化完成，否则可能在启动过程中误报未配置
+        if (!cloudService.isInitialized()) {
+            return { status: 'checking', conflictType: null };
+        }
+
         if (!cloudService.isConfigured()) {
             return { status: 'not-configured', conflictType: null };
         }

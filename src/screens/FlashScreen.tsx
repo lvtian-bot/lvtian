@@ -19,11 +19,11 @@ import { ActionSheetModal, ActionItem } from '../components/ActionSheetModal';
 import { useCloudSync } from '../hooks/useCloudSync';
 import { HeaderSyncStatus } from '../components/HeaderSyncStatus';
 
-type TimelineScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type FlashScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-export const TimelineScreen = () => {
+export const FlashScreen = () => {
     const [notes, setNotes] = useState<FlashNote[]>([]);
-    const navigation = useNavigation<TimelineScreenNavigationProp>();
+    const navigation = useNavigation<FlashScreenNavigationProp>();
     const { flashNoteConfig } = useSettingsStore();
     const { t } = useTranslation();
 
@@ -225,6 +225,12 @@ export const TimelineScreen = () => {
         setIsActionSheetVisible(true);
     };
 
+    const handleEditNote = (note: FlashNote) => {
+        setEditingNoteId(note.id);
+        setEditingNoteContent(note.content.trim());
+        setIsModalVisible(true);
+    };
+
     const getActionSheetActions = (): ActionItem[] => {
         if (!selectedNote) return [];
 
@@ -240,11 +246,7 @@ export const TimelineScreen = () => {
             {
                 label: t('common.edit'),
                 icon: 'edit',
-                onPress: () => {
-                    setEditingNoteId(selectedNote.id);
-                    setEditingNoteContent(selectedNote.content.trim());
-                    setIsModalVisible(true);
-                },
+                onPress: () => handleEditNote(selectedNote),
             },
             {
                 label: t('common.delete'),
@@ -315,22 +317,22 @@ export const TimelineScreen = () => {
 
     useLayoutEffect(() => {
         navigation.setOptions({
-            title: t('timeline.title'),
             headerRight: () => (
                 <HeaderSyncStatus isSyncing={isSyncing} syncStatus={syncStatus} conflictType={conflictType} />
             ),
         });
-    }, [navigation, t, syncStatus, isSyncing, conflictType]);
+    }, [navigation, syncStatus, isSyncing, conflictType]);
 
     const renderItem = ({ item }: { item: FlashNote }) => (
-        <TouchableOpacity
-            onLongPress={() => handleNoteLongPress(item)}
-        >
-            <View style={styles.card}>
+        <View style={styles.card}>
+            <TouchableOpacity
+                onPress={() => handleEditNote(item)}
+                onLongPress={() => handleNoteLongPress(item)}
+            >
                 <Text style={styles.timestamp}>{item.timestamp}</Text>
                 <Text style={styles.content}>{item.content.trim()}</Text>
-            </View>
-        </TouchableOpacity>
+            </TouchableOpacity>
+        </View>
     );
 
     const renderFooter = () => {

@@ -355,6 +355,7 @@ const styles = StyleSheet.create({
     listContent: {
         paddingBottom: 20,
         paddingHorizontal: theme.spacing.m,
+        paddingTop: theme.spacing.m,
     },
     sectionHeader: {
         backgroundColor: theme.colors.background,

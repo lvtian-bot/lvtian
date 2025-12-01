@@ -59,7 +59,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: theme.colors.background,
         paddingHorizontal: theme.spacing.m,
-        paddingVertical: theme.spacing.xs,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
     },

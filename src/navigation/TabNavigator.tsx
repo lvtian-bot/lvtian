@@ -3,9 +3,9 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 
-import { TimelineScreen } from '../screens/TimelineScreen';
+import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
-import { BrowserScreen } from '../screens/BrowserScreen';
+import { NoteScreen } from '../screens/NoteScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { MainTabParamList } from '../types/navigation';
 
@@ -13,7 +13,7 @@ import { theme } from '../utils/theme';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
-const TimelineIcon = ({ color, size }: { color: string; size: number }) => (
+const FlashIcon = ({ color, size }: { color: string; size: number }) => (
     <Icon name="flash-on" color={color} size={size} />
 );
 
@@ -21,7 +21,7 @@ const TodoIcon = ({ color, size }: { color: string; size: number }) => (
     <Icon name="playlist-add-check" color={color} size={size} />
 );
 
-const BrowserIcon = ({ color, size }: { color: string; size: number }) => (
+const NoteIcon = ({ color, size }: { color: string; size: number }) => (
     <Icon name="folder" color={color} size={size} />
 );
 
@@ -43,12 +43,12 @@ export const TabNavigator = () => {
             }}
         >
             <Tab.Screen
-                name="Timeline"
-                component={TimelineScreen}
+                name="Flash"
+                component={FlashScreen}
                 options={{
                     headerShown: true,
                     title: t('tabs.timeline'),
-                    tabBarIcon: TimelineIcon,
+                    tabBarIcon: FlashIcon,
                 }}
             />
             <Tab.Screen
@@ -61,12 +61,12 @@ export const TabNavigator = () => {
                 }}
             />
             <Tab.Screen
-                name="Browser"
-                component={BrowserScreen}
+                name="Note"
+                component={NoteScreen}
                 options={{
                     headerShown: true,
                     title: t('tabs.browser'),
-                    tabBarIcon: BrowserIcon,
+                    tabBarIcon: NoteIcon,
                 }}
             />
             <Tab.Screen

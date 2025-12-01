@@ -1,26 +1,12 @@
-import { fsService } from './FileSystemService';
+import RNFS from 'react-native-fs';
 import { normalizePath } from '../utils/pathUtils';
 
 class ShadowFileService {
     private getShadowPath(filePath: string): string {
         const normalized = normalizePath(filePath);
-        // Store shadows in a hidden directory in the app's private storage
-        // e.g., /data/user/0/com.mdnote/files/shadows/path/to/file.md
-        // We can just prepend 'shadows/' to the relative path if we treat the root as the app's document dir.
-        // Assuming fsService works with absolute paths or paths relative to DocumentDirectory.
-        // Let's assume we create a 'shadows' folder in the root of DocumentDirectory.
+        // Store shadows in a hidden directory in the app's private storage, outside of mdnote_docs
+        // e.g., /data/user/0/com.mdnote/files/.shadows/hash_filename.md
 
-        // To avoid path traversal issues or complex directory structures, 
-        // we can hash the original path to create a flat shadow filename, 
-        // OR mirror the directory structure inside 'shadows'.
-        // Mirroring is safer for debugging.
-
-        // If filePath is absolute (e.g. /data/.../files/notes/foo.md), 
-        // we need to be careful. 
-        // Let's assume we store shadows in `${fsService.DocumentDirectoryPath}/.shadows/${filename_hash}` 
-        // to keep it simple and avoid deep directory creation issues.
-
-        // Actually, let's use a simple naming convention in a specific folder.
         const filename = normalized.split('/').pop() || 'unknown';
         // Simple hash of the full path to avoid collisions for files with same name in different dirs
         let hash = 0;
@@ -31,39 +17,39 @@ class ShadowFileService {
         }
         const safeHash = Math.abs(hash).toString(16);
 
-        return `${fsService.DocumentDirectoryPath}/.shadows/${safeHash}_${filename}`;
+        return `${RNFS.DocumentDirectoryPath}/.shadows/${safeHash}_${filename}`;
     }
 
     async init(): Promise<void> {
-        const shadowDir = `${fsService.DocumentDirectoryPath}/.shadows`;
-        if (!(await fsService.exists(shadowDir))) {
-            await fsService.createDirectory(shadowDir);
+        const shadowDir = `${RNFS.DocumentDirectoryPath}/.shadows`;
+        if (!(await RNFS.exists(shadowDir))) {
+            await RNFS.mkdir(shadowDir);
         }
     }
 
     async saveShadow(filePath: string, content: string): Promise<void> {
         await this.init();
         const shadowPath = this.getShadowPath(filePath);
-        await fsService.writeFile(shadowPath, content);
+        await RNFS.writeFile(shadowPath, content, 'utf8');
     }
 
     async getShadow(filePath: string): Promise<string | null> {
         const shadowPath = this.getShadowPath(filePath);
-        if (await fsService.exists(shadowPath)) {
-            return await fsService.readFile(shadowPath);
+        if (await RNFS.exists(shadowPath)) {
+            return await RNFS.readFile(shadowPath, 'utf8');
         }
         return null;
     }
 
     async hasShadow(filePath: string): Promise<boolean> {
         const shadowPath = this.getShadowPath(filePath);
-        return await fsService.exists(shadowPath);
+        return await RNFS.exists(shadowPath);
     }
 
     async deleteShadow(filePath: string): Promise<void> {
         const shadowPath = this.getShadowPath(filePath);
-        if (await fsService.exists(shadowPath)) {
-            await fsService.deleteFile(shadowPath);
+        if (await RNFS.exists(shadowPath)) {
+            await RNFS.unlink(shadowPath);
         }
     }
 }

@@ -1,28 +1,28 @@
 {
   "tabs": {
-    "timeline": "Flash Notes",
-    "browser": "Knowledge Base",
+    "timeline": "Flash",
+    "browser": "Notes",
     "todo": "Todos",
     "settings": "Settings"
   },
-      "todo": {
-        "title": "Todos",
-        "inProgress": "In Progress",
-        "todo": "To Do",
-        "finished": "Finished",
-        "changeStatus": "Change Status",
-        "statusTodo": "To Do",
-        "statusInProgress": "In Progress",
-        "statusDone": "Done",
-        "statusCanceled": "Canceled",
-        "empty": "No todos found",
-        "updateStatusFailed": "Failed to update status",
-        "updateContentFailed": "Failed to update content",
-        "setAsDone": "Set as Done",
-        "setAsInProgress": "Set as In Progress",
-        "setAsCanceled": "Set as Canceled/Terminated",
-        "loadMoreHistoryTodos": "Load more historical todos"
-      },  "browser": {
+  "todo": {
+    "inProgress": "In Progress",
+    "todo": "To Do",
+    "finished": "Finished",
+    "changeStatus": "Change Status",
+    "statusTodo": "To Do",
+    "statusInProgress": "In Progress",
+    "statusDone": "Done",
+    "statusCanceled": "Canceled",
+    "empty": "No todos found",
+    "updateStatusFailed": "Failed to update status",
+    "updateContentFailed": "Failed to update content",
+    "setAsDone": "Set as Done",
+    "setAsInProgress": "Set as In Progress",
+    "setAsCanceled": "Set as Canceled/Terminated",
+    "loadMoreHistoryTodos": "Load more historical todos"
+  },
+  "browser": {
     "goBack": "Back",
     "emptyTitle": "Empty",
     "emptyMessage": "There are no files in your cloud storage yet.",
@@ -47,7 +47,6 @@
     "fileAlreadyExists": "File already exists"
   },
   "timeline": {
-    "title": "Flash Notes",
     "add": "Add",
     "placeholder": "What's on your mind?",
     "updateAvailable": "New version available. Tap to update.",
@@ -147,32 +146,32 @@
     "noSafeFiles": "No files safe to clear",
     "showFlashNotes": "Show Flash Note Files"
   },
-      "fileItem": {
-        "folder": "Folder",
-        "kb": "KB"
-      },
-      "flashNoteConfigScreen": {
-        "saveSyncFailed": "Save or sync failed",
-        "saveFailed": "Save failed",
-        "configSavedHistorySynced": "Configuration saved, history files synced.",
-        "saveSuccessHistorySyncFailed": "Save successful, but failed to sync history files.",
-        "mainFileConfig": "Main File Configuration",
-        "mergePathExample": "Merged path, e.g.: notes/flash_notes.md",
-        "saveSyncMainFile": "Save and Sync Main File",
-        "formatSuffix": "Format Suffix",
-        "reference": "(Reference)",
-        "referenceWithSpace": "(Reference + Space)",
-        "saveSuffixConfig": "Save Suffix Configuration",
-        "historyArchive": "History Archive",
-        "historyFileRecognitionMode": "History File Recognition Mode",
-        "historyFileRecognitionDesc": "Automatically load historical files matching the rules (in reverse order by filename)",
-        "noHistory": "Do not load history",
-        "dashYYYYMM": "-YYYYMM (e.g.: -202411)",
-        "underscoreYYYYMM": "_YYYYMM (e.g.: _202411)",
-        "dashYYYY": "-YYYY (e.g.: -2024)",
-        "chineseYYYYMM": "-YYYY年M月 (e.g.: -2024年11月)",
-        "saveSyncHistoryArchive": "Save and Sync History Archive",
-        "syncingMainFile": "Syncing main file...",
-        "scanningDownloadingHistory": "Scanning and downloading history archives..."
-      }
+  "fileItem": {
+    "folder": "Folder",
+    "kb": "KB"
+  },
+  "flashNoteConfigScreen": {
+    "saveSyncFailed": "Save or sync failed",
+    "saveFailed": "Save failed",
+    "configSavedHistorySynced": "Configuration saved, history files synced.",
+    "saveSuccessHistorySyncFailed": "Save successful, but failed to sync history files.",
+    "mainFileConfig": "Main File Configuration",
+    "mergePathExample": "Merged path, e.g.: notes/flash_notes.md",
+    "saveSyncMainFile": "Save and Sync Main File",
+    "formatSuffix": "Format Suffix",
+    "reference": "(Reference)",
+    "referenceWithSpace": "(Reference + Space)",
+    "saveSuffixConfig": "Save Suffix Configuration",
+    "historyArchive": "History Archive",
+    "historyFileRecognitionMode": "History File Recognition Mode",
+    "historyFileRecognitionDesc": "Automatically load historical files matching the rules (in reverse order by filename)",
+    "noHistory": "Do not load history",
+    "dashYYYYMM": "-YYYYMM (e.g.: -202411)",
+    "underscoreYYYYMM": "_YYYYMM (e.g.: _202411)",
+    "dashYYYY": "-YYYY (e.g.: -2024)",
+    "chineseYYYYMM": "-YYYY年M月 (e.g.: -2024年11月)",
+    "saveSyncHistoryArchive": "Save and Sync History Archive",
+    "syncingMainFile": "Syncing main file...",
+    "scanningDownloadingHistory": "Scanning and downloading history archives..."
   }
+}
