@@ -20,6 +20,14 @@ class FileSystemService {
     }
 
     /**
+     * Returns the full absolute path for a given relative path
+     * @param path - The relative path
+     */
+    getAbsolutePath(path: string): string {
+        return this.sanitizePath(path);
+    }
+
+    /**
      * Sanitizes and validates a user-provided path to prevent path traversal attacks
      * @param userPath - The user-provided path
      * @returns The safe, full absolute path

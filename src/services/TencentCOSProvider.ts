@@ -1,4 +1,5 @@
 import COS from 'cos-js-sdk-v5';
+import RNFS from 'react-native-fs';
 import { ICloudProvider, CloudFileItem } from './CloudService';
 import { fsService } from './FileSystemService';
 
@@ -53,22 +54,48 @@ export class TencentCOSProvider implements ICloudProvider {
     }
 
     async downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }> {
-        const data = await this.cos.getObject({
-            Bucket: this.bucket,
-            Region: this.region,
-            Key: key,
+        // Get signed URL first to bypass SDK's internal response parsing (which fails in RN for XML/binary)
+        const url = await new Promise<string>((resolve, reject) => {
+            this.cos.getObjectUrl({
+                Bucket: this.bucket,
+                Region: this.region,
+                Key: key,
+                Sign: true,
+                Expires: 300,
+            }, (err, data) => {
+                if (err) return reject(err);
+                resolve(data.Url);
+            });
         });
-        if (data.Body) {
-            const content = data.Body.toString();
-            await fsService.writeFile(downloadPath, content);
-            const headers = data as any;
-            return {
-                etag: (data.ETag || headers.headers?.etag || '').replace(/"/g, ''),
-                lastModified: headers.LastModified || headers.headers?.['last-modified'] || new Date().toISOString(),
-            };
-        } else {
-            throw new Error('No body in response');
+
+        // Ensure parent directory exists
+        const dir = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
+        if (dir) {
+            await fsService.createDirectory(dir);
         }
+
+        // Get absolute path for RNFS
+        const destPath = fsService.getAbsolutePath(downloadPath);
+
+        // Download using native module
+        const downloadResult = RNFS.downloadFile({
+            fromUrl: url,
+            toFile: destPath,
+        });
+
+        const res = await downloadResult.promise;
+
+        if (res.statusCode >= 400) {
+            throw new Error(`Download failed with status ${res.statusCode}`);
+        }
+
+        // Fetch metadata separately since downloadFile doesn't return headers
+        const metadata = await this.headFile(key);
+        if (!metadata) {
+            // Fallback if headFile fails but download succeeded (unlikely)
+            return { etag: '', lastModified: new Date().toISOString() };
+        }
+        return metadata;
     }
 
     async getCloudFileContent(key: string): Promise<string> {
