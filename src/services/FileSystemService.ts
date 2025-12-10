@@ -1,4 +1,4 @@
-import RNFS from 'react-native-fs';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export interface FileItem {
     name: string;
@@ -12,7 +12,9 @@ class FileSystemService {
     private rootPath: string;
 
     constructor() {
-        this.rootPath = `${RNFS.DocumentDirectoryPath}/mdnote_docs`;
+        // Expo documentDirectory ends with a slash usually, but let's be safe
+        const docDir = FileSystem.documentDirectory?.replace(/\/+$/, '') || '';
+        this.rootPath = `${docDir}/mdnote_docs`;
         // Ensure the root directory exists
         this.createDirectoryRecursive(this.rootPath).catch(err => {
             console.error('Failed to create root directory:', err);
@@ -33,27 +35,48 @@ class FileSystemService {
      * @returns The safe, full absolute path
      * @throws Error if path is invalid or attempts to escape root directory
      */
+    /**
+     * Sanitizes and validates a user-provided path to prevent path traversal attacks
+     * @param userPath - The user-provided path (can be relative or absolute)
+     * @returns The safe, full absolute path
+     * @throws Error if path is invalid or attempts to escape root directory
+     */
     private sanitizePath(userPath: string): string {
-        // Remove leading slashes
-        let normalized = userPath.replace(/^\/+/, '');
+        // Strip file:// prefix from rootPath for comparison
+        const rootDir = this.rootPath.replace(/^file:\/+/, '/');
 
-        // Check for dangerous patterns
-        if (normalized.includes('..') || normalized.includes('~')) {
-            throw new Error('Invalid path: path traversal detected');
+        // Normalize userPath: strip file:// prefix
+        let pathToCheck = userPath.replace(/^file:\/+/, '/');
+
+        // Check if userPath already contains the root path (is absolute)
+        let fullPath = '';
+        if (pathToCheck.startsWith(rootDir)) {
+            // It is already absolute
+            fullPath = pathToCheck;
+        } else {
+            // It is relative, append to root
+            // Remove leading slashes from relative path
+            const cleanRelative = pathToCheck.replace(/^\/+/, '');
+            fullPath = cleanRelative ? `${rootDir}/${cleanRelative}` : rootDir;
         }
 
-        // Build full path
-        const fullPath = normalized ? `${this.rootPath}/${normalized}` : this.rootPath;
+        // Normalize slashes (remove duplicates)
+        fullPath = fullPath.replace(/\/+/g, '/');
 
-        // Ensure the resulting path is within rootPath
-        // Normalize by removing duplicate slashes and resolving segments
-        const normalizedFull = fullPath.replace(/\/+/g, '/');
-
-        if (!normalizedFull.startsWith(this.rootPath)) {
+        // Security Check: Ensure the resulting path is still within rootPath
+        if (!fullPath.startsWith(rootDir)) {
+            console.error(`[FileSystemService] Invalid path detected: userPath="${userPath}", resolved="${fullPath}", root="${rootDir}"`);
             throw new Error('Invalid path: outside root directory');
         }
 
-        return normalizedFull;
+        // Re-attach protocol if needed (Expo FS expects file://)
+        if (!fullPath.startsWith('file://')) {
+            // Ensure path starts with / before adding scheme
+            if (!fullPath.startsWith('/')) fullPath = '/' + fullPath;
+            fullPath = 'file://' + fullPath;
+        }
+
+        return fullPath;
     }
 
     /**
@@ -61,38 +84,31 @@ class FileSystemService {
      * @param dirPath - The full directory path to create
      */
     private async createDirectoryRecursive(dirPath: string): Promise<void> {
-        // Check if directory already exists
-        const exists = await RNFS.exists(dirPath);
-        if (exists) {
+        // Expo supports intermediates
+        const info = await FileSystem.getInfoAsync(dirPath);
+        if (info.exists) {
             return;
         }
-
-        // Get parent directory
-        const parentDir = dirPath.substring(0, dirPath.lastIndexOf('/'));
-
-        // If parent doesn't exist, create it first (recursion)
-        if (parentDir && parentDir !== this.rootPath) {
-            const parentExists = await RNFS.exists(parentDir);
-            if (!parentExists) {
-                await this.createDirectoryRecursive(parentDir);
-            }
-        }
-
-        // Create current directory
-        await RNFS.mkdir(dirPath);
+        await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
     }
 
     async listFiles(path: string = ''): Promise<FileItem[]> {
         const fullPath = this.sanitizePath(path);
         try {
-            const result = await RNFS.readDir(fullPath);
-            return result.map((item) => ({
-                name: item.name,
-                path: item.path,
-                size: Number(item.size),
-                isDirectory: item.isDirectory(),
-                mtime: item.mtime || new Date(),
+            const fileNames = await FileSystem.readDirectoryAsync(fullPath);
+            const items = await Promise.all(fileNames.map(async (name) => {
+                const itemPath = fullPath.endsWith('/') ? fullPath + name : fullPath + '/' + name;
+                const info = await FileSystem.getInfoAsync(itemPath);
+                if (!info.exists) return null;
+                return {
+                    name,
+                    path: itemPath,
+                    size: info.size,
+                    isDirectory: info.isDirectory,
+                    mtime: info.modificationTime ? new Date(info.modificationTime * 1000) : new Date(),
+                };
             }));
+            return items.filter((item): item is FileItem => item !== null);
         } catch (error) {
             console.error('Error listing files:', error);
             return [];
@@ -102,7 +118,7 @@ class FileSystemService {
     async readFile(path: string): Promise<string> {
         const fullPath = this.sanitizePath(path);
         try {
-            return await RNFS.readFile(fullPath, 'utf8');
+            return await FileSystem.readAsStringAsync(fullPath, { encoding: FileSystem.EncodingType.UTF8 });
         } catch (error) {
             console.error('Error reading file:', error);
             throw error;
@@ -115,7 +131,8 @@ class FileSystemService {
             const dirPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
 
             // Check if directory exists
-            const dirExists = await RNFS.exists(dirPath);
+            const dirInfo = await FileSystem.getInfoAsync(dirPath);
+            const dirExists = dirInfo.exists;
 
             if (!dirExists) {
                 console.log(`Directory ${dirPath} does not exist. Creating recursively...`);
@@ -129,7 +146,7 @@ class FileSystemService {
                 }
             }
 
-            await RNFS.writeFile(fullPath, content, 'utf8');
+            await FileSystem.writeAsStringAsync(fullPath, content, { encoding: FileSystem.EncodingType.UTF8 });
         } catch (error) {
             console.error('Error writing file:', error);
             throw error;
@@ -139,7 +156,7 @@ class FileSystemService {
     async createDirectory(path: string): Promise<void> {
         const fullPath = this.sanitizePath(path);
         try {
-            await RNFS.mkdir(fullPath);
+            await FileSystem.makeDirectoryAsync(fullPath, { intermediates: true });
         } catch (error) {
             console.error('Error creating directory:', error);
             throw error;
@@ -149,7 +166,7 @@ class FileSystemService {
     async deleteFile(path: string): Promise<void> {
         const fullPath = this.sanitizePath(path);
         try {
-            await RNFS.unlink(fullPath);
+            await FileSystem.deleteAsync(fullPath);
         } catch (error) {
             console.error('Error deleting file:', error);
             throw error;
@@ -160,7 +177,7 @@ class FileSystemService {
         const fullSrcPath = this.sanitizePath(srcPath);
         const fullDestPath = this.sanitizePath(destPath);
         try {
-            await RNFS.moveFile(fullSrcPath, fullDestPath);
+            await FileSystem.moveAsync({ from: fullSrcPath, to: fullDestPath });
         } catch (error) {
             console.error('Error moving file:', error);
             throw error;
@@ -169,19 +186,21 @@ class FileSystemService {
 
     async exists(path: string): Promise<boolean> {
         const fullPath = this.sanitizePath(path);
-        return await RNFS.exists(fullPath);
+        const info = await FileSystem.getInfoAsync(fullPath);
+        return info.exists;
     }
 
     async stat(path: string): Promise<FileItem | null> {
         const fullPath = this.sanitizePath(path);
         try {
-            const statResult = await RNFS.stat(fullPath);
+            const info = await FileSystem.getInfoAsync(fullPath);
+            if (!info.exists) return null;
             return {
                 name: path.split('/').pop() || '',
-                path: statResult.path,
-                size: Number(statResult.size),
-                isDirectory: statResult.isDirectory(),
-                mtime: statResult.mtime ? new Date(statResult.mtime) : new Date(),
+                path: info.uri, // Expo uses uri
+                size: info.size,
+                isDirectory: info.isDirectory,
+                mtime: info.modificationTime ? new Date(info.modificationTime * 1000) : new Date(),
             };
         } catch (error) {
             console.error('Error getting file stats:', error);

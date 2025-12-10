@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, SectionList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
 import { TodoItem, Priority } from '../types/todo';
 import { fsService } from '../services/FileSystemService';
@@ -293,7 +293,7 @@ export const TodoScreen = () => {
             >
                 {/* Row 1: Date */}
                 <Text style={styles.noteTime}>{item.noteId}</Text>
-                
+
                 {/* Row 2: Checkbox + Content */}
                 <View style={styles.itemBody}>
                     <TouchableOpacity onPress={() => handleToggleStatus(item)} style={styles.iconContainer}>

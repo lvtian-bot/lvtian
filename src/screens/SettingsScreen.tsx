@@ -8,7 +8,7 @@ import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 

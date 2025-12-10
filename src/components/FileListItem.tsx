@@ -1,6 +1,6 @@
 import React from 'react';
 import { TouchableOpacity, Text, StyleSheet, View } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { FileItem } from '../services/FileSystemService';
 import { theme } from '../utils/theme';
@@ -53,7 +53,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onLon
                         try {
                             const d = item.mtime instanceof Date ? item.mtime : new Date(item.mtime || Date.now());
                             if (isNaN(d.getTime())) return '-';
-                            
+
                             const pad = (n: number) => n.toString().padStart(2, '0');
                             return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
                         } catch (e) {

@@ -7,7 +7,7 @@ import {
     StyleSheet,
     TouchableWithoutFeedback,
 } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 
 export interface FileAction {

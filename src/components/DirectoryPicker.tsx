@@ -8,7 +8,7 @@ import {
     FlatList,
     ActivityIndicator,
 } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 import { FileItem, fsService } from '../services/FileSystemService';
 import { cloudService } from '../services/CloudService';

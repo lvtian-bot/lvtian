@@ -1,3 +1,4 @@
+import 'react-native-get-random-values';
 import './src/i18n'; // Initialize i18next
 import React, { useEffect } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
@@ -10,7 +11,7 @@ import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
 import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
 import { TencentCOSProvider } from './src/services/TencentCOSProvider';
-import * as Keychain from 'react-native-keychain';
+import * as SecureStore from 'expo-secure-store';
 import { theme } from './src/utils/theme';
 import { useShareStore } from './src/store/useShareStore';
 import { RootStackParamList } from './src/types/navigation';
@@ -33,11 +34,12 @@ function App(props: { sharedText?: string }): React.JSX.Element {
 
       try {
         const { bucket, region } = cosConfig;
-        const credentials = await Keychain.getGenericPassword();
+        const storedSecretId = await SecureStore.getItemAsync('COS_SECRET_ID');
+        const storedSecretKey = await SecureStore.getItemAsync('COS_SECRET_KEY');
 
-        if (credentials && credentials.username && credentials.password && bucket && region) {
-          const secretId = credentials.username;
-          const secretKey = credentials.password;
+        if (storedSecretId && storedSecretKey && bucket && region) {
+          const secretId = storedSecretId;
+          const secretKey = storedSecretKey;
           console.log('[App] Initializing cloud service with bucket:', bucket);
           const provider = new TencentCOSProvider(secretId, secretKey, bucket, region);
           cloudService.setProvider(provider);

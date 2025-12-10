@@ -247,11 +247,7 @@ export const EditorScreen = () => {
 
             <WebView
                 ref={webViewRef}
-                source={
-                    Platform.OS === 'android'
-                        ? { uri: 'file:///android_asset/editor_cm6.html' }
-                        : require('../../android/app/src/main/assets/editor_cm6.html')
-                }
+                source={require('../../assets/editor.html')}
                 originWhitelist={['*']}
                 allowFileAccess={true}
                 allowFileAccessFromFileURLs={true}

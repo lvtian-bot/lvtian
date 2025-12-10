@@ -1,4 +1,4 @@
-import RNFS from 'react-native-fs';
+import * as FileSystem from 'expo-file-system/legacy';
 import { normalizePath } from '../utils/pathUtils';
 
 class ShadowFileService {
@@ -17,39 +17,45 @@ class ShadowFileService {
         }
         const safeHash = Math.abs(hash).toString(16);
 
-        return `${RNFS.DocumentDirectoryPath}/.shadows/${safeHash}_${filename}`;
+        const docDir = FileSystem.documentDirectory?.replace(/\/+$/, '') || '';
+        return `${docDir}/.shadows/${safeHash}_${filename}`;
     }
 
     async init(): Promise<void> {
-        const shadowDir = `${RNFS.DocumentDirectoryPath}/.shadows`;
-        if (!(await RNFS.exists(shadowDir))) {
-            await RNFS.mkdir(shadowDir);
+        const docDir = FileSystem.documentDirectory?.replace(/\/+$/, '') || '';
+        const shadowDir = `${docDir}/.shadows`;
+        const info = await FileSystem.getInfoAsync(shadowDir);
+        if (!info.exists) {
+            await FileSystem.makeDirectoryAsync(shadowDir, { intermediates: true });
         }
     }
 
     async saveShadow(filePath: string, content: string): Promise<void> {
         await this.init();
         const shadowPath = this.getShadowPath(filePath);
-        await RNFS.writeFile(shadowPath, content, 'utf8');
+        await FileSystem.writeAsStringAsync(shadowPath, content, { encoding: FileSystem.EncodingType.UTF8 });
     }
 
     async getShadow(filePath: string): Promise<string | null> {
         const shadowPath = this.getShadowPath(filePath);
-        if (await RNFS.exists(shadowPath)) {
-            return await RNFS.readFile(shadowPath, 'utf8');
+        const info = await FileSystem.getInfoAsync(shadowPath);
+        if (info.exists) {
+            return await FileSystem.readAsStringAsync(shadowPath, { encoding: FileSystem.EncodingType.UTF8 });
         }
         return null;
     }
 
     async hasShadow(filePath: string): Promise<boolean> {
         const shadowPath = this.getShadowPath(filePath);
-        return await RNFS.exists(shadowPath);
+        const info = await FileSystem.getInfoAsync(shadowPath);
+        return info.exists;
     }
 
     async deleteShadow(filePath: string): Promise<void> {
         const shadowPath = this.getShadowPath(filePath);
-        if (await RNFS.exists(shadowPath)) {
-            await RNFS.unlink(shadowPath);
+        const info = await FileSystem.getInfoAsync(shadowPath);
+        if (info.exists) {
+            await FileSystem.deleteAsync(shadowPath);
         }
     }
 }

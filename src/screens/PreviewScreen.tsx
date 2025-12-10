@@ -5,7 +5,7 @@ import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navig
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import Markdown, { RenderRules } from 'react-native-markdown-display';
-import FastImage from '@d11/react-native-fast-image';
+import { Image as ExpoImage } from 'expo-image';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
@@ -61,14 +61,14 @@ export const PreviewScreen = () => {
         }, [source?.uri]);
 
         return (
-            <FastImage
+            <ExpoImage
                 source={source}
                 style={[
                     style,
                     { width: '100%' },
                     ratio ? { aspectRatio: ratio } : { height: 200 }
                 ]}
-                resizeMode={FastImage.resizeMode.contain}
+                contentFit="contain"
                 accessibilityLabel={accessibilityLabel}
             />
         );

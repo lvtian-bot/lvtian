@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
-import * as Keychain from 'react-native-keychain';
+import * as SecureStore from 'expo-secure-store';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { TencentCOSProvider } from '../services/TencentCOSProvider';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 export const CloudRepoConfigScreen = () => {
     const { t } = useTranslation();
@@ -21,10 +21,11 @@ export const CloudRepoConfigScreen = () => {
     useEffect(() => {
         const loadCredentials = async () => {
             try {
-                const credentials = await Keychain.getGenericPassword();
-                if (credentials) {
-                    setSecretId(credentials.username);
-                    setSecretKey(credentials.password);
+                const storedSecretId = await SecureStore.getItemAsync('COS_SECRET_ID');
+                const storedSecretKey = await SecureStore.getItemAsync('COS_SECRET_KEY');
+                if (storedSecretId && storedSecretKey) {
+                    setSecretId(storedSecretId);
+                    setSecretKey(storedSecretKey);
                 }
             } catch (error) {
                 console.error('Failed to load credentials', error);
@@ -44,15 +45,11 @@ export const CloudRepoConfigScreen = () => {
         try {
             const testProvider = new TencentCOSProvider(secretId, secretKey, bucket, region);
 
-            await new Promise((resolve, reject) => {
-                // @ts-ignore
-                testProvider.cos.getBucket({ Bucket: bucket, Region: region, MaxKeys: 0 }, (err, data) => {
-                    if (err) return reject(err);
-                    resolve(data);
-                });
-            });
+            // Verify credentials by listing files (checking root bucket access)
+            await testProvider.listFiles('');
 
-            await Keychain.setGenericPassword(secretId, secretKey);
+            await SecureStore.setItemAsync('COS_SECRET_ID', secretId);
+            await SecureStore.setItemAsync('COS_SECRET_KEY', secretKey);
             setCosConfig({ bucket, region });
 
             Alert.alert(t('settings.success'), t('settings.success'));

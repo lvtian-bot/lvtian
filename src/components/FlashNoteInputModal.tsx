@@ -12,7 +12,7 @@ import {
     Text,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
 import { Priority } from '../types/todo';
@@ -277,10 +277,10 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                         <View style={styles.toolbar}>
                             {mode === 'todo' && (
                                 <>
-                                    <TouchableOpacity 
-                                        onPress={togglePriority} 
+                                    <TouchableOpacity
+                                        onPress={togglePriority}
                                         style={[
-                                            styles.priorityButton, 
+                                            styles.priorityButton,
                                             { borderColor: priorityDisplay.color }
                                         ]}
                                     >

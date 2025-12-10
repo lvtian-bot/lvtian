@@ -1,67 +1,24 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
 buildscript {
-    ext {
-        buildToolsVersion = "36.0.0"
-        minSdkVersion = 24
-        compileSdkVersion = 36
-        targetSdkVersion = 36
-        ndkVersion = "27.1.12297006"
-        kotlinVersion = "2.1.20"
-    }
-    repositories {
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath("com.android.tools.build:gradle")
-        classpath("com.facebook.react:react-native-gradle-plugin")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
-    }
-}
-
-apply plugin: "com.facebook.react.rootproject"
-
-subprojects {
-    buildscript {
-        repositories {
-            maven { url 'https://maven.aliyun.com/repository/google' }
-            maven { url 'https://maven.aliyun.com/repository/public' }
-            maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
-            google()
-            mavenCentral()
-        }
-    }
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath('com.android.tools.build:gradle')
+    classpath('com.facebook.react:react-native-gradle-plugin')
+    classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+  }
 }
 
 allprojects {
-    repositories {
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
-        google()
-        mavenCentral()
-    }
+  repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://www.jitpack.io' }
+  }
 }
 
-subprojects {
-    project.pluginManager.withPlugin('com.android.library') {
-        android {
-            ndkVersion = rootProject.ext.ndkVersion
-            
-            defaultConfig {
-                externalNativeBuild {
-                    cmake {
-                        arguments.add("-DHERMES_CMAKE_FILE_PATH=${project.rootProject.buildDir}/react-native-0.82.1/hermes-engine/hermes-config.cmake")
-                    }
-                }
-            }
-        }
-    }
-    project.pluginManager.withPlugin('com.android.application') {
-        android {
-            ndkVersion = rootProject.ext.ndkVersion
-        }
-    }
-}
+apply plugin: "expo-root-project"
+apply plugin: "com.facebook.react.rootproject"

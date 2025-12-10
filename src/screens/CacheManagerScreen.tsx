@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 import { Switch } from 'react-native'; // Import Switch component
 import { useSettingsStore } from '../store/useSettingsStore'; // Import useSettingsStore
 import { normalizePath } from '../utils/pathUtils'; // Import normalizePath

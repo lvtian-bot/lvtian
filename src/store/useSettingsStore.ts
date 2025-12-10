@@ -7,7 +7,7 @@ interface SettingsState {
     themeMode: 'light' | 'dark' | 'system';
     setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
     cosConfig: {
-        // Note: secretId and secretKey are stored in react-native-keychain (encrypted)
+        // Note: secretId and secretKey are stored in expo-secure-store (encrypted)
         // Only non-sensitive config is stored here
         bucket: string;
         region: string;
