@@ -1,9 +1,13 @@
 import { NavigatorScreenParams } from '@react-navigation/native';
 
+export type NoteStackParamList = {
+    NoteList: { prefix?: string };
+};
+
 export type MainTabParamList = {
     Flash: undefined;
     Todo: undefined;
-    Note: undefined;
+    Note: NavigatorScreenParams<NoteStackParamList>;
     Settings: undefined;
 };
 

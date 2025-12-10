@@ -111,7 +111,12 @@ class SyncService {
             // C3: 双向冲突
             return { status: 'conflict', conflictType: 'bidirectional', localHash, syncedHash, cloudHash };
 
-        } catch (error) {
+        } catch (error: any) {
+            // 处理断网或其他网络错误
+            if (error?.message === 'Network request failed' || error?.message?.includes('Network request failed')) {
+                return { status: 'offline', conflictType: null };
+            }
+
             console.error('Sync Check Error:', error);
             // 如果之前本地上传失败，视为冲突/本地较新，以便用户重试
             if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {

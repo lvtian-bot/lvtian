@@ -123,6 +123,7 @@ module.exports = {
         },
         plugins: [
             "expo-build-properties",
+            "expo-font",
             // Referencing plugins defined above
             withDisablePredictiveBack,
             withCustomBuildGradle

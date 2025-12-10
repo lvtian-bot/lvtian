@@ -36,7 +36,7 @@ export class TodoParser {
                 case '⏫': priority = 'high'; break;
                 case '🔼': priority = 'medium'; break;
                 case '🔽': priority = 'low'; break;
-                case 'lowest': priority = 'lowest'; break;
+                case '⏬': priority = 'lowest'; break;
             }
             content = content.replace(this.PRIORITY_REGEX, '').trim();
         }
@@ -53,7 +53,7 @@ export class TodoParser {
                 case '❌': canceledAt = date; break;
                 case '📅':
                 case '📆':
-                case '': 
+                case '':
                     dueAt = date;
                     break;
             }

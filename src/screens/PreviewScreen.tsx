@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
@@ -8,12 +8,13 @@ import Markdown, { RenderRules } from 'react-native-markdown-display';
 import { Image as ExpoImage } from 'expo-image';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
-import { UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
+import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes } from '../utils/markdownThemes';
 import { useCloudSync } from '../hooks/useCloudSync';
+import { StatusBanner } from '../components/StatusBanner';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -46,47 +47,6 @@ export const PreviewScreen = () => {
     const isEffectivelySyncing = isSyncing ||
         syncStatus === 'checking' ||
         (syncStatus === 'conflict' && (conflictType === 'cloudNewer' || conflictType === 'localNewer'));
-
-    const AutoImage = ({ source, style, accessibilityLabel }: any) => {
-        const [ratio, setRatio] = useState<number | undefined>(undefined);
-
-        useEffect(() => {
-            if (source?.uri) {
-                Image.getSize(source.uri, (width, height) => {
-                    if (width > 0 && height > 0) {
-                        setRatio(width / height);
-                    }
-                }, () => { });
-            }
-        }, [source?.uri]);
-
-        return (
-            <ExpoImage
-                source={source}
-                style={[
-                    style,
-                    { width: '100%' },
-                    ratio ? { aspectRatio: ratio } : { height: 200 }
-                ]}
-                contentFit="contain"
-                accessibilityLabel={accessibilityLabel}
-            />
-        );
-    };
-
-    const rules: RenderRules = {
-        image: (node, children, parent, styles) => {
-            const { src, alt } = node.attributes;
-            return (
-                <AutoImage
-                    key={node.key}
-                    source={{ uri: src }}
-                    style={styles.image}
-                    accessibilityLabel={alt}
-                />
-            );
-        },
-    };
 
     const loadFile = useCallback(async () => {
         try {
@@ -156,6 +116,35 @@ export const PreviewScreen = () => {
         }, [loadFile, performAutoSync])
     );
 
+    const rules = useMemo<RenderRules>(() => ({
+        image: (node, children, parent, styles) => {
+            const { src, alt } = node.attributes;
+
+            // Check if it's a web URL
+            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
+                return (
+                    <AutoImage
+                        key={node.key}
+                        source={{ uri: src }}
+                        style={styles.image}
+                        accessibilityLabel={alt}
+                    />
+                );
+            }
+
+            // Otherwise, treat as local/repo file
+            return (
+                <RepoImage
+                    key={node.key}
+                    src={src}
+                    alt={alt}
+                    style={styles.image}
+                    currentFilePath={filePath}
+                />
+            );
+        },
+    }), [filePath]);
+
     return (
         <View style={[styles.container, { paddingBottom: insets.bottom }]}>
             <View style={[styles.header, { paddingTop: insets.top + theme.spacing.s }]}>
@@ -186,47 +175,33 @@ export const PreviewScreen = () => {
             ) : (
                 <>
                     {syncStatus === 'offline' && (
-                        <View style={styles.banner}>
-                            <Text style={styles.bannerText}>
-                                {t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
-                                {(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed') ? ' (上次上传失败)' : ''}
-                            </Text>
-                            <View style={styles.bannerButtons}>
-                                <TouchableOpacity onPress={checkSync} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>{t('common.retry') || '重试连接'}</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
+                        <StatusBanner
+                            visible={true}
+                            message={`${t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}${(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed')
+                                ? ' (上次上传失败)'
+                                : ''
+                                }`}
+                            type="warning"
+                            onPress={checkSync}
+                        />
                     )}
 
                     {shouldShowConflictBanner && (
-                        <View style={styles.banner}>
-                            <Text style={styles.bannerText}>
-                                {fileMetadata?.uploadState === 'failed'
-                                    ? '上传失败'
-                                    : '本地和云端已同时修改 (冲突)'
-                                }
-                            </Text>
-                            <View style={styles.bannerButtons}>
-                                {(fileMetadata?.uploadState === 'failed') ? (
-                                    <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                        <Text style={styles.bannerButtonText}>上传本地覆盖云端</Text>
-                                    </TouchableOpacity>
-                                ) : (
-                                    <>
-                                        <TouchableOpacity onPress={handleOverwriteLocal} style={styles.bannerButton}>
-                                            <Text style={styles.bannerButtonText}>使用云端版本覆盖本地</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                            <Text style={styles.bannerButtonText}>保存本地为副本</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                            <Text style={styles.bannerButtonText}>上传本地覆盖云端</Text>
-                                        </TouchableOpacity>
-                                    </>
-                                )}
-                            </View>
-                        </View>
+                        <StatusBanner
+                            visible={true}
+                            message={fileMetadata?.uploadState === 'failed'
+                                ? '上传失败'
+                                : '本地和云端已同时修改 (冲突)'
+                            }
+                            type="warning"
+                            actions={fileMetadata?.uploadState === 'failed' ? [
+                                { label: '上传本地覆盖云端', onPress: handleUploadOverwrite }
+                            ] : [
+                                { label: '使用云端版本覆盖本地', onPress: handleOverwriteLocal },
+                                { label: '保存本地为副本', onPress: handleSaveCopy },
+                                { label: '上传本地覆盖云端', onPress: handleUploadOverwrite }
+                            ]}
+                        />
                     )}
 
                     <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
@@ -303,32 +278,7 @@ const styles = StyleSheet.create({
     content: {
         flex: 1,
     },
-    banner: {
-        backgroundColor: '#fff3cd',
-        padding: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#ffc107',
-    },
-    bannerText: {
-        color: '#856404',
-        marginBottom: 8,
-    },
-    bannerButtons: {
-        flexDirection: 'row',
-        gap: 8,
-        flexWrap: 'wrap',
-    },
-    bannerButton: {
-        backgroundColor: theme.colors.primary,
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 4,
-        marginBottom: 4,
-    },
-    bannerButtonText: {
-        color: 'white',
-        fontSize: 14,
-    },
+
     contentContainer: {
         paddingHorizontal: 16,
         paddingTop: 16,
@@ -341,3 +291,144 @@ const styles = StyleSheet.create({
         marginVertical: theme.spacing.s,
     },
 });
+
+const AutoImage = ({ source, style, accessibilityLabel }: any) => {
+    const [ratio, setRatio] = useState<number | undefined>(undefined);
+
+    useEffect(() => {
+        if (source?.uri) {
+            Image.getSize(source.uri, (width, height) => {
+                if (width > 0 && height > 0) {
+                    setRatio(width / height);
+                }
+            }, () => { });
+        }
+    }, [source?.uri]);
+
+    return (
+        <ExpoImage
+            source={source}
+            style={[
+                style,
+                { width: '100%' },
+                ratio ? { aspectRatio: ratio } : { height: 200 }
+            ]}
+            contentFit="contain"
+            accessibilityLabel={accessibilityLabel}
+        />
+    );
+};
+
+const RepoImage = ({ src, alt, style, currentFilePath }: { src: string, alt?: string, style: any, currentFilePath: string }) => {
+    const { t } = useTranslation();
+    const [localUri, setLocalUri] = useState<string | null>(null);
+    const [loadingImage, setLoadingImage] = useState(true);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+        let mounted = true;
+
+        const checkAndDownload = async () => {
+            try {
+                setLoadingImage(true);
+                setError(false);
+
+                // 1. Resolve absolute path
+                let absolutePath = '';
+                if (src.startsWith('/') || src.startsWith('file://')) {
+                    absolutePath = src;
+                } else {
+                    const currentDir = currentFilePath.substring(0, currentFilePath.lastIndexOf('/'));
+                    const parts = (currentDir + '/' + src).split('/');
+                    const stack: string[] = [];
+                    for (const part of parts) {
+                        if (part === '..') {
+                            stack.pop();
+                        } else if (part !== '.' && part !== '') {
+                            stack.push(part);
+                        }
+                    }
+                    absolutePath = (parts[0] === '' ? '/' : '') + stack.join('/');
+                    if (!absolutePath.startsWith('file://') && absolutePath.startsWith('/')) {
+                        absolutePath = 'file://' + absolutePath;
+                    }
+                }
+
+                // 2. Check existence
+                const exists = await fsService.exists(absolutePath);
+
+                if (exists) {
+                    if (mounted) {
+                        setLocalUri(absolutePath);
+                        setLoadingImage(false);
+                    }
+                    return;
+                }
+
+                // 3. If missing, try download
+                const rootPath = fsService.getRootPath();
+                const normalizedRoot = rootPath.replace('file://', '');
+                const normalizedAbs = absolutePath.replace('file://', '');
+
+                if (normalizedAbs.startsWith(normalizedRoot)) {
+                    const key = normalizedAbs.substring(normalizedRoot.length + 1);
+                    if (cloudService.isConfigured()) {
+                        try {
+                            await cloudService.downloadFile(key, absolutePath);
+                            if (mounted) {
+                                setLocalUri(absolutePath);
+                                setLoadingImage(false);
+                            }
+                        } catch (e) {
+                            console.warn('Failed to download image:', key, e);
+                            interface ErrorWithCode { code?: string }
+                            if ((e as ErrorWithCode)?.code === 'NoSuchKey' || (e as any)?.statusCode === 404) {
+                                if (mounted) setError(true);
+                            }
+                            if (mounted) setLoadingImage(false);
+                        }
+                    } else {
+                        if (mounted) setLoadingImage(false);
+                    }
+                } else {
+                    if (mounted) setLoadingImage(false);
+                }
+
+            } catch (e) {
+                console.error('Image resolution error', e);
+                if (mounted) {
+                    setError(true);
+                    setLoadingImage(false);
+                }
+            }
+        };
+
+        checkAndDownload();
+
+        return () => { mounted = false; };
+    }, [src, currentFilePath]);
+
+    if (loadingImage) {
+        return (
+            <View style={[styles.image, { justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface }]}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+            </View>
+        );
+    }
+
+    if (error || !localUri) {
+        return (
+            <View style={[styles.image, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f0f0' }]}>
+                <Text style={{ color: '#999', fontSize: 12 }}>{t('common.error')}: {alt || 'Image not found'}</Text>
+            </View>
+        );
+    }
+
+    return (
+        <AutoImage
+            source={{ uri: localUri }}
+            style={style}
+            accessibilityLabel={alt}
+        />
+    );
+};

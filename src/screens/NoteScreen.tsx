@@ -10,10 +10,11 @@ import {
     Alert,
     BackHandler,
 } from 'react-native';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
+import { StatusBanner } from '../components/StatusBanner';
 
 import { FileListItem } from '../components/FileListItem';
 import { FileActionSheet, FileAction } from '../components/FileActionSheet';
@@ -23,13 +24,14 @@ import { CreateFileModal } from '../components/CreateFileModal';
 import { Breadcrumb } from '../components/Breadcrumb';
 
 import { theme } from '../utils/theme';
-import { RootStackParamList } from '../types/navigation';
+import { NoteStackParamList, RootStackParamList } from '../types/navigation';
 import { FileItem, fsService } from '../services/FileSystemService';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { DeviceEventEmitter } from 'react-native';
 import { useFileListStore } from '../store/useFileListStore';
 import { syncService } from '../services/SyncService';
 
+type Props = NativeStackScreenProps<NoteStackParamList, 'NoteList'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type Status = 'idle' | 'loading' | 'success' | 'error' | 'unconfigured';
 
@@ -47,12 +49,15 @@ const MessageView = ({ title, message, buttonText, onButtonPress }: { title: str
     </View>
 );
 
-export const NoteScreen = () => {
+export const NoteScreen = ({ route, navigation }: Props) => {
     const { t } = useTranslation();
     const [files, setFiles] = useState<ExtendedFileItem[]>([]);
     const [status, setStatus] = useState<Status>('idle');
     const [errorMessage, setErrorMessage] = useState('');
-    const [prefix, setPrefix] = useState('');
+
+    // Get prefix from route params, default to empty string (root)
+    const prefix = route.params?.prefix || '';
+
     const [isOfflineMode, setIsOfflineMode] = useState(false);
     const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
 
@@ -64,7 +69,10 @@ export const NoteScreen = () => {
 
     const flatListRef = useRef<FlatList>(null);
 
-    const navigation = useNavigation<NavigationProp>();
+    // Navigation for other stacks (Root types)
+    // We can cast standard navigation if needed, or use composite type, but simple generic should work since we only call navigate to other stacks
+    const rootNavigation = useNavigation<NavigationProp>();
+
     const { setCachedList, getCachedList } = useFileListStore();
 
     // Helper to format file list safely
@@ -122,7 +130,10 @@ export const NoteScreen = () => {
             setStatus('success');
 
         } catch (error: any) {
-            console.error('[BrowserScreen] Cloud load failed:', error);
+            // Suppress network errors (offline mode)
+            if (error?.message !== 'Network request failed' && !error?.message?.includes('Network request failed')) {
+                console.error('[BrowserScreen] Cloud load failed:', error);
+            }
 
             // If we have files (from cache), just show offline banner
             if (files.length > 0) {
@@ -152,13 +163,14 @@ export const NoteScreen = () => {
     // Header Options
     useEffect(() => {
         navigation.setOptions({
+            title: prefix ? prefix.split('/').filter(Boolean).pop() : t('tabs.browser'),
             headerRight: () => (
                 <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
                     <Icon name="note-add" size={24} color={theme.colors.primary} />
                 </TouchableOpacity>
             ),
         });
-    }, [navigation]);
+    }, [navigation, prefix, t]);
 
     // Create File Logic
     const handleCreateFile = async (filename: string) => {
@@ -174,28 +186,14 @@ export const NoteScreen = () => {
                 Alert.alert(t('common.error'), t('browser.fileAlreadyExists') || 'File exists');
                 return;
             }
-            navigation.navigate('Editor', { filePath: fullPath });
+            rootNavigation.navigate('Editor', { filePath: fullPath });
         } catch (error) {
             Alert.alert(t('common.error'), String(error));
         }
     };
 
-    // Back Handler
-    useFocusEffect(
-        useCallback(() => {
-            const onBackPress = () => {
-                if (prefix) {
-                    const parts = prefix.split('/').filter(Boolean);
-                    parts.pop();
-                    setPrefix(parts.length > 0 ? parts.join('/') + '/' : '');
-                    return true;
-                }
-                return false;
-            };
-            const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-            return () => subscription.remove();
-        }, [prefix])
-    );
+    // Back Handler Removed - Handled by Stack Navigator
+
 
     // Initial Load
     useFocusEffect(useCallback(() => { loadFiles(); }, [loadFiles]));
@@ -321,13 +319,13 @@ export const NoteScreen = () => {
 
     const handleFilePress = async (item: ExtendedFileItem) => {
         if (item.isDirectory) {
-            setPrefix(item.path);
+            navigation.push('NoteList', { prefix: item.path });
         } else {
             try {
                 // Check local existence first
                 const exists = await fsService.exists(item.path);
                 if (exists) {
-                    navigation.navigate('Preview', { filePath: item.path });
+                    rootNavigation.navigate('Preview', { filePath: item.path });
                 } else {
                     // Not found locally, download on demand
                     setStatus('loading'); // Show spinner while downloading
@@ -335,7 +333,7 @@ export const NoteScreen = () => {
 
                     if (success) {
                         setStatus('success');
-                        navigation.navigate('Preview', { filePath: item.path });
+                        rootNavigation.navigate('Preview', { filePath: item.path });
                     } else {
                         throw new Error(t('browser.error.downloadFailed') || 'Download failed');
                     }
@@ -388,7 +386,7 @@ export const NoteScreen = () => {
 
     const renderContent = () => {
         if (status === 'unconfigured') {
-            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} />;
+            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => rootNavigation.navigate('MainTabs', { screen: 'Settings' })} />;
         }
 
         if (status === 'loading' && files.length === 0) {
@@ -401,11 +399,11 @@ export const NoteScreen = () => {
 
         return (
             <View style={styles.fileListContainer}>
-                {isOfflineMode && (
-                    <View style={styles.offlineBanner}>
-                        <Text style={styles.offlineBannerText}>{t('browser.offlineMode') || 'Offline Mode'}</Text>
-                    </View>
-                )}
+                <StatusBanner
+                    visible={isOfflineMode}
+                    message={t('browser.offlineMode') || 'Offline Mode'}
+                    type="warning"
+                />
                 <FlatList
                     ref={flatListRef}
                     data={files}
@@ -431,7 +429,17 @@ export const NoteScreen = () => {
 
     return (
         <View style={styles.container}>
-            <Breadcrumb path={prefix} onPathPress={setPrefix} />
+            <Breadcrumb
+                path={prefix}
+                onPathPress={(newPath) => {
+                    const currentParts = prefix.split('/').filter(Boolean);
+                    const newParts = newPath.split('/').filter(Boolean);
+                    const delta = currentParts.length - newParts.length;
+                    if (delta > 0) {
+                        navigation.pop(delta);
+                    }
+                }}
+            />
             {renderContent()}
 
             <CreateFileModal
@@ -483,7 +491,5 @@ const styles = StyleSheet.create({
     button: { backgroundColor: theme.colors.primary, paddingVertical: theme.spacing.s, paddingHorizontal: theme.spacing.l, borderRadius: 8, alignItems: 'center', marginTop: theme.spacing.l },
     buttonText: { color: theme.colors.white, fontSize: 16, fontWeight: 'bold' },
     headerButton: { padding: 8 },
-    offlineBanner: { backgroundColor: '#FFF3CD', padding: 8, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#FFEEBA' },
-    offlineBannerText: { color: '#856404', fontSize: 12 },
     fileListContainer: { flex: 1 },
 });

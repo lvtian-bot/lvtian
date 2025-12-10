@@ -82,6 +82,7 @@
     "edit": "编辑",
     "delete": "删除",
     "retry": "重试",
+    "success": "成功",
     "notice": "提示",
     "create": "创建",
     "draftFound": "发现未保存的草稿",
@@ -164,6 +165,9 @@
   "fileItem": {
     "folder": "文件夹",
     "kb": "KB"
+  },
+  "preview": {
+    "offlineMode": "离线模式：当前显示本地版本，可能不是最新"
   },
   "flashNoteConfigScreen": {
     "saveSyncFailed": "保存或同步失败",

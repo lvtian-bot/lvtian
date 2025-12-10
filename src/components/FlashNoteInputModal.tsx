@@ -10,6 +10,8 @@ import {
     Dimensions,
     Alert,
     Text,
+    Keyboard,
+    KeyboardEvent,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -150,23 +152,37 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             return;
         }
 
-        // Construct content with tags
-        let finalContent = inputText.trim();
+        // Construct tags suffix
+        let tagSuffix = '';
 
         // Add Priority Tag
         if (priority !== 'none') {
             switch (priority) {
-                case 'highest': finalContent += ' 🔺'; break;
-                case 'high': finalContent += ' ⏫'; break;
-                case 'medium': finalContent += ' 🔼'; break;
-                case 'low': finalContent += ' 🔽'; break;
-                case 'lowest': finalContent += ' ⏬'; break;
+                case 'highest': tagSuffix += ' 🔺'; break;
+                case 'high': tagSuffix += ' ⏫'; break;
+                case 'medium': tagSuffix += ' 🔼'; break;
+                case 'low': tagSuffix += ' 🔽'; break;
+                case 'lowest': tagSuffix += ' ⏬'; break;
             }
         }
 
         // Add Due Date Tag
         if (dueAt) {
-            finalContent += ` 📅 ${dueAt}`;
+            tagSuffix += ` 📅 ${dueAt}`;
+        }
+
+        let finalContent = '';
+
+        // If in todo mode (create or edit), apply tags to every line
+        if (mode === 'todo') {
+            finalContent = inputText.trim()
+                .split('\n')
+                .filter(line => line.trim().length > 0)
+                .map(line => `${line.trim()}${tagSuffix}`)
+                .join('\n');
+        } else {
+            // For notes, just append tags to the end (though notes rarely use these tags)
+            finalContent = inputText.trim() + tagSuffix;
         }
 
         // Clear draft
@@ -237,6 +253,25 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
         }
     };
 
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+    useEffect(() => {
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+        const showSubscription = Keyboard.addListener(showEvent, (e: KeyboardEvent) => {
+            setKeyboardHeight(e.endCoordinates.height);
+        });
+        const hideSubscription = Keyboard.addListener(hideEvent, () => {
+            setKeyboardHeight(0);
+        });
+
+        return () => {
+            showSubscription.remove();
+            hideSubscription.remove();
+        };
+    }, []);
+
     const priorityDisplay = getPriorityDisplay();
 
     return (
@@ -251,13 +286,10 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                 }, 100);
             }}
         >
-            <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                style={styles.keyboardAvoidingView}
-            >
+            <View style={[styles.keyboardAvoidingView, { paddingBottom: Platform.OS === 'ios' ? keyboardHeight : 0 }]}>
                 <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={handleCancel} />
 
-                <View style={styles.modalContentContainer}>
+                <View style={[styles.modalContentContainer, { marginBottom: Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight : 0 }]}>
                     <TextInput
                         ref={inputRef}
                         style={[
@@ -279,20 +311,19 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                                 <>
                                     <TouchableOpacity
                                         onPress={togglePriority}
-                                        style={[
-                                            styles.priorityButton,
-                                            { borderColor: priorityDisplay.color }
-                                        ]}
+                                        style={styles.priorityButton}
                                     >
-                                        <Icon name={priorityDisplay.icon} size={16} color={priorityDisplay.color} />
-                                        <Text style={[styles.priorityButtonText, { color: priorityDisplay.color }]}>
-                                            {priorityDisplay.label}
-                                        </Text>
+                                        <Icon name={priorityDisplay.icon as any} size={24} color={priorityDisplay.color} />
+                                        {priority !== 'none' && (
+                                            <Text style={[styles.priorityButtonText, { color: priorityDisplay.color }]}>
+                                                {priorityDisplay.label}
+                                            </Text>
+                                        )}
                                     </TouchableOpacity>
 
                                     {showDateInput || dueAt ? (
                                         <View style={styles.dateInputContainer}>
-                                            <Icon name="event" size={20} color={theme.colors.primary} style={styles.dateIcon} />
+                                            <Icon name="event" size={18} color={theme.colors.primary} style={styles.dateIcon} />
                                             <TextInput
                                                 style={styles.dateInput}
                                                 value={dueAt || ''}
@@ -312,7 +343,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                                         </View>
                                     ) : (
                                         <TouchableOpacity onPress={() => setShowDateInput(true)} style={styles.toolbarButton}>
-                                            <Icon name="event" size={24} color={theme.colors.textSecondary} />
+                                            <Icon name="event" size={20} color={theme.colors.textSecondary} />
                                         </TouchableOpacity>
                                     )}
                                 </>
@@ -323,7 +354,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                         </TouchableOpacity>
                     </View>
                 </View>
-            </KeyboardAvoidingView>
+            </View>
         </Modal>
     );
 };
@@ -344,10 +375,10 @@ const styles = StyleSheet.create({
     modalContentContainer: {
         width: '100%',
         backgroundColor: theme.colors.white,
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
+        borderTopLeftRadius: 12,
+        borderTopRightRadius: 12,
         overflow: 'hidden',
-        paddingBottom: theme.spacing.m, // Add padding for the button area
+        paddingBottom: theme.spacing.xl, // Increased padding for button area
     },
     input: {
         fontSize: TEXT_INPUT_FONT_SIZE,
@@ -360,7 +391,7 @@ const styles = StyleSheet.create({
     actionContainer: {
         position: 'absolute',
         right: theme.spacing.l,
-        bottom: theme.spacing.xs,
+        bottom: theme.spacing.m, // Increased from xs for more clearance
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
@@ -373,12 +404,8 @@ const styles = StyleSheet.create({
     priorityButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-        borderRadius: 16,
-        borderWidth: 1,
+        padding: theme.spacing.s,
         marginRight: theme.spacing.s,
-        backgroundColor: theme.colors.background,
     },
     priorityButtonText: {
         fontSize: 12,
@@ -400,16 +427,16 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.background,
         borderRadius: 16,
         paddingHorizontal: theme.spacing.s,
-        height: 40,
+        height: 32,
         marginLeft: theme.spacing.s,
     },
     dateIcon: {
         marginRight: 4,
     },
     dateInput: {
-        fontSize: 14,
+        fontSize: 12,
         color: theme.colors.text,
-        minWidth: 100,
+        minWidth: 90,
         paddingVertical: 0,
     },
     clearDateButton: {

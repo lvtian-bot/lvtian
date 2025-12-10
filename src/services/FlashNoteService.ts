@@ -353,26 +353,38 @@ class FlashNoteService {
                         if (todoItem) {
                             replaced = true;
 
-                            // Parse the new content text to extract potential tags (priority, due date)
-                            // We construct a dummy line to use the parser
-                            const dummyLine = `- [ ] ${newContentText}`;
-                            const parsedNew = TodoParser.parse(dummyLine, '', '', 0);
+                            // Split input which might contain multiple lines (from multiline edit)
+                            const inputLines = newContentText.split('\n');
 
-                            if (parsedNew) {
-                                todoItem.content = parsedNew.content;
-                                todoItem.priority = parsedNew.priority;
-                                todoItem.dueAt = parsedNew.dueAt;
-                                // We preserve completedAt/canceledAt from the original item unless explicitly changed?
-                                // The parser for dummy line won't have them unless user typed them.
-                                // If user typed them, we might want to update them.
-                                if (parsedNew.completedAt) todoItem.completedAt = parsedNew.completedAt;
-                                if (parsedNew.canceledAt) todoItem.canceledAt = parsedNew.canceledAt;
-                            } else {
-                                // Fallback if parsing failed (unlikely)
-                                todoItem.content = newContentText;
-                            }
+                            const resultLines = inputLines.map((lineContent, idx) => {
+                                // Create a dummy line to parse tags from the input text (which includes suffix tags)
+                                const dummyLine = `- [ ] ${lineContent}`;
+                                const parsedNew = TodoParser.parse(dummyLine, '', '', 0);
 
-                            return TodoParser.serialize(todoItem);
+                                if (idx === 0) {
+                                    // First line updates the EXISTING item
+                                    if (parsedNew) {
+                                        todoItem.content = parsedNew.content;
+                                        todoItem.priority = parsedNew.priority;
+                                        todoItem.dueAt = parsedNew.dueAt;
+                                        // Preserve completedAt/canceledAt unless needed (omitted here as typically content edit doesn't change status)
+                                    } else {
+                                        todoItem.content = lineContent;
+                                    }
+                                    return TodoParser.serialize(todoItem);
+                                } else {
+                                    // Subsequent lines become NEW independent todos
+                                    // They start as 'todo' status (from dummy string '- [ ]')
+                                    if (parsedNew) {
+                                        return TodoParser.serialize(parsedNew);
+                                    }
+                                    return dummyLine;
+                                }
+                            });
+
+                            return resultLines.join('\n');
+
+
                         }
                     }
                     return line;

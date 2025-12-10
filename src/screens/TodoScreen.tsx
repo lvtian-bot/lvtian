@@ -14,6 +14,8 @@ import { ActionSheetModal, ActionItem } from '../components/ActionSheetModal';
 import { useCloudSync } from '../hooks/useCloudSync';
 import { HeaderSyncStatus } from '../components/HeaderSyncStatus';
 import { useNavigation } from '@react-navigation/native';
+import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { StatusBanner } from '../components/StatusBanner';
 
 type SectionData = {
     title: string | null;
@@ -21,7 +23,7 @@ type SectionData = {
     type: 'in-progress' | 'todo' | 'done';
 };
 
-const INITIAL_LOAD_COUNT = 3; // 1 Main + 2 History
+const INITIAL_LOAD_COUNT = 4; // 1 Main + 3 History
 const PAGE_SIZE = 3;
 
 // ... existing code ...
@@ -51,7 +53,10 @@ export const TodoScreen = () => {
     const [completingItems, setCompletingItems] = useState<Set<string>>(new Set());
 
     // Use the multi-file sync hook
-    const { syncStatus, conflictType, isSyncing, performAutoSync } = useCloudSync(syncTargetPaths);
+    const { syncStatus, conflictType, isSyncing, performAutoSync, checkSync } = useCloudSync(syncTargetPaths);
+
+    const metadata = useFileMetadataStore(state => state.metadata);
+    const hasFailedUpload = syncTargetPaths.some(path => metadata[path]?.uploadState === 'failed');
 
     // Update header with sync status
     React.useLayoutEffect(() => {
@@ -126,6 +131,7 @@ export const TodoScreen = () => {
 
     useFocusEffect(useCallback(() => {
         loadTodos();
+        flashNoteService.syncHistoryFiles().catch(e => console.error(e));
     }, [loadTodos]));
 
     useEffect(() => {
@@ -199,8 +205,14 @@ export const TodoScreen = () => {
                 await flashNoteService.updateTodoContent(editingTodo.noteId, editingTodo.rawLine, content, editingTodo.filePath);
             } else {
                 // Creating new todo
-                // Format: - [ ] content
-                const formattedContent = `- [ ] ${content}`;
+                // Handle multiple lines as multiple todos
+                const lines = content.split('\n').filter(line => line.trim().length > 0);
+                if (lines.length === 0) return;
+
+                const formattedContent = lines
+                    .map(line => `- [ ] ${line.trim()}`)
+                    .join('\n');
+
                 await flashNoteService.addNote(formattedContent);
             }
 
@@ -394,6 +406,22 @@ export const TodoScreen = () => {
 
     return (
         <View style={styles.container}>
+            {syncStatus === 'not-configured' && (
+                <StatusBanner
+                    visible={true}
+                    message={'未配置云服务：当前仅使用本地存储'}
+                    type="info"
+                    onPress={() => (navigation as any).navigate('MainTabs', { screen: 'Settings' })}
+                />
+            )}
+            {syncStatus === 'offline' && (
+                <StatusBanner
+                    visible={true}
+                    message={`${t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}${hasFailedUpload ? ' (上次上传失败)' : ''}`}
+                    type="warning"
+                    onPress={checkSync}
+                />
+            )}
             <SectionList
                 sections={sections}
                 keyExtractor={(item) => item.id}
@@ -575,5 +603,38 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         marginRight: 8,
+    },
+    banner: {
+        backgroundColor: '#FFF3CD', // Light warning yellow
+        padding: theme.spacing.md,
+        borderBottomWidth: 1,
+        borderBottomColor: theme.colors.warning,
+    },
+    bannerText: {
+        color: theme.colors.text,
+        fontSize: 14,
+        marginBottom: theme.spacing.sm,
+    },
+    bannerButtons: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+    },
+    bannerButton: {
+        backgroundColor: theme.colors.warning,
+        paddingHorizontal: theme.spacing.md,
+        paddingVertical: theme.spacing.xs,
+        borderRadius: theme.radius.sm,
+        marginRight: theme.spacing.sm,
+        marginBottom: theme.spacing.sm,
+    },
+    bannerButtonText: {
+        color: theme.colors.black,
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    infoBannerButtonText: {
+        color: theme.colors.white,
+        fontSize: 12,
+        fontWeight: 'bold',
     },
 });

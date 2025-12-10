@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system/legacy';
+import { Paths, File, Directory } from 'expo-file-system';
 
 export interface FileItem {
     name: string;
@@ -9,16 +9,22 @@ export interface FileItem {
 }
 
 class FileSystemService {
+    private rootDir: Directory;
     private rootPath: string;
 
     constructor() {
-        // Expo documentDirectory ends with a slash usually, but let's be safe
-        const docDir = FileSystem.documentDirectory?.replace(/\/+$/, '') || '';
-        this.rootPath = `${docDir}/mdnote_docs`;
+        // Initialize root directory
+        this.rootDir = new Directory(Paths.document, 'mdnote_docs');
+        this.rootPath = this.rootDir.uri;
+
         // Ensure the root directory exists
-        this.createDirectoryRecursive(this.rootPath).catch(err => {
-            console.error('Failed to create root directory:', err);
-        });
+        if (!this.rootDir.exists) {
+            try {
+                this.rootDir.create({ intermediates: true });
+            } catch (err) {
+                console.error('Failed to create root directory:', err);
+            }
+        }
     }
 
     /**
@@ -31,41 +37,36 @@ class FileSystemService {
 
     /**
      * Sanitizes and validates a user-provided path to prevent path traversal attacks
-     * @param userPath - The user-provided path
-     * @returns The safe, full absolute path
-     * @throws Error if path is invalid or attempts to escape root directory
-     */
-    /**
-     * Sanitizes and validates a user-provided path to prevent path traversal attacks
      * @param userPath - The user-provided path (can be relative or absolute)
      * @returns The safe, full absolute path
      * @throws Error if path is invalid or attempts to escape root directory
      */
     private sanitizePath(userPath: string): string {
         // Strip file:// prefix from rootPath for comparison
-        const rootDir = this.rootPath.replace(/^file:\/+/, '/');
+        // Note: rootDir.uri usually starts with file://
+        const rootDirUri = this.rootDir.uri.replace(/^file:\/+/, '/');
 
         // Normalize userPath: strip file:// prefix
         let pathToCheck = userPath.replace(/^file:\/+/, '/');
 
         // Check if userPath already contains the root path (is absolute)
         let fullPath = '';
-        if (pathToCheck.startsWith(rootDir)) {
+        if (pathToCheck.startsWith(rootDirUri)) {
             // It is already absolute
             fullPath = pathToCheck;
         } else {
             // It is relative, append to root
             // Remove leading slashes from relative path
             const cleanRelative = pathToCheck.replace(/^\/+/, '');
-            fullPath = cleanRelative ? `${rootDir}/${cleanRelative}` : rootDir;
+            fullPath = cleanRelative ? `${rootDirUri}/${cleanRelative}` : rootDirUri;
         }
 
         // Normalize slashes (remove duplicates)
         fullPath = fullPath.replace(/\/+/g, '/');
 
         // Security Check: Ensure the resulting path is still within rootPath
-        if (!fullPath.startsWith(rootDir)) {
-            console.error(`[FileSystemService] Invalid path detected: userPath="${userPath}", resolved="${fullPath}", root="${rootDir}"`);
+        if (!fullPath.startsWith(rootDirUri)) {
+            console.error(`[FileSystemService] Invalid path detected: userPath="${userPath}", resolved="${fullPath}", root="${rootDirUri}"`);
             throw new Error('Invalid path: outside root directory');
         }
 
@@ -84,31 +85,30 @@ class FileSystemService {
      * @param dirPath - The full directory path to create
      */
     private async createDirectoryRecursive(dirPath: string): Promise<void> {
-        // Expo supports intermediates
-        const info = await FileSystem.getInfoAsync(dirPath);
-        if (info.exists) {
-            return;
+        const dir = new Directory(dirPath);
+        if (!dir.exists) {
+            dir.create({ intermediates: true });
         }
-        await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
     }
 
     async listFiles(path: string = ''): Promise<FileItem[]> {
         const fullPath = this.sanitizePath(path);
+        const dir = new Directory(fullPath);
+
         try {
-            const fileNames = await FileSystem.readDirectoryAsync(fullPath);
-            const items = await Promise.all(fileNames.map(async (name) => {
-                const itemPath = fullPath.endsWith('/') ? fullPath + name : fullPath + '/' + name;
-                const info = await FileSystem.getInfoAsync(itemPath);
-                if (!info.exists) return null;
+            if (!dir.exists) return [];
+
+            const items = dir.list();
+            return items.map(item => {
+                const isDirectory = item instanceof Directory;
                 return {
-                    name,
-                    path: itemPath,
-                    size: info.size,
-                    isDirectory: info.isDirectory,
-                    mtime: info.modificationTime ? new Date(info.modificationTime * 1000) : new Date(),
+                    name: item.name,
+                    path: item.uri,
+                    size: item.size || 0,
+                    isDirectory,
+                    mtime: item.modificationTime ? new Date(item.modificationTime) : new Date(),
                 };
-            }));
-            return items.filter((item): item is FileItem => item !== null);
+            });
         } catch (error) {
             console.error('Error listing files:', error);
             return [];
@@ -118,7 +118,8 @@ class FileSystemService {
     async readFile(path: string): Promise<string> {
         const fullPath = this.sanitizePath(path);
         try {
-            return await FileSystem.readAsStringAsync(fullPath, { encoding: FileSystem.EncodingType.UTF8 });
+            const file = new File(fullPath);
+            return await file.text();
         } catch (error) {
             console.error('Error reading file:', error);
             throw error;
@@ -128,25 +129,15 @@ class FileSystemService {
     async writeFile(path: string, content: string): Promise<void> {
         const fullPath = this.sanitizePath(path);
         try {
-            const dirPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
+            const file = new File(fullPath);
+            const parentDir = file.parentDirectory;
 
-            // Check if directory exists
-            const dirInfo = await FileSystem.getInfoAsync(dirPath);
-            const dirExists = dirInfo.exists;
-
-            if (!dirExists) {
-                console.log(`Directory ${dirPath} does not exist. Creating recursively...`);
-                try {
-                    // Recursively create all parent directories
-                    await this.createDirectoryRecursive(dirPath);
-                    console.log(`Directory ${dirPath} created successfully.`);
-                } catch (mkdirError) {
-                    console.error(`Failed to create directory ${dirPath}:`, mkdirError);
-                    throw mkdirError; // Re-throw the specific mkdir error
-                }
+            if (!parentDir.exists) {
+                console.log(`Directory ${parentDir.uri} does not exist. Creating recursively...`);
+                parentDir.create({ intermediates: true });
             }
 
-            await FileSystem.writeAsStringAsync(fullPath, content, { encoding: FileSystem.EncodingType.UTF8 });
+            file.write(content);
         } catch (error) {
             console.error('Error writing file:', error);
             throw error;
@@ -156,7 +147,10 @@ class FileSystemService {
     async createDirectory(path: string): Promise<void> {
         const fullPath = this.sanitizePath(path);
         try {
-            await FileSystem.makeDirectoryAsync(fullPath, { intermediates: true });
+            const dir = new Directory(fullPath);
+            if (!dir.exists) {
+                dir.create({ intermediates: true });
+            }
         } catch (error) {
             console.error('Error creating directory:', error);
             throw error;
@@ -166,7 +160,15 @@ class FileSystemService {
     async deleteFile(path: string): Promise<void> {
         const fullPath = this.sanitizePath(path);
         try {
-            await FileSystem.deleteAsync(fullPath);
+            // Check what provided path points to
+            const info = Paths.info(fullPath);
+            if (!info.exists) return;
+
+            if (info.isDirectory) {
+                new Directory(fullPath).delete();
+            } else {
+                new File(fullPath).delete();
+            }
         } catch (error) {
             console.error('Error deleting file:', error);
             throw error;
@@ -175,9 +177,31 @@ class FileSystemService {
 
     async moveFile(srcPath: string, destPath: string): Promise<void> {
         const fullSrcPath = this.sanitizePath(srcPath);
-        const fullDestPath = this.sanitizePath(destPath);
+        const fullDestPath = this.sanitizePath(destPath); // used for validation
+        const destDir = new Directory(fullDestPath).parentDirectory;
+
+        // Ensure destination directory exists (move usually requires parent to exist)
+        if (!destDir.exists) {
+            destDir.create({ intermediates: true });
+        }
+
         try {
-            await FileSystem.moveAsync({ from: fullSrcPath, to: fullDestPath });
+            const srcInfo = Paths.info(fullSrcPath);
+            if (!srcInfo.exists) throw new Error('Source path does not exist');
+
+            // Note: .move() on File/Directory instance takes a DESTINATION (Directory or File).
+            // If passed a Directory, it moves INTO that directory? Or renames TO that directory path?
+            // "move(destination: Directory | File): void;"
+            // "Updated the uri property that now points to the new location."
+            // If I want to rename/move to a specific full path 'destPath', I should create a File/Directory instance for that dest path.
+
+            const destInstance = srcInfo.isDirectory ? new Directory(fullDestPath) : new File(fullDestPath);
+
+            if (srcInfo.isDirectory) {
+                new Directory(fullSrcPath).move(destInstance);
+            } else {
+                new File(fullSrcPath).move(destInstance);
+            }
         } catch (error) {
             console.error('Error moving file:', error);
             throw error;
@@ -186,21 +210,42 @@ class FileSystemService {
 
     async exists(path: string): Promise<boolean> {
         const fullPath = this.sanitizePath(path);
-        const info = await FileSystem.getInfoAsync(fullPath);
-        return info.exists;
+        return Paths.info(fullPath).exists;
     }
 
     async stat(path: string): Promise<FileItem | null> {
         const fullPath = this.sanitizePath(path);
         try {
-            const info = await FileSystem.getInfoAsync(fullPath);
+            const info = Paths.info(fullPath);
             if (!info.exists) return null;
+
+            let size = 0;
+            let mtime = new Date();
+            let isDirectory = false;
+            let name = fullPath.split('/').pop() || '';
+            let uri = fullPath;
+
+            if (info.isDirectory) {
+                isDirectory = true;
+                const dir = new Directory(fullPath);
+                size = dir.size || 0;
+                if (dir.modificationTime) mtime = new Date(dir.modificationTime);
+                name = dir.name;
+                uri = dir.uri;
+            } else {
+                const file = new File(fullPath);
+                size = file.size || 0;
+                if (file.modificationTime) mtime = new Date(file.modificationTime);
+                name = file.name;
+                uri = file.uri;
+            }
+
             return {
-                name: path.split('/').pop() || '',
-                path: info.uri, // Expo uses uri
-                size: info.size,
-                isDirectory: info.isDirectory,
-                mtime: info.modificationTime ? new Date(info.modificationTime * 1000) : new Date(),
+                name,
+                path: uri,
+                size,
+                isDirectory,
+                mtime
             };
         } catch (error) {
             console.error('Error getting file stats:', error);

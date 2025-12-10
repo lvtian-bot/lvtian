@@ -17,7 +17,9 @@ import { flashNoteService, FLASH_NOTES_UPDATED_EVENT, FlashNote } from '../servi
 import { normalizePath } from '../utils/pathUtils';
 import { ActionSheetModal, ActionItem } from '../components/ActionSheetModal';
 import { useCloudSync } from '../hooks/useCloudSync';
+
 import { HeaderSyncStatus } from '../components/HeaderSyncStatus';
+import { StatusBanner } from '../components/StatusBanner';
 
 type FlashScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -53,7 +55,12 @@ export const FlashScreen = () => {
 
     // Use the new hook with ALL loaded files
     // We default to currentFilePath if loadedFilePaths is empty to ensure at least one file is tracked initially
-    const syncPaths = loadedFilePaths.length > 0 ? loadedFilePaths : [currentFilePath];
+    // Use the new hook with ALL loaded files
+    // We default to currentFilePath if loadedFilePaths is empty to ensure at least one file is tracked initially
+    const syncPaths = React.useMemo(() =>
+        loadedFilePaths.length > 0 ? loadedFilePaths : [currentFilePath],
+        [loadedFilePaths, currentFilePath]
+    );
     const { syncStatus, conflictType, isSyncing, checkSync, performAutoSync, resolveConflict } = useCloudSync(syncPaths);
 
     // Load ALL available file paths (Main + History)
@@ -85,6 +92,11 @@ export const FlashScreen = () => {
     const loadInitialData = useCallback(async () => {
         setIsRefreshing(true);
         try {
+            // Background sync history files without blocking UI
+            flashNoteService.syncHistoryFiles().then(() => {
+                // Refresh file list after history sync completes to show any new files
+                loadFilePaths();
+            });
             const paths = await loadFilePaths();
             if (paths.length > 0) {
                 const firstPath = paths[0];
@@ -134,7 +146,25 @@ export const FlashScreen = () => {
     // We re-read all currently loaded files to ensure UI reflects latest state
     const refreshLoadedData = useCallback(async () => {
         if (loadedFilePaths.length === 0) {
-            await loadInitialData();
+            // Do NOT call loadInitialData() here as it triggers syncHistoryFiles(),
+            // which emits the event that calls this function -> Infinite Loop.
+            try {
+                const paths = await loadFilePaths();
+                if (paths.length > 0) {
+                    const firstPath = paths[0];
+                    const initialNotes = await loadFileContent(firstPath);
+                    setNotes(initialNotes);
+                    setLoadedFilePaths([firstPath]);
+                    setNextFileIndex(1);
+                    setHasMore(paths.length > 1);
+                } else {
+                    setNotes([]);
+                    setLoadedFilePaths([]);
+                    setHasMore(false);
+                }
+            } catch (e) {
+                console.error('Failed to refresh data:', e);
+            }
             return;
         }
 
@@ -364,58 +394,37 @@ export const FlashScreen = () => {
     return (
         <View style={styles.container}>
             {syncStatus === 'not-configured' && (
-                <View style={styles.infoBanner}>
-                    <Text style={styles.infoBannerText}>
-                        {'未配置云服务：当前仅使用本地存储'}
-                    </Text>
-                    <View style={styles.bannerButtons}>
-                        <TouchableOpacity onPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })} style={styles.infoBannerButton}>
-                            <Text style={styles.infoBannerButtonText}>{'前往设置'}</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                <StatusBanner
+                    visible={true}
+                    message={'未配置云服务：当前仅使用本地存储'}
+                    type="info"
+                    onPress={() => navigation.navigate('MainTabs', { screen: 'Settings' })}
+                />
             )}
             {syncStatus === 'offline' && (
-                <View style={styles.banner}>
-                    <Text style={styles.bannerText}>
-                        {t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
-                        {fileMetadata?.uploadState === 'failed' ? ' (上次上传失败)' : ''}
-                    </Text>
-                    <View style={styles.bannerButtons}>
-                        <TouchableOpacity onPress={checkSync} style={styles.bannerButton}>
-                            <Text style={styles.bannerButtonText}>{t('common.retry') || '重试连接'}</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                <StatusBanner
+                    visible={true}
+                    message={`${t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}${fileMetadata?.uploadState === 'failed' ? ' (上次上传失败)' : ''}`}
+                    type="warning"
+                    onPress={checkSync}
+                />
             )}
             {shouldShowConflictBanner && (
-                <View style={styles.banner}>
-                    <Text style={styles.bannerText}>
-                        {fileMetadata?.uploadState === 'failed'
-                            ? '上传失败'
-                            : '本地和云端已同时修改 (冲突)'
-                        }
-                    </Text>
-                    <View style={styles.bannerButtons}>
-                        {(fileMetadata?.uploadState === 'failed') ? (
-                            <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                <Text style={styles.bannerButtonText}>上传本地覆盖云端</Text>
-                            </TouchableOpacity>
-                        ) : (
-                            <>
-                                <TouchableOpacity onPress={handleOverwriteLocal} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>使用云端版本</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={handleSaveCopy} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>保存副本</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={handleUploadOverwrite} style={styles.bannerButton}>
-                                    <Text style={styles.bannerButtonText}>上传覆盖</Text>
-                                </TouchableOpacity>
-                            </>
-                        )}
-                    </View>
-                </View>
+                <StatusBanner
+                    visible={true}
+                    message={fileMetadata?.uploadState === 'failed'
+                        ? '上传失败'
+                        : '本地和云端已同时修改 (冲突)'
+                    }
+                    type="warning"
+                    actions={fileMetadata?.uploadState === 'failed' ? [
+                        { label: '上传本地覆盖云端', onPress: handleUploadOverwrite }
+                    ] : [
+                        { label: '使用云端版本', onPress: handleOverwriteLocal },
+                        { label: '保存副本', onPress: handleSaveCopy },
+                        { label: '上传覆盖', onPress: handleUploadOverwrite }
+                    ]}
+                />
             )}
             <FlatList
                 data={notes}
@@ -503,56 +512,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.25,
         shadowRadius: 4,
     },
-    banner: {
-        backgroundColor: '#FFF3CD', // Light warning yellow
-        padding: theme.spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.warning,
-    },
-    bannerText: {
-        color: theme.colors.text,
-        fontSize: 14,
-        marginBottom: theme.spacing.sm,
-    },
-    bannerButtons: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-    },
-    bannerButton: {
-        backgroundColor: theme.colors.warning,
-        paddingHorizontal: theme.spacing.md,
-        paddingVertical: theme.spacing.xs,
-        borderRadius: theme.radius.sm,
-        marginRight: theme.spacing.sm,
-        marginBottom: theme.spacing.sm,
-    },
-    bannerButtonText: {
-        color: theme.colors.black,
-        fontSize: 12,
-        fontWeight: 'bold',
-    },
-    infoBanner: {
-        backgroundColor: '#D1ECF1', // Light info blue
-        padding: theme.spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.info,
-    },
-    infoBannerText: {
-        color: theme.colors.text,
-        fontSize: 14,
-        marginBottom: theme.spacing.sm,
-    },
-    infoBannerButton: {
-        backgroundColor: theme.colors.info,
-        paddingHorizontal: theme.spacing.md,
-        paddingVertical: theme.spacing.xs,
-        borderRadius: theme.radius.sm,
-    },
-    infoBannerButtonText: {
-        color: theme.colors.white,
-        fontSize: 12,
-        fontWeight: 'bold',
-    },
+
+
     footer: {
         paddingVertical: 20,
         alignItems: 'center',

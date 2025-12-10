@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
-import { NoteScreen } from '../screens/NoteScreen';
+import { NoteNavigator } from './NoteNavigator';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { MainTabParamList } from '../types/navigation';
 
@@ -62,9 +62,9 @@ export const TabNavigator = () => {
             />
             <Tab.Screen
                 name="Note"
-                component={NoteScreen}
+                component={NoteNavigator}
                 options={{
-                    headerShown: true,
+                    headerShown: false, // Stack navigator handles header
                     title: t('tabs.browser'),
                     tabBarIcon: NoteIcon,
                 }}
