@@ -20,6 +20,7 @@ interface FileMetadataState {
     getMetadata: (filePath: string) => FileMetadata | undefined;
     clearUploadingState: () => void;
     resetUploadingToFailed: () => void;
+    removeMetadata: (filePath: string) => void; // Add this line
 }
 
 export const useFileMetadataStore = create<FileMetadataState>()(
@@ -85,6 +86,18 @@ export const useFileMetadataStore = create<FileMetadataState>()(
                         }
                     });
                     return hasChanges ? { metadata: newMetadata } : state;
+                }),
+            removeMetadata: (filePath) =>
+                set((state) => {
+                    const newMetadata = { ...state.metadata };
+                    const exists = filePath in newMetadata;
+                    if (exists) {
+                        delete newMetadata[filePath];
+                        console.log(`[MetadataStore] Successfully removed metadata for: '${filePath}'`);
+                    } else {
+                        console.log(`[MetadataStore] Warning: Attempted to remove non-existent metadata for: '${filePath}'`);
+                    }
+                    return { metadata: newMetadata };
                 }),
         }),
         {

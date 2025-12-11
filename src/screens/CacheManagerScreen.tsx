@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
-import { Switch } from 'react-native'; // Import Switch component
-import { useSettingsStore } from '../store/useSettingsStore'; // Import useSettingsStore
-import { normalizePath } from '../utils/pathUtils'; // Import normalizePath
+import { Switch } from 'react-native';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { normalizePath } from '../utils/pathUtils';
 import { theme } from '../utils/theme';
 import { fsService, FileItem } from '../services/FileSystemService';
 import { useFileMetadataStore, LOCAL_MODIFIED_HASH } from '../store/useFileMetadataStore';
@@ -22,7 +22,7 @@ export const CacheManagerScreen = () => {
     const [totalSize, setTotalSize] = useState(0);
     const [safeToDeleteSize, setSafeToDeleteSize] = useState(0);
 
-    const { getMetadata } = useFileMetadataStore();
+    const { getMetadata, removeMetadata } = useFileMetadataStore();
     const {
         flashNoteConfig,
         showFlashNotesInCache,
@@ -30,50 +30,39 @@ export const CacheManagerScreen = () => {
     } = useSettingsStore();
 
     const isFlashNoteFile = useCallback((filePath: string): boolean => {
-        // Ensure flashNoteConfig is fully loaded before using
         if (!flashNoteConfig || !flashNoteConfig.filename) return false;
 
         const { path, filename, historyPattern, historyFolderPath } = flashNoteConfig;
 
-
-
-        // Normalize the main flash note path
         const mainFlashNotePath = path ? `${path}/${filename}` : filename;
         const normalizedMainFlashNotePath = normalizePath(mainFlashNotePath);
 
-        // Check if it's the main flash note file
         if (normalizePath(filePath) === normalizedMainFlashNotePath) {
             return true;
         }
 
-        // Check if it's a history flash note file
         if (historyPattern && historyPattern !== 'none') {
             const namePart = filename.replace(/\.md$/i, '');
             let regex: RegExp | null = null;
 
-            // Define history file regex based on pattern
-            // Note: These regexes are copied from FlashNoteService for consistency
             if (historyPattern === 'dash-yyyymm') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
+                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
+                regex = new RegExp(`^${escapedName}-(\\d{6})\.md$`, 'i');
             } else if (historyPattern === 'underscore-yyyymm') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
+                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
+                regex = new RegExp(`^${escapedName}_(\\d{6})\.md$`, 'i');
             } else if (historyPattern === 'dash-yyyy') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
+                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
+                regex = new RegExp(`^${escapedName}-(\\d{4})\.md$`, 'i');
             } else if (historyPattern === 'chinese-yyyymm') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
+                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
+                regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\.md$`, 'i');
             }
 
             if (regex) {
                 const fileLocalName = filePath.split('/').pop() || '';
                 if (regex.test(fileLocalName)) {
-                    // Additionally, ensure it's in the flash note's path or history folder path
-                    // This logic is crucial to avoid matching similarly named files in other folders
-                    const scanDirPath = historyFolderPath || path || ''; // Use history folder if set, else main path
-                    // Ensure the filePath starts with the expected directory for flash notes
+                    const scanDirPath = historyFolderPath || path || '';
                     if (normalizePath(filePath).startsWith(normalizePath(scanDirPath))) {
                         return true;
                     }
@@ -86,21 +75,37 @@ export const CacheManagerScreen = () => {
     const loadFiles = useCallback(async () => {
         setLoading(true);
         try {
-            // Recursively list all files
+            const getRelativePath = (fullPath: string) => {
+                const rootPath = fsService.getRootPath();
+                
+                const decodedFull = decodeURIComponent(fullPath);
+                const decodedRoot = decodeURIComponent(rootPath);
+
+                                 const cleanFull = decodedFull.replace(/^file:\/+/g, '/');
+                                 const cleanRoot = decodedRoot.replace(/^file:\/+/g, '/');
+                let relative = '';
+                if (cleanFull.startsWith(cleanRoot)) {
+                    relative = cleanFull.substring(cleanRoot.length);
+                } else {
+                    const rawFullClean = fullPath.replace(/^file:\/+/g, '/');
+                    const rawRootClean = rootPath.replace(/^file:\/+/g, '/');
+                    if (rawFullClean.startsWith(rawRootClean)) {
+                         relative = rawFullClean.substring(rawRootClean.length);
+                         relative = decodeURIComponent(relative);
+                    } else {
+                         return fullPath; 
+                    }
+                }
+                
+                return relative.replace(/^\/+/, '');
+            };
+
             const allFiles: FileItem[] = [];
             const processDirectory = async (path: string) => {
                 const items = await fsService.listFiles(path);
                 for (const item of items) {
                     if (item.isDirectory) {
-                        // fsService.listFiles returns absolute paths, but expects relative paths as input.
-                        // We must strip the root path before recursing.
-                        const rootPath = fsService.getRootPath();
-                        let relativePath = item.path;
-                        if (relativePath.startsWith(rootPath)) {
-                            relativePath = relativePath.substring(rootPath.length);
-                        }
-                        relativePath = relativePath.replace(/^\/+/, '');
-
+                        const relativePath = getRelativePath(item.path);
                         await processDirectory(relativePath);
                     } else {
                         allFiles.push(item);
@@ -108,17 +113,10 @@ export const CacheManagerScreen = () => {
                 }
             };
 
-            // Start from root
             await processDirectory('');
 
             const processedFiles: CacheFileItem[] = allFiles.map(file => {
-                // Get relative path for metadata lookup
-                const rootPath = fsService.getRootPath();
-                let relativePath = file.path;
-                if (relativePath.startsWith(rootPath)) {
-                    relativePath = relativePath.substring(rootPath.length);
-                }
-                relativePath = relativePath.replace(/^\/+/, '');
+                const relativePath = getRelativePath(file.path);
 
                 const metadata = getMetadata(relativePath);
                 const isModified = metadata?.localHash === LOCAL_MODIFIED_HASH;
@@ -130,7 +128,6 @@ export const CacheManagerScreen = () => {
                 else if (isUploading) status = 'uploading';
                 else if (isFailed) status = 'failed';
 
-                // Safe to delete if not modified locally and not currently uploading
                 const isSafeToDelete = !isModified && !isUploading && !isFailed;
 
                 return {
@@ -141,7 +138,6 @@ export const CacheManagerScreen = () => {
                 };
             });
 
-            // Sort: Unsafe first, then by size desc
             processedFiles.sort((a, b) => {
                 if (a.isSafeToDelete !== b.isSafeToDelete) return a.isSafeToDelete ? 1 : -1;
                 return b.size - a.size;
@@ -153,7 +149,6 @@ export const CacheManagerScreen = () => {
             }
             setFiles(finalFiles);
 
-            // Calculate sizes
             const total = processedFiles.reduce((acc, file) => acc + file.size, 0);
             const safe = processedFiles.filter(f => f.isSafeToDelete).reduce((acc, file) => acc + file.size, 0);
             setTotalSize(total);
@@ -179,6 +174,31 @@ export const CacheManagerScreen = () => {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
+    const performDelete = async (file: CacheFileItem) => {
+        try {
+            console.log(`[CacheManager] Deleting file: ${file.relativePath}`);
+            await fsService.deleteFile(file.relativePath);
+            
+            // Robust metadata clearing
+            const rawPath = file.relativePath;
+            const decodedPath = decodeURIComponent(rawPath);
+            
+            console.log(`[CacheManager] Removing metadata for keys: '${rawPath}', '${decodedPath}'`);
+            
+            removeMetadata(rawPath);
+            if (rawPath !== decodedPath) removeMetadata(decodedPath);
+            
+            // Verify deletion
+            const check = getMetadata(rawPath);
+            console.log(`[CacheManager] Metadata verification after delete:`, check ? 'Still exists' : 'Removed');
+
+            loadFiles();
+        } catch (error) {
+            console.error('Failed to delete file:', error);
+            Alert.alert(t('common.error'), t('cache.deleteFailed'));
+        }
+    };
+
     const handleDelete = async (file: CacheFileItem) => {
         if (!file.isSafeToDelete) {
             Alert.alert(
@@ -200,16 +220,6 @@ export const CacheManagerScreen = () => {
         await performDelete(file);
     };
 
-    const performDelete = async (file: CacheFileItem) => {
-        try {
-            await fsService.deleteFile(file.relativePath);
-            loadFiles();
-        } catch (error) {
-            console.error('Failed to delete file:', error);
-            Alert.alert(t('common.error'), t('cache.deleteFailed'));
-        }
-    };
-
     const handleClearAll = () => {
         if (safeToDeleteSize === 0) {
             Alert.alert(t('common.notice'), t('cache.noSafeFiles'));
@@ -229,7 +239,14 @@ export const CacheManagerScreen = () => {
                         try {
                             const safeFiles = files.filter(f => f.isSafeToDelete);
                             for (const file of safeFiles) {
+                                console.log(`[CacheManager] Clearing safe file: ${file.relativePath}`);
                                 await fsService.deleteFile(file.path);
+                                
+                                // Robust metadata clearing
+                                const rawPath = file.relativePath;
+                                const decodedPath = decodeURIComponent(rawPath);
+                                removeMetadata(rawPath);
+                                if (rawPath !== decodedPath) removeMetadata(decodedPath);
                             }
                             Alert.alert(t('common.success'), t('cache.clearSuccess'));
                             loadFiles();
@@ -269,22 +286,22 @@ export const CacheManagerScreen = () => {
     return (
         <View style={styles.container}>
             <View style={styles.header}>
-                <View style={styles.statsCard}>
-                    <Text style={styles.statsLabel}>{t('cache.totalSize')}</Text>
-                    <Text style={styles.statsValue}>{formatSize(totalSize)}</Text>
-                    <Text style={styles.statsSub}>{t('cache.safeToClear')}: {formatSize(safeToDeleteSize)}</Text>
-                </View>
+                <View style={styles.topRow}>
+                    <View style={styles.statsInfo}>
+                        <Text style={styles.statsLabel}>{t('cache.safeToClear')}</Text>
+                        <Text style={styles.statsValue}>{formatSize(safeToDeleteSize)}</Text>
+                    </View>
 
-                {/* Toggle to show/hide flash notes */}
-                <View style={styles.settingRow}>
-                    <Text style={styles.settingLabel}>{t('cache.showFlashNotes')}</Text>
-                    <Switch
-                        trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
-                        thumbColor={theme.colors.white}
-                        ios_backgroundColor={theme.colors.border}
-                        onValueChange={setShowFlashNotesInCache}
-                        value={showFlashNotesInCache}
-                    />
+                    <View style={styles.settingRow}>
+                        <Text style={styles.settingLabel}>{t('cache.showFlashNotes')}</Text>
+                        <Switch
+                            trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                            thumbColor={theme.colors.white}
+                            ios_backgroundColor={theme.colors.border}
+                            onValueChange={setShowFlashNotesInCache}
+                            value={showFlashNotesInCache}
+                        />
+                    </View>
                 </View>
 
                 <TouchableOpacity
@@ -324,28 +341,41 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
     },
-    statsCard: {
+    topRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: theme.spacing.m,
     },
+    statsInfo: {
+        flex: 1,
+    },
     statsLabel: {
-        fontSize: 14,
+        fontSize: 12,
         color: theme.colors.textSecondary,
-        marginBottom: 4,
+        marginBottom: 2,
     },
     statsValue: {
-        fontSize: 32,
+        fontSize: 24,
         fontWeight: 'bold',
-        color: theme.colors.text,
-        marginBottom: 4,
+        color: theme.colors.primary,
     },
     statsSub: {
         fontSize: 12,
         color: theme.colors.success,
     },
+    settingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    settingLabel: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        marginRight: 8,
+    },
     clearButton: {
         backgroundColor: theme.colors.primary,
-        paddingVertical: 12,
+        paddingVertical: 10,
         borderRadius: 8,
         alignItems: 'center',
     },
@@ -354,7 +384,7 @@ const styles = StyleSheet.create({
     },
     clearButtonText: {
         color: theme.colors.white,
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: 'bold',
     },
     listContent: {
@@ -390,11 +420,11 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     fileSize: {
-        fontSize: 10, // Reduced font size
+        fontSize: 10,
         color: theme.colors.textSecondary,
     },
     filePath: {
-        fontSize: 10, // Reduced font size
+        fontSize: 10,
         color: theme.colors.textSecondary,
     },
     deleteButton: {
@@ -407,17 +437,5 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         marginTop: theme.spacing.xl,
         color: theme.colors.textSecondary,
-    },
-    settingRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: 8,
-        paddingHorizontal: theme.spacing.m,
-        marginBottom: theme.spacing.m, // Add some margin below the setting
-    },
-    settingLabel: {
-        fontSize: 16,
-        color: theme.colors.text,
     },
 });

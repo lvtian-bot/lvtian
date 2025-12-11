@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useLayoutEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, DeviceEventEmitter, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, DeviceEventEmitter, ActivityIndicator, InteractionManager } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { fsService } from '../services/FileSystemService';
@@ -53,8 +53,6 @@ export const FlashScreen = () => {
     const currentFilePath = getFlashNotePath();
     const fileMetadata = useFileMetadataStore(state => state.metadata[currentFilePath]);
 
-    // Use the new hook with ALL loaded files
-    // We default to currentFilePath if loadedFilePaths is empty to ensure at least one file is tracked initially
     // Use the new hook with ALL loaded files
     // We default to currentFilePath if loadedFilePaths is empty to ensure at least one file is tracked initially
     const syncPaths = React.useMemo(() =>
@@ -329,21 +327,7 @@ export const FlashScreen = () => {
         };
     }, [refreshLoadedData, performAutoSync, loadedFilePaths]);
 
-    useEffect(() => {
-        const handleShareContent = (content: string | null) => {
-            if (content) {
-                setEditingNoteId(undefined);
-                setEditingNoteContent(content);
-                setIsModalVisible(true);
-                useShareStore.getState().clearPendingShare();
-            }
-        };
-        handleShareContent(useShareStore.getState().pendingShareContent);
-        const unsubscribe = useShareStore.subscribe((state) => {
-            handleShareContent(state.pendingShareContent);
-        });
-        return () => unsubscribe();
-    }, []);
+
 
     useLayoutEffect(() => {
         navigation.setOptions({

@@ -63,6 +63,8 @@ class SyncService {
             const syncedHash = localMetadata?.syncedHash ?? null;
             const cloudHash = cloudMetadata?.etag ?? null;
 
+            console.log(`[SyncDebug] Checking ${filePath}: local=${localHash}, synced=${syncedHash}, cloud=${cloudHash}`);
+
             // 情况 A: 云端文件不存在
             if (!cloudMetadata) {
                 const localExists = await fsService.exists(filePath);
@@ -100,15 +102,18 @@ class SyncService {
 
             // C1: 仅云端更新 (localHash == syncedHash) -> 云端较新 (需要下载)
             if (localHash === syncedHash) {
+                console.log(`[SyncDebug] ${filePath}: Detected Cloud Newer (local==synced)`);
                 return { status: 'conflict', conflictType: 'cloudNewer', localHash, syncedHash, cloudHash };
             }
 
             // C2: 仅本地更新 (cloudHash == syncedHash) -> 本地较新 (需要上传)
             if (cloudHash === syncedHash) {
+                console.log(`[SyncDebug] ${filePath}: Detected Local Newer (cloud==synced)`);
                 return { status: 'conflict', conflictType: 'localNewer', localHash, syncedHash, cloudHash };
             }
 
             // C3: 双向冲突
+            console.log(`[SyncDebug] ${filePath}: Detected Bidirectional Conflict`);
             return { status: 'conflict', conflictType: 'bidirectional', localHash, syncedHash, cloudHash };
 
         } catch (error: any) {
@@ -139,13 +144,9 @@ class SyncService {
      * 处理 'Cloud Newer' (自动下载) 和 'Local Newer' (自动上传)
      * 返回操作后的最终状态
      */
-    /**
-     * 尝试自动同步文件
-     * 处理 'Cloud Newer' (自动下载) 和 'Local Newer' (自动上传)
-     * 返回操作后的最终状态
-     */
     async syncFile(filePath: string, options: SyncOptions = {}): Promise<SyncStatus> {
         const check = await this.checkSyncStatus(filePath);
+        console.log(`[SyncDebug] syncFile ${filePath} status result:`, check.status, check.conflictType);
 
         if (check.status === 'synced') return 'synced';
 
