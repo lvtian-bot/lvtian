@@ -26,6 +26,7 @@ export const EditorScreen = () => {
     const [isDirty, setIsDirty] = useState(false);
     const webViewRef = useRef<WebView>(null);
     const isDraftLoaded = useRef(false);
+    const initialContentRef = useRef<string>('');
 
     const { markFileAsModified } = useFileMetadataStore();
 
@@ -55,6 +56,7 @@ export const EditorScreen = () => {
                             onPress: async () => {
                                 await AsyncStorage.removeItem(DRAFT_KEY);
                                 setContent(fileContent);
+                                initialContentRef.current = fileContent;
                                 isDraftLoaded.current = true;
                             },
                         },
@@ -62,7 +64,8 @@ export const EditorScreen = () => {
                             text: t('common.restore') || '恢复',
                             onPress: () => {
                                 setContent(draftContent);
-                                setIsDirty(true);
+                                initialContentRef.current = fileContent; // Initial is still file content
+                                setIsDirty(true); // Draft implies dirty
                                 isDraftLoaded.current = true;
                             },
                         },
@@ -70,6 +73,7 @@ export const EditorScreen = () => {
                 );
             } else {
                 setContent(fileContent);
+                initialContentRef.current = fileContent;
                 isDraftLoaded.current = true;
             }
 
@@ -77,6 +81,7 @@ export const EditorScreen = () => {
             console.error('[EditorScreen] Error loading file:', error);
             Alert.alert('加载文件失败', JSON.stringify(error));
             setContent('');
+            initialContentRef.current = '';
             isDraftLoaded.current = true;
         } finally {
             setLoading(false);
@@ -108,7 +113,8 @@ export const EditorScreen = () => {
     const handleAutoSave = (newContent: string) => {
         // Update state, trigger effect to save to cache
         setContent(newContent);
-        setIsDirty(true);
+        // Only mark as dirty if content is different from initial or saved content
+        setIsDirty(newContent !== initialContentRef.current);
     };
 
     const handleManualSave = useCallback(async (contentToSave: string) => {
@@ -121,17 +127,18 @@ export const EditorScreen = () => {
             await AsyncStorage.removeItem(DRAFT_KEY);
             setIsDirty(false);
             setContent(contentToSave);
+            initialContentRef.current = contentToSave;
 
             // Upload to cloud if configured (wait for upload to complete before navigating back)
             // syncService.uploadFile handles cloud configuration check internally
             const success = await syncService.uploadFile(filePath, { withLock: true });
             if (!success) {
-                 // 如果失败，已经在 syncService 内部处理了状态设置和事件发送
-                 // 但我们可能想给用户一个 Alert
-                 const metadata = useFileMetadataStore.getState().getMetadata(filePath);
-                 if (metadata?.uploadState === 'conflict-failed' || metadata?.uploadState === 'failed') {
-                     Alert.alert('上传失败', '文件已保存到本地，但云上传失败。您可以稍后重新同步。');
-                 }
+                // 如果失败，已经在 syncService 内部处理了状态设置和事件发送
+                // 但我们可能想给用户一个 Alert
+                const metadata = useFileMetadataStore.getState().getMetadata(filePath);
+                if (metadata?.uploadState === 'conflict-failed' || metadata?.uploadState === 'failed') {
+                    Alert.alert('上传失败', '文件已保存到本地，但云上传失败。您可以稍后重新同步。');
+                }
             }
 
             // 返回预览页
@@ -240,8 +247,12 @@ export const EditorScreen = () => {
                 <TouchableOpacity
                     onPress={requestSaveFromWebView}
                     style={styles.headerButton}
+                    disabled={!isDirty}
                 >
-                    <Text style={styles.headerButtonText}>{t('common.save')}</Text>
+                    <Text style={[
+                        styles.headerButtonText,
+                        !isDirty && { color: '#ccc' }
+                    ]}>{t('common.save')}</Text>
                 </TouchableOpacity>
             </View>
 

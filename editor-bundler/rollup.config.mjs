@@ -14,6 +14,12 @@ export default {
   plugins: [
     resolve(),
     commonjs(),
+    {
+      name: 'replace-http-with-https',
+      renderChunk(code) {
+        return code.replace(/http:\/\/www\.w3\.org\/2000\/svg/g, 'https://www.w3.org/2000/svg');
+      }
+    },
     terser() // 压缩代码
   ]
 };
