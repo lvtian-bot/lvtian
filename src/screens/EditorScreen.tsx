@@ -6,6 +6,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Asset } from 'expo-asset';
+import { File } from 'expo-file-system/next';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
@@ -24,6 +26,7 @@ export const EditorScreen = () => {
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [isDirty, setIsDirty] = useState(false);
+    const [editorHtml, setEditorHtml] = useState<string | null>(null);
     const webViewRef = useRef<WebView>(null);
     const isDraftLoaded = useRef(false);
     const initialContentRef = useRef<string>('');
@@ -91,6 +94,26 @@ export const EditorScreen = () => {
     useEffect(() => {
         loadFile();
     }, [loadFile]);
+
+    // Load editor HTML asset
+    useEffect(() => {
+        const loadEditorHtml = async () => {
+            try {
+                const asset = Asset.fromModule(require('../../assets/editor.html'));
+                await asset.downloadAsync();
+                if (asset.localUri) {
+                    const file = new File(asset.localUri);
+                    const html = await file.text();
+                    setEditorHtml(html);
+                } else {
+                    console.error('[EditorScreen] Failed to get localUri for editor.html');
+                }
+            } catch (error) {
+                console.error('[EditorScreen] Failed to load editor HTML:', error);
+            }
+        };
+        loadEditorHtml();
+    }, []);
 
     // Debounced Auto-save to Cache
     useEffect(() => {
@@ -221,7 +244,7 @@ export const EditorScreen = () => {
         webViewRef.current?.injectJavaScript('window.getContent(); true;');
     };
 
-    if (loading) {
+    if (loading || !editorHtml) {
         return (
             <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -258,7 +281,7 @@ export const EditorScreen = () => {
 
             <WebView
                 ref={webViewRef}
-                source={require('../../assets/editor.html')}
+                source={{ html: editorHtml, baseUrl: '' }}
                 originWhitelist={['*']}
                 allowFileAccess={true}
                 allowFileAccessFromFileURLs={true}

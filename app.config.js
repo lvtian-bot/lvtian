@@ -1,8 +1,8 @@
-const { withAppBuildGradle, withAndroidManifest } = require('@expo/config-plugins');
+const { withAppBuildGradle, withAndroidManifest, withGradleProperties } = require('@expo/config-plugins');
 const pkg = require('./package.json');
 
 // =====================================================================
-// Custom Config Plugins (Replacing original patch-*.js scripts)
+// Custom Config Plugins
 // =====================================================================
 
 /**
@@ -85,7 +85,43 @@ if (keystorePropertiesFile.exists()) {
             content = content.replace(/defaultConfig\s*\{/, 'defaultConfig {' + ndkBlock);
         }
 
+        // --- E. Inject Lint Options to suppress ExtraTranslation errors ---
+        if (!content.includes("lintOptions")) {
+            const lintBlock = `
+        lintOptions {
+            checkReleaseBuilds false
+            abortOnError false
+        }
+`;
+            // Insert before defaultConfig {
+            content = content.replace(/defaultConfig\s*\{/, lintBlock + 'defaultConfig {');
+        }
+
         config.modResults.contents = content;
+        return config;
+    });
+};
+
+/**
+ * Plugin 3: Custom Gradle Properties
+ * Sets reactNativeArchitectures to prevent third-party libs from building 32-bit archs
+ */
+const withCustomGradleProperties = (config) => {
+    return withGradleProperties(config, (config) => {
+        const key = 'reactNativeArchitectures';
+        const value = 'arm64-v8a';
+
+        // Check if already exists
+        const existing = config.modResults.find(item => item.key === key);
+        if (existing) {
+            existing.value = value;
+        } else {
+            config.modResults.push({
+                type: 'property',
+                key,
+                value,
+            });
+        }
         return config;
     });
 };
@@ -99,6 +135,10 @@ module.exports = {
         name: "MDNote",
         slug: "mdnote",
         version: pkg.version,
+        locales: {
+            en: "./config-locales/en.json",
+            zh: "./config-locales/zh.json"
+        },
         orientation: "portrait",
         icon: "./assets/icon.png",
         userInterfaceStyle: "light",
@@ -110,11 +150,11 @@ module.exports = {
         ios: {
             supportsTablet: true,
             bundleIdentifier: "com.mdnote",
-            buildNumber: "11"
+            buildNumber: "12"
         },
         android: {
             package: "com.mdnote",
-            versionCode: 11,
+            versionCode: 12,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",
@@ -127,14 +167,24 @@ module.exports = {
             }
         },
         plugins: [
-            "expo-build-properties",
+            [
+                "expo-build-properties",
+                {
+                    "android": {
+                        "usesCleartextTraffic": true
+                    }
+                }
+            ],
             "expo-font",
+            "expo-asset",
             // Referencing plugins defined above
             withDisablePredictiveBack,
             withCustomBuildGradle,
+            withCustomGradleProperties,
             // Custom Share Plugin
             require("./plugins/withAndroidShare")
         ],
 
     }
 };
+

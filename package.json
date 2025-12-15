@@ -1,6 +1,6 @@
 {
   "name": "mdnote",
-  "version": "0.2.2-alpha",
+  "version": "0.2.3",
   "private": true,
   "scripts": {
     "android": "expo run:android",
@@ -21,11 +21,12 @@
     "babel-preset-expo": "~54.0.0",
     "crypto-js": "^4.2.0",
     "diff-match-patch": "^1.0.5",
-    "expo": "^54.0.27",
+    "expo": "~54.0.29",
+    "expo-asset": "~12.0.11",
     "expo-build-properties": "^1.0.10",
-    "expo-constants": "~18.0.11",
+    "expo-constants": "~18.0.12",
     "expo-dev-client": "~6.0.20",
-    "expo-file-system": "~19.0.20",
+    "expo-file-system": "~19.0.21",
     "expo-font": "~14.0.10",
     "expo-image": "~3.0.11",
     "expo-linking": "~8.0.10",
