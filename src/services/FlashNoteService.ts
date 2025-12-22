@@ -9,6 +9,7 @@ import { shadowFileService } from './ShadowFileService';
 import { mergeUtils } from '../utils/mergeUtils';
 import { TodoItem, TodoStatus } from '../types/todo';
 import { TodoParser } from '../utils/TodoParser';
+import NetInfo from "@react-native-community/netinfo";
 
 export interface FlashNote {
     id: string;
@@ -18,7 +19,7 @@ export interface FlashNote {
 }
 
 // TodoStatus and TodoItem are now imported from ../types/todo
-export { TodoItem, TodoStatus };
+export type { TodoItem, TodoStatus };
 
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
 // TODO_REGEX is now handled by TodoParser
@@ -513,6 +514,13 @@ class FlashNoteService {
     async syncHistoryFiles(): Promise<void> {
         const { flashNoteConfig } = useSettingsStore.getState();
 
+        // 1. Network Check (Service Layer Protection)
+        const netState = await NetInfo.fetch();
+        if (!netState.isConnected) {
+            console.log('[FlashNoteService] Offline, skipping history sync.');
+            return;
+        }
+
         if (!cloudService.isConfigured()) {
             return;
         }
@@ -587,8 +595,13 @@ class FlashNoteService {
                     allFilesSet.add(normalizePath(file.key));
                 }
             });
-        } catch (error) {
-            console.error('Failed to scan cloud history files:', error);
+        } catch (error: any) {
+            if (error?.message === 'Network request failed' || error?.message?.includes('Network request failed')) {
+                console.log('[FlashNoteService] History scan aborted due to network error.');
+                return; // Abort the rest of the sync process
+            } else {
+                console.warn('Failed to scan cloud history files:', error);
+            }
         }
 
         // 3. Sync All Found Files

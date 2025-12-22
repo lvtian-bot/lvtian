@@ -90,11 +90,9 @@ export const FlashScreen = () => {
     const loadInitialData = useCallback(async () => {
         setIsRefreshing(true);
         try {
-            // Background sync history files without blocking UI
-            flashNoteService.syncHistoryFiles().then(() => {
-                // Refresh file list after history sync completes to show any new files
-                loadFilePaths();
-            });
+            // Background sync history files is now handled after auto-sync succeeds
+            // flashNoteService.syncHistoryFiles().then(...).catch(e => ...);
+
             const paths = await loadFilePaths();
             if (paths.length > 0) {
                 const firstPath = paths[0];
@@ -296,9 +294,26 @@ export const FlashScreen = () => {
         }
 
         if (cloudService.isInitialized()) {
-            performAutoSync();
+            performAutoSync().then((results) => {
+                // Check if any file was offline. Ideally, if main file is offline, we assume we are offline.
+                // We typically load at least one file (main).
+                const isOffline = results.some(r => r === 'offline');
+                const isError = results.some(r => r === 'error');
+
+                // Only scan history if we are arguably connected
+                if (!isOffline && !isError) {
+                    console.log('Main sync successful, scanning history files...');
+                    flashNoteService.syncHistoryFiles().then(() => {
+                        loadFilePaths(); // Refresh to show new history files
+                    }).catch(e => {
+                        // console.log('History sync failed', e);
+                    });
+                } else {
+                    console.log('Main sync offline/failed, skipping history scan.');
+                }
+            });
         }
-    }, [loadInitialData, refreshLoadedData, performAutoSync, loadedFilePaths.length]));
+    }, [loadInitialData, refreshLoadedData, performAutoSync, loadedFilePaths.length, loadFilePaths]));
 
     useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(FLASH_NOTES_UPDATED_EVENT, () => {

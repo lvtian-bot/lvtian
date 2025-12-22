@@ -27,7 +27,7 @@ function App(props: { sharedText?: string }): React.JSX.Element {
   const [isGlobalModalVisible, setIsGlobalModalVisible] = React.useState(false);
   const [globalShareContent, setGlobalShareContent] = React.useState<string>('');
   // Logic to initialize cloud service based on settings
-  const { cosConfig, hasHydrated } = useSettingsStore();
+  const { cosConfig, webDavConfig, cloudProvider, hasHydrated } = useSettingsStore();
 
   useEffect(() => {
     const initializeCloud = async () => {
@@ -36,35 +36,13 @@ function App(props: { sharedText?: string }): React.JSX.Element {
         return;
       }
 
-      try {
-        const { bucket, region } = cosConfig;
-        const storedSecretId = await SecureStore.getItemAsync('COS_SECRET_ID');
-        const storedSecretKey = await SecureStore.getItemAsync('COS_SECRET_KEY');
-
-        if (storedSecretId && storedSecretKey && bucket && region) {
-          const secretId = storedSecretId;
-          const secretKey = storedSecretKey;
-          console.log('[App] Initializing cloud service with bucket:', bucket);
-          const provider = new TencentCOSProvider(secretId, secretKey, bucket, region);
-          cloudService.setProvider(provider);
-          console.log('[App] Cloud service initialized successfully');
-        } else {
-          console.log('[App] Cloud service not configured - missing credentials or config');
-          cloudService.setProvider(null);
-        }
-      } catch (error) {
-        console.error('[App] Error initializing cloud service:', error);
-        cloudService.setProvider(null);
-      } finally {
-        cloudService.markInitialized();
-      }
-
+      await cloudService.initProvider();
     };
 
     // Explicitly call the async function without await (useEffect cannot be async)
     // The initialization will complete in the background
     void initializeCloud();
-  }, [cosConfig, hasHydrated]);
+  }, [cosConfig, webDavConfig, cloudProvider, hasHydrated]);
 
   // Shared handler for processing shared content
   const handleSharedContent = React.useCallback(async (sharedText: string) => {

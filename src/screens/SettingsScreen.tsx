@@ -13,10 +13,17 @@ import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export const SettingsScreen = () => {
-    const { t } = useTranslation();
-    const { markdownTheme, setMarkdownTheme } = useSettingsStore();
+    const { t, i18n } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
-    const { cosConfig } = useSettingsStore();
+
+    // Config Store
+    const {
+        cosConfig,
+        webDavConfig,
+        cloudProvider,
+        markdownTheme,
+        setMarkdownTheme
+    } = useSettingsStore();
 
     // Markdown主题选择模态框
     const [themeModalVisible, setThemeModalVisible] = useState(false);
@@ -25,28 +32,33 @@ export const SettingsScreen = () => {
     return (
         <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
 
-            {/* 云端仓库配置卡片 - 保持突出设计 */}
+            {/* Cloud Configuration Card */}
             <TouchableOpacity
-                style={styles.cloudCard}
+                style={styles.card}
                 onPress={() => navigation.navigate('CloudRepoConfig')}
                 activeOpacity={0.8}
             >
-                <View style={styles.cloudCardContent}>
-                    <View style={styles.cloudHeaderRow}>
-                        <View style={styles.cloudTitleContainer}>
-                            <Icon name="cloud-sync" size={28} color={theme.colors.primary} style={styles.cloudIcon} />
-                            <Text style={styles.cloudTitle}>{t('settings.cloudRepoConfig')}</Text>
+                <View style={styles.cardContent}>
+                    <View style={styles.cardHeaderRow}>
+                        <View style={styles.cardTitleContainer}>
+                            <Icon name="cloud-sync" size={28} color={theme.colors.primary} style={styles.cardIcon} />
+                            <Text style={styles.cardTitle}>{t('settings.cloudRepoConfig')}</Text>
                         </View>
-                        <View style={styles.cloudServiceTag}>
-                            <Text style={styles.cloudServiceName}>{t('settings.cloudProvider.tencentCOS')}</Text>
+                        <View style={styles.cardServiceTag}>
+                            <Text style={styles.cardServiceName}>
+                                {cloudProvider === 'tencent' ? t('settings.cloudProvider.tencentCOS') :
+                                    cloudProvider === 'webdav' ? 'WebDAV' : t('settings.notConfigured')}
+                            </Text>
                         </View>
                     </View>
 
-                    <View style={styles.cloudStatusRow}>
-                        <Text style={styles.cloudStatusText}>
-                            {cosConfig.bucket
+                    <View style={styles.cardStatusRow}>
+                        <Text style={styles.cardStatusText} numberOfLines={1} ellipsizeMode="tail">
+                            {cloudProvider === 'tencent' && cosConfig.bucket && cosConfig.region
                                 ? `${t('settings.configured')} · ${cosConfig.bucket}`
-                                : t('settings.cloudProvider.subtitle')}
+                                : cloudProvider === 'webdav' && webDavConfig.server
+                                    ? `${t('settings.configured')} · ${webDavConfig.server}`
+                                    : t('settings.cloudProvider.subtitle')}
                         </Text>
                         <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
                     </View>
@@ -157,7 +169,7 @@ const styles = StyleSheet.create({
         paddingTop: theme.spacing.m,
     },
     // 云端存储卡片样式
-    cloudCard: {
+    card: {
         backgroundColor: theme.colors.surface,
         marginHorizontal: theme.spacing.m,
         marginBottom: theme.spacing.l,
@@ -169,54 +181,56 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 2,
     },
-    cloudCardContent: {
+    cardContent: {
         flexDirection: 'column',
     },
-    cloudHeaderRow: {
+    cardHeaderRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
         marginBottom: theme.spacing.m,
     },
-    cloudTitleContainer: {
+    cardTitleContainer: {
         flexDirection: 'row',
         alignItems: 'center',
     },
-    cloudIcon: {
+    cardIcon: {
         marginRight: theme.spacing.s,
     },
-    cloudTitle: {
+    cardTitle: {
         fontSize: 18,
         fontWeight: 'bold',
         color: theme.colors.text,
     },
-    cloudServiceTag: {
+    cardServiceTag: {
         backgroundColor: theme.colors.primaryLight,
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 4,
     },
-    cloudServiceName: {
+    cardServiceName: {
         fontSize: 12,
         color: theme.colors.primary,
         fontWeight: '600',
     },
-    cloudStatusRow: {
+    cardStatusRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
     },
-    cloudStatusText: {
+    cardStatusText: {
         fontSize: 14,
         color: theme.colors.textSecondary,
+        flex: 1,
+        marginRight: 8,
     },
     // 独立小卡片样式
     smallCard: {
         backgroundColor: theme.colors.surface,
-        marginHorizontal: theme.spacing.m, // 与云端卡片保持一致的边距
-        marginBottom: theme.spacing.s, // 卡片间距
+        marginHorizontal: theme.spacing.m,
+        marginBottom: theme.spacing.s,
         borderRadius: 12,
-        paddingVertical: 16, // 较窄的高度
+        paddingVertical: 16,
         paddingHorizontal: theme.spacing.m,
         flexDirection: 'row',
         alignItems: 'center',
@@ -235,7 +249,6 @@ const styles = StyleSheet.create({
         marginRight: theme.spacing.m,
         width: 24,
         textAlign: 'center',
-        // color is set inline to theme.colors.textSecondary
     },
     smallCardTitle: {
         fontSize: 16,

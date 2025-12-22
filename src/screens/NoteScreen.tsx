@@ -85,7 +85,7 @@ export const NoteScreen = ({ route, navigation }: Props) => {
                     : item.key.split('/').pop() ?? item.key,
                 path: item.key,
                 size: item.size || 0,
-                isDirectory: item.key.endsWith('/'),
+                isDirectory: item.isDirectory ?? item.key.endsWith('/'),
                 mtime: item.lastModified ? new Date(item.lastModified) : new Date(),
                 isCached: true,
             }))

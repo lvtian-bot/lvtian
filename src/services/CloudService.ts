@@ -5,6 +5,8 @@ export interface ICloudProvider {
     listFiles(prefix?: string): Promise<CloudFileItem[]>;
     deleteFile(key: string): Promise<void>;
     headFile(key: string): Promise<{ etag: string; lastModified: string } | null>;
+    signIn?(): Promise<void>;
+    signOut?(): Promise<void>;
 }
 
 export interface CloudFileItem {
@@ -12,7 +14,17 @@ export interface CloudFileItem {
     size: number;
     lastModified: string;
     etag: string;
+    isDirectory?: boolean;
 }
+
+import { TencentCOSProvider } from './TencentCOSProvider';
+import { WebDavProvider } from './WebDavProvider';
+import * as SecureStore from 'expo-secure-store';
+// Note: We avoid importing useSettingsStore directly in top-level to avoid cycles if store imports services.
+// But CloudService -> Provider -> ... -> generic.
+// Better to pass config to init method or read from SecureStore + async storage manually if needed.
+// Actually, accessing store.getState() inside a method is usually fine.
+import { useSettingsStore } from '../store/useSettingsStore';
 
 export const UPLOAD_COMPLETED_EVENT = 'UPLOAD_COMPLETED';
 export const CLOUD_INIT_COMPLETED_EVENT = 'CLOUD_INIT_COMPLETED';
@@ -31,6 +43,46 @@ class CloudService {
         this._isInitialized = true;
         const { DeviceEventEmitter } = require('react-native');
         DeviceEventEmitter.emit(CLOUD_INIT_COMPLETED_EVENT);
+    }
+
+    async initProvider() {
+        try {
+            const store = useSettingsStore.getState();
+            const type = store.cloudProvider;
+
+            console.log('[CloudService] Initializing provider:', type);
+
+            if (type === 'tencent') {
+                const secretId = await SecureStore.getItemAsync('COS_SECRET_ID');
+                const secretKey = await SecureStore.getItemAsync('COS_SECRET_KEY');
+                const { bucket, region } = store.cosConfig;
+
+                if (secretId && secretKey && bucket && region) {
+                    this.setProvider(new TencentCOSProvider(secretId, secretKey, bucket, region));
+                } else {
+                    console.warn('[CloudService] Tencent COS config missing');
+                    this.setProvider(null);
+                }
+            } else if (type === 'webdav') {
+                const password = await SecureStore.getItemAsync('WEBDAV_PASSWORD');
+                const { server, username } = store.webDavConfig;
+
+                if (server && username && password) {
+                    this.setProvider(new WebDavProvider({ server, username, password }));
+                } else {
+                    console.warn('[CloudService] WebDAV config missing');
+                    this.setProvider(null);
+                }
+            } else {
+                this.setProvider(null);
+            }
+
+            this.markInitialized();
+        } catch (e) {
+            console.error('[CloudService] Failed to init provider:', e);
+            this.setProvider(null);
+            this.markInitialized(); // Mark as init even if failed, so app knows check is done
+        }
     }
 
     isInitialized(): boolean {

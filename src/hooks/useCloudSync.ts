@@ -53,9 +53,9 @@ export const useCloudSync = (filePath: string | string[]) => {
         setConflictType(aggregatedConflict);
     }, [getFilePaths]);
 
-    const performAutoSync = useCallback(async () => {
+    const performAutoSync = useCallback(async (): Promise<SyncStatus[]> => {
         const paths = getFilePaths();
-        if (paths.length === 0) return;
+        if (paths.length === 0) return [];
 
         setIsSyncing(true);
         try {
@@ -64,8 +64,10 @@ export const useCloudSync = (filePath: string | string[]) => {
 
             // Re-check status after sync attempts
             await checkSync();
+            return results;
         } catch (error) {
             console.error('Auto sync failed', error);
+            return [];
         } finally {
             setIsSyncing(false);
         }

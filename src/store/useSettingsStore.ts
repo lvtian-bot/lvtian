@@ -23,6 +23,19 @@ interface SettingsState {
     showFlashNotesInCache: boolean;
     setShowFlashNotesInCache: (show: boolean) => void;
     setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
+
+    // Cloud Provider Selection
+    cloudProvider: 'tencent' | 'webdav' | 'none';
+    setCloudProvider: (provider: 'tencent' | 'webdav' | 'none') => void;
+
+    // WebDAV Config
+    webDavConfig: {
+        server: string;
+        username: string;
+        // Password is securely stored
+    };
+    setWebDavConfig: (config: Partial<SettingsState['webDavConfig']>) => void;
+
     markdownTheme: MarkdownThemeKey;
     setMarkdownTheme: (theme: MarkdownThemeKey) => void;
     hasHydrated: boolean;
@@ -49,6 +62,17 @@ export const useSettingsStore = create<SettingsState>()(
             },
             setFlashNoteConfig: (config) =>
                 set((state) => ({ flashNoteConfig: { ...state.flashNoteConfig, ...config } })),
+
+            cloudProvider: 'tencent', // Default to tencent for backward compatibility or 'none'
+            setCloudProvider: (provider) => set({ cloudProvider: provider }),
+
+            webDavConfig: {
+                server: 'https://dav.jianguoyun.com/dav/', // Default suggestion
+                username: '',
+            },
+            setWebDavConfig: (config) =>
+                set((state) => ({ webDavConfig: { ...state.webDavConfig, ...config } })),
+
             showFlashNotesInCache: false, // Default to not show flash notes in cache list
             setShowFlashNotesInCache: (show) => set({ showFlashNotesInCache: show }),
             markdownTheme: 'default',

@@ -228,6 +228,7 @@ export class TencentCOSProvider implements ICloudProvider {
                         size: sizeMatch ? parseInt(sizeMatch[1], 10) : 0,
                         lastModified: lastModifiedMatch ? lastModifiedMatch[1] : '',
                         etag: etagMatch ? etagMatch[1].replace(/"/g, '') : '',
+                        isDirectory: false
                     });
                 }
             }
@@ -244,6 +245,7 @@ export class TencentCOSProvider implements ICloudProvider {
                     size: 0,
                     lastModified: new Date().toISOString(),
                     etag: '',
+                    isDirectory: true
                 });
             }
         }

@@ -19,7 +19,8 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
     message,
     type = 'warning',
     onPress,
-    style
+    style,
+    actions
 }) => {
     if (!visible) return null;
 
