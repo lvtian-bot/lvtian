@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, SectionList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, SectionList, TouchableOpacity, Alert, ActivityIndicator, BackHandler } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { flashNoteService, FLASH_NOTES_UPDATED_EVENT } from '../services/FlashNoteService';
@@ -36,6 +36,7 @@ export const TodoScreen = () => {
     const [loadedCount, setLoadedCount] = useState(INITIAL_LOAD_COUNT);
     const [hasMore, setHasMore] = useState(false);
     const [syncTargetPaths, setSyncTargetPaths] = useState<string[]>([]); // Track files for sync
+    const [refreshing, setRefreshing] = useState(false);
     const { t } = useTranslation();
 
     const navigation = useNavigation(); // Get navigation object
@@ -68,11 +69,12 @@ export const TodoScreen = () => {
     }, [navigation, isSyncing, syncStatus, conflictType]);
 
     // Trigger sync when targets change (e.g. initial load or load more)
-    useEffect(() => {
-        if (syncTargetPaths.length > 0) {
-            performAutoSync();
-        }
-    }, [syncTargetPaths, performAutoSync]);
+    // removed automatic sync to strictly manual
+    // useEffect(() => {
+    //     if (syncTargetPaths.length > 0) {
+    //         performAutoSync();
+    //     }
+    // }, [syncTargetPaths, performAutoSync]);
 
     const loadTodos = useCallback(async () => {
         setLoading(true);
@@ -81,7 +83,11 @@ export const TodoScreen = () => {
             setHasMore(loadedCount < allFilePaths.length);
 
             const targetPaths = allFilePaths.slice(0, loadedCount);
-            setSyncTargetPaths(targetPaths); // Update sync targets
+
+            // Only update sync targets if they have actually changed to prevent unnecessary auto-sync triggers
+            if (JSON.stringify(targetPaths) !== JSON.stringify(syncTargetPaths)) {
+                setSyncTargetPaths(targetPaths);
+            }
 
             let allTodos: TodoItem[] = [];
 
@@ -130,8 +136,15 @@ export const TodoScreen = () => {
     }, [t, loadedCount]);
 
     useFocusEffect(useCallback(() => {
+        const onBackPress = () => {
+            BackHandler.exitApp();
+            return true;
+        };
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
         loadTodos();
-        flashNoteService.syncHistoryFiles().catch(e => console.error(e));
+
+        return () => subscription.remove();
     }, [loadTodos]));
 
     useEffect(() => {
@@ -144,6 +157,18 @@ export const TodoScreen = () => {
     const handleLoadMore = () => {
         setLoadedCount(prev => prev + PAGE_SIZE);
     };
+
+    const handleRefresh = useCallback(async () => {
+        setRefreshing(true);
+        try {
+            await flashNoteService.syncAll();
+            await loadTodos();
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setRefreshing(false);
+        }
+    }, [loadTodos]);
 
     useEffect(() => {
         if (loadedCount > INITIAL_LOAD_COUNT) {
@@ -430,6 +455,8 @@ export const TodoScreen = () => {
                 contentContainerStyle={styles.listContent}
                 stickySectionHeadersEnabled={false}
                 ListFooterComponent={renderFooter}
+                refreshing={refreshing}
+                onRefresh={handleRefresh}
                 ListEmptyComponent={
                     !loading && sections.length === 0 ? (
                         <View style={styles.emptyContainer}>
@@ -477,7 +504,7 @@ const styles = StyleSheet.create({
     },
     listContent: {
         paddingBottom: 20,
-        paddingHorizontal: theme.spacing.m,
+        paddingHorizontal: theme.spacing.sm, // Reduced from m (16) to sm (8)
         paddingTop: theme.spacing.m,
     },
     sectionHeader: {
@@ -515,12 +542,11 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.surface,
         borderRadius: theme.radius.sm,
         marginBottom: theme.spacing.s,
-        marginHorizontal: theme.spacing.xs,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4, // Increased radius for softer shadow
-        elevation: 1, // Reduced elevation
+        shadowOpacity: 0.03, // 0.05 -> 0.03
+        shadowRadius: 4,
+        elevation: 0.5, // 1 -> 0.5
     },
     itemBody: {
         flexDirection: 'row',

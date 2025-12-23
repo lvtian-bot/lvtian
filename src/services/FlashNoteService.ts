@@ -5,8 +5,6 @@ import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
 import { syncService } from './SyncService';
-import { shadowFileService } from './ShadowFileService';
-import { mergeUtils } from '../utils/mergeUtils';
 import { TodoItem, TodoStatus } from '../types/todo';
 import { TodoParser } from '../utils/TodoParser';
 import NetInfo from "@react-native-community/netinfo";
@@ -447,176 +445,108 @@ class FlashNoteService {
         DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
 
-    async syncMainFile(): Promise<void> {
-        const filePath = this.getFlashNotePath();
-
-        if (!cloudService.isConfigured()) {
-            console.log('Cloud not configured, skipping main file sync');
-            return;
-        }
-
-        try {
-            // Use SyncService to handle basic sync (CloudNewer -> Download, LocalNewer -> Upload)
-            // Enable shadow file updates
-            const syncResult = await syncService.syncFile(filePath, { useShadow: true });
-
-            if (syncResult === 'synced') {
-                DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
-                return;
-            }
-
-            if (syncResult === 'conflict') {
-                // Handle Bidirectional Conflict with 3-Way Merge
-                console.log('Bidirectional conflict detected in main file. Attempting 3-way merge...');
-
-                // 1. Get Base (Shadow)
-                const baseContent = await shadowFileService.getShadow(filePath);
-                if (baseContent === null) {
-                    console.warn('No shadow file found for 3-way merge. Falling back to cloud overwrite (safe default) or manual resolution.');
-                    // Without base, we can't do 3-way. 
-                    // Option A: Union Merge (diff-match-patch without base) - risky?
-                    // Option B: Let user decide (keep current conflict state).
-                    // For now, let's just return and let the UI show conflict.
-                    return;
-                }
-
-                // 2. Get Local
-                const localContent = await fsService.readFile(filePath);
-
-                // 3. Get Cloud (Download to temp)
-                // We don't have a direct "download to string" method exposed in cloudService yet, 
-                // but we can download to a temp file.
-                const tempPath = `${filePath}.cloud.tmp`;
-                await cloudService.downloadFile(filePath, tempPath);
-                const cloudContent = await fsService.readFile(tempPath);
-                await fsService.deleteFile(tempPath);
-
-                // 4. Merge
-                const mergeResult = mergeUtils.threeWayMerge(baseContent, localContent, cloudContent);
-
-                // 5. Apply Merge
-                await fsService.writeFile(filePath, mergeResult.mergedContent);
-                useFileMetadataStore.getState().markFileAsModified(filePath);
-
-                // 6. Upload Merged Content (and update shadow)
-                console.log('Merge successful. Uploading merged content...');
-                await syncService.uploadFile(filePath, { useShadow: true });
-
-                DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
-            }
-
-        } catch (error) {
-            console.error('Failed to sync main file:', error);
-            // Don't throw, just log. UI will show error state via hooks.
-        }
-    }
-
-    async syncHistoryFiles(): Promise<void> {
+    async syncAll(): Promise<void> {
         const { flashNoteConfig } = useSettingsStore.getState();
-
-        // 1. Network Check (Service Layer Protection)
-        const netState = await NetInfo.fetch();
-        if (!netState.isConnected) {
-            console.log('[FlashNoteService] Offline, skipping history sync.');
-            return;
-        }
-
-        if (!cloudService.isConfigured()) {
-            return;
-        }
-
-        if (flashNoteConfig.historyPattern === 'none') {
-            return;
-        }
-
         const mainFilename = flashNoteConfig.filename;
         const dirPath = flashNoteConfig.path || '';
         const scanDirPath = flashNoteConfig.historyFolderPath || dirPath;
 
-        // Ensure local directory exists
-        if (scanDirPath && !(await fsService.exists(scanDirPath))) {
-            await fsService.createDirectory(scanDirPath);
+        // Normalize main path for comparison
+        const mainPath = normalizePath(dirPath ? `${dirPath}/${mainFilename}` : mainFilename);
+
+        // 1. Network Check
+        const netState = await NetInfo.fetch();
+        if (!netState.isConnected) {
+            console.log('[FlashNoteService] Offline, skipping sync.');
+            return;
         }
 
-        // Construct regex for matching
+        if (!cloudService.isConfigured()) {
+            return;
+        }
+
+        // 2. Construct Regex for History Files
         const namePart = mainFilename.replace(/\.md$/i, '');
         let regex: RegExp | null = null;
+        const pattern = flashNoteConfig.historyPattern || 'none';
 
-        if (flashNoteConfig.historyPattern === 'dash-yyyymm') {
+        if (pattern === 'dash-yyyymm') {
             const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
-        } else if (flashNoteConfig.historyPattern === 'underscore-yyyymm') {
+        } else if (pattern === 'underscore-yyyymm') {
             const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
-        } else if (flashNoteConfig.historyPattern === 'dash-yyyy') {
+        } else if (pattern === 'dash-yyyy') {
             const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
-        } else if (flashNoteConfig.historyPattern === 'chinese-yyyymm') {
+        } else if (pattern === 'chinese-yyyymm') {
             const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
         }
 
-        if (!regex) return;
+        // Filter function for batch sync
+        const fileFilter = (key: string) => {
+            const normalizedKey = normalizePath(key);
 
-        const allFilesSet = new Set<string>();
+            // 1. Match Main File
+            if (normalizedKey === mainPath) return true;
 
-        // 1. Scan Local Files
-        try {
-            if (await fsService.exists(scanDirPath)) {
-                const localFiles = await fsService.listFiles(scanDirPath);
-                localFiles.forEach(file => {
-                    if (file.isDirectory) return;
-                    // Skip main file if it's in the same directory
-                    if (normalizePath(scanDirPath ? `${scanDirPath}/${file.name}` : file.name) === normalizePath(dirPath ? `${dirPath}/${mainFilename}` : mainFilename)) return;
-
-                    if (regex!.test(file.name)) {
-                        allFilesSet.add(normalizePath(scanDirPath ? `${scanDirPath}/${file.name}` : file.name));
-                    }
-                });
+            // 2. Match History Files
+            if (pattern !== 'none' && regex) {
+                // Extract filename
+                const filename = normalizedKey.split('/').pop() || '';
+                // Ideally check directory too, but simplistic filename check is often enough if prefix is correct
+                return regex.test(filename);
             }
-        } catch (e) {
-            console.error('Error scanning local history:', e);
-        }
+            return false;
+        };
 
-        // 2. Scan Cloud Files
         try {
+            // 3. Scan Local Files
+            const localFiles: string[] = [];
+
+            // Explicitly add main file (ensure it participates in sync even if not in history folder)
+            localFiles.push(mainPath);
+
+            // Scan history folder
+            if (pattern !== 'none' && regex) {
+                if (scanDirPath && (await fsService.exists(scanDirPath))) {
+                    const files = await fsService.listFiles(scanDirPath);
+                    files.forEach(f => {
+                        if (!f.isDirectory && regex!.test(f.name)) {
+                            const relativePath = scanDirPath ? `${scanDirPath}/${f.name}` : f.name;
+                            localFiles.push(normalizePath(relativePath));
+                        }
+                    });
+                }
+            }
+
+            // 4. List Cloud Files
+            // Use scanDirPath as prefix to cover history files.
             let prefix = scanDirPath;
             if (prefix && !prefix.endsWith('/')) prefix += '/';
 
-            console.log(`Scanning cloud files with prefix: ${prefix}`);
+            console.log(`[FlashNoteService] Starting Batch Sync. Cloud Prefix: ${prefix}, Local Candidates: ${localFiles.length}`);
             const cloudFiles = await cloudService.listFiles(prefix);
 
-            cloudFiles.forEach(file => {
-                const filename = file.key.split('/').pop();
-                if (!filename) return;
-                if (filename === mainFilename) return;
-
-                if (regex!.test(filename)) {
-                    allFilesSet.add(normalizePath(file.key));
-                }
+            // 5. Perform Unified Batch Sync
+            // Pass localFiles so local-only history files are picked up.
+            // Main file is also in localFiles, so it will be checked.
+            const results = await syncService.syncBatchFiles(cloudFiles, fileFilter, {
+                useShadow: true,
+                localFiles: localFiles,
+                smartMerge: true
             });
-        } catch (error: any) {
-            if (error?.message === 'Network request failed' || error?.message?.includes('Network request failed')) {
-                console.log('[FlashNoteService] History scan aborted due to network error.');
-                return; // Abort the rest of the sync process
-            } else {
-                console.warn('Failed to scan cloud history files:', error);
+
+            console.log('[FlashNoteService] Batch Sync Completed:', results);
+
+            if (results.synced > 0) {
+                DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
             }
+
+        } catch (e) {
+            console.error('[FlashNoteService] Batch Sync Failed:', e);
         }
-
-        // 3. Sync All Found Files
-        console.log(`Found ${allFilesSet.size} history files to sync.`);
-
-        // Process sequentially to avoid overwhelming network/CPU
-        for (const filePath of allFilesSet) {
-            try {
-                await syncService.syncFile(filePath, { useShadow: true });
-            } catch (e) {
-                console.error(`Failed to sync history file ${filePath}`, e);
-            }
-        }
-
-        DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
 }
 

@@ -1,11 +1,11 @@
 // 更新主设置页面：仿微信设计 + 独立卡片优化
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList, Pressable } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList, Pressable, BackHandler } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
@@ -24,6 +24,19 @@ export const SettingsScreen = () => {
         markdownTheme,
         setMarkdownTheme
     } = useSettingsStore();
+
+    useFocusEffect(
+        React.useCallback(() => {
+            const onBackPress = () => {
+                BackHandler.exitApp();
+                return true;
+            };
+
+            const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+            return () => subscription.remove();
+        }, [])
+    );
 
     // Markdown主题选择模态框
     const [themeModalVisible, setThemeModalVisible] = useState(false);
@@ -180,19 +193,19 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: theme.colors.background,
         paddingTop: theme.spacing.m,
+        paddingHorizontal: theme.spacing.s, // Add padding to container instead of margins on cards
     },
     // 云端存储卡片样式
     card: {
         backgroundColor: theme.colors.surface,
-        marginHorizontal: theme.spacing.m,
-        marginBottom: theme.spacing.l,
-        borderRadius: 12,
-        padding: theme.spacing.l,
+        marginBottom: theme.spacing.s, // Reduced from l to s
+        borderRadius: theme.radius.sm, // Reduced from 12 to 8 (radius.sm)
+        padding: theme.spacing.m, // Reduced from l to m
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
+        shadowOffset: { width: 0, height: 1 }, // height 2 -> 1
+        shadowOpacity: 0.03, // 0.05 -> 0.03
         shadowRadius: 4,
-        elevation: 2,
+        elevation: 0.5, // 2 -> 0.5
     },
     cardContent: {
         flexDirection: 'column',
@@ -240,10 +253,9 @@ const styles = StyleSheet.create({
     // 独立小卡片样式
     smallCard: {
         backgroundColor: theme.colors.surface,
-        marginHorizontal: theme.spacing.m,
         marginBottom: theme.spacing.s,
-        borderRadius: 12,
-        paddingVertical: 16,
+        borderRadius: theme.radius.sm, // 12 -> 8
+        paddingVertical: 12, // Reduced from 16 to 12
         paddingHorizontal: theme.spacing.m,
         flexDirection: 'row',
         alignItems: 'center',
@@ -251,8 +263,8 @@ const styles = StyleSheet.create({
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.03,
-        shadowRadius: 2,
-        elevation: 1,
+        shadowRadius: 4, // 2 -> 4
+        elevation: 0.5, // 1 -> 0.5
     },
     smallCardLeft: {
         flexDirection: 'row',

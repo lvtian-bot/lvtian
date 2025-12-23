@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ViewStyle } from 'react-native';
-import { theme } from '../utils/theme';
 
 interface StatusBannerProps {
     visible: boolean;

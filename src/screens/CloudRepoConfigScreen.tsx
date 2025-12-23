@@ -232,13 +232,6 @@ export const CloudRepoConfigScreen = () => {
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
             <ScrollView contentContainerStyle={styles.scrollContent}>
-                <View style={styles.header}>
-                    <View style={styles.headerIconContainer}>
-                        <Icon name={activeTab === 'tencent' ? 'cloud-upload' : 'server-network'} size={40} color={theme.colors.primary} />
-                    </View>
-                    <Text style={styles.headerSubtitle}>{t('settings.cloudProvider.subtitle')}</Text>
-                </View>
-
                 {/* Tab Selector */}
                 <View style={styles.tabContainer}>
                     {renderTabButton('tencent', t('settings.cloudProvider.tencentCOS'), 'cloud-upload-outline' as any)}
@@ -305,31 +298,9 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.background,
     },
     scrollContent: {
-        padding: theme.spacing.m,
+        paddingHorizontal: theme.spacing.sm, // Standardize to 8px
+        paddingVertical: theme.spacing.m,
         paddingBottom: theme.spacing.xl,
-    },
-    header: {
-        alignItems: 'center',
-        marginBottom: theme.spacing.l,
-        marginTop: theme.spacing.m,
-    },
-    headerIconContainer: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: theme.colors.surface,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: theme.spacing.s,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    headerSubtitle: {
-        fontSize: 14,
-        color: theme.colors.textSecondary,
     },
     tabContainer: {
         flexDirection: 'row',
@@ -364,14 +335,14 @@ const styles = StyleSheet.create({
     },
     card: {
         backgroundColor: theme.colors.surface,
-        borderRadius: 12,
-        padding: theme.spacing.l,
-        marginBottom: theme.spacing.m,
+        borderRadius: theme.radius.sm, // 12 -> 8 (radius.sm)
+        padding: theme.spacing.m,
+        marginBottom: theme.spacing.sm, // l -> sm (8px)
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.03, // 0.05 -> 0.03
         shadowRadius: 4,
-        elevation: 2,
+        elevation: 0.5, // 2 -> 0.5
         borderWidth: 1,
         borderColor: theme.colors.border,
     },

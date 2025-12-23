@@ -317,7 +317,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.background,
     },
     header: {
-        padding: theme.spacing.m,
+        padding: theme.spacing.sm, // m -> sm (8)
         backgroundColor: theme.colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
@@ -369,7 +369,8 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
     },
     listContent: {
-        padding: theme.spacing.m,
+        paddingHorizontal: theme.spacing.sm, // m -> sm (8)
+        paddingVertical: theme.spacing.m,
     },
     fileItem: {
         flexDirection: 'row',

@@ -195,8 +195,21 @@ export const NoteScreen = ({ route, navigation }: Props) => {
     // Back Handler Removed - Handled by Stack Navigator
 
 
-    // Initial Load
-    useFocusEffect(useCallback(() => { loadFiles(); }, [loadFiles]));
+    // Initial Load & Back Handler
+    useFocusEffect(useCallback(() => {
+        const onBackPress = () => {
+            if (!prefix || prefix === '') {
+                BackHandler.exitApp();
+                return true;
+            }
+            return false;
+        };
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+        loadFiles();
+
+        return () => subscription.remove();
+    }, [loadFiles, prefix]));
 
     const handleDeleteFile = async (fileToDelete: FileItem) => {
         try {

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useLayoutEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, DeviceEventEmitter, ActivityIndicator, InteractionManager } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, DeviceEventEmitter, ActivityIndicator, BackHandler } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { fsService } from '../services/FileSystemService';
@@ -11,7 +11,6 @@ import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
-import { useShareStore } from '../store/useShareStore';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal';
 import { flashNoteService, FLASH_NOTES_UPDATED_EVENT, FlashNote } from '../services/FlashNoteService';
 import { normalizePath } from '../utils/pathUtils';
@@ -90,8 +89,14 @@ export const FlashScreen = () => {
     const loadInitialData = useCallback(async () => {
         setIsRefreshing(true);
         try {
-            // Background sync history files is now handled after auto-sync succeeds
-            // flashNoteService.syncHistoryFiles().then(...).catch(e => ...);
+            // Restore: Trigger batch sync in background on load/refresh only
+            if (cloudService.isInitialized()) {
+                flashNoteService.syncAll().then(() => {
+                    loadFilePaths(); // Refresh paths if new files found
+                }).catch(e => {
+                     console.log('Batch sync failed', e);
+                });
+            }
 
             const paths = await loadFilePaths();
             if (paths.length > 0) {
@@ -176,7 +181,7 @@ export const FlashScreen = () => {
         } catch (error) {
             console.error('Failed to refresh data:', error);
         }
-    }, [loadedFilePaths, loadInitialData]);
+    }, [loadedFilePaths, loadFilePaths]);
 
 
     const handleOverwriteLocal = async () => {
@@ -284,6 +289,13 @@ export const FlashScreen = () => {
     };
 
     useFocusEffect(useCallback(() => {
+        // Handle hardware back button to exit app
+        const onBackPress = () => {
+            BackHandler.exitApp();
+            return true;
+        };
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
         // On focus, if we haven't loaded anything, load initial.
         // If we have loaded something, maybe just refresh?
         // For simplicity, let's refresh what we have.
@@ -292,28 +304,9 @@ export const FlashScreen = () => {
         } else {
             refreshLoadedData();
         }
-
-        if (cloudService.isInitialized()) {
-            performAutoSync().then((results) => {
-                // Check if any file was offline. Ideally, if main file is offline, we assume we are offline.
-                // We typically load at least one file (main).
-                const isOffline = results.some(r => r === 'offline');
-                const isError = results.some(r => r === 'error');
-
-                // Only scan history if we are arguably connected
-                if (!isOffline && !isError) {
-                    console.log('Main sync successful, scanning history files...');
-                    flashNoteService.syncHistoryFiles().then(() => {
-                        loadFilePaths(); // Refresh to show new history files
-                    }).catch(e => {
-                        // console.log('History sync failed', e);
-                    });
-                } else {
-                    console.log('Main sync offline/failed, skipping history scan.');
-                }
-            });
-        }
-    }, [loadInitialData, refreshLoadedData, performAutoSync, loadedFilePaths.length, loadFilePaths]));
+        
+        return () => subscription.remove();
+    }, [loadInitialData, refreshLoadedData, loadedFilePaths.length]));
 
     useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(FLASH_NOTES_UPDATED_EVENT, () => {
@@ -471,7 +464,8 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.background,
     },
     listContent: {
-        padding: theme.spacing.md,
+        paddingHorizontal: theme.spacing.sm, // Reduced from md (16) to sm (8) to match Journal
+        paddingTop: theme.spacing.md,
         paddingBottom: 80,
     },
     card: {
@@ -481,9 +475,9 @@ const styles = StyleSheet.create({
         marginBottom: theme.spacing.sm,
         shadowColor: theme.colors.black,
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
+        shadowOpacity: 0.03, // 0.05 -> 0.03
         shadowRadius: 4,
-        elevation: 1,
+        elevation: 0.5, // 1 -> 0.5
     },
     timestamp: {
         fontSize: 14,

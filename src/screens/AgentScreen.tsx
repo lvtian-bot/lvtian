@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, BackHandler } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -14,6 +14,7 @@ import { AISidebar } from '../components/AISidebar';
 type AgentScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native'; // Ensure imported if not already, checked file content, it is imported.
 
 export const AgentScreen = () => {
     const { t } = useTranslation();
@@ -22,6 +23,19 @@ export const AgentScreen = () => {
     const flatListRef = useRef<FlatList>(null);
     const [inputText, setInputText] = React.useState('');
     const [sidebarVisible, setSidebarVisible] = useState(false);
+
+    useFocusEffect(
+        React.useCallback(() => {
+            const onBackPress = () => {
+                BackHandler.exitApp();
+                return true;
+            };
+
+            const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+            return () => subscription.remove();
+        }, [])
+    );
 
     const {
         sessions,

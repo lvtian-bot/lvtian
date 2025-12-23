@@ -27,12 +27,22 @@ export class WebDavProvider implements ICloudProvider {
         const cleanKey = key.startsWith('/') ? key.substring(1) : key;
         // If key is empty string, return server root
         if (!cleanKey) return this.server + '/';
-        return `${this.server}/${encodeURI(cleanKey)}`;
+
+        // Fix: Use encodeURIComponent on each segment to handle special chars like '#' or '?'
+        // encodeURI does not encode #, which breaks the URL
+        const encodedKey = cleanKey.split('/').map(encodeURIComponent).join('/');
+
+        return `${this.server}/${encodedKey}`;
     }
 
+    private limiter = new ConcurrencyLimiter(3); // Limit to 3 concurrent requests
+
     private async request(method: string, key: string, headers: Record<string, string> = {}, body?: string | Blob | ArrayBuffer): Promise<Response> {
+        return this.limiter.add(() => this.requestWithRetry(method, key, headers, body));
+    }
+
+    private async requestWithRetry(method: string, key: string, headers: Record<string, string> = {}, body?: string | Blob | ArrayBuffer, retries = 3): Promise<Response> {
         const url = this.getUrl(key);
-        // console.log(`[WebDav] ${method} ${url}`);
 
         try {
             const response = await fetch(url, {
@@ -46,11 +56,26 @@ export class WebDavProvider implements ICloudProvider {
                 body: body as any
             });
 
-            // 404 is valid result for some checks (like head), caller should handle
-            // But generally, throw for error codes implies failure
-            // We'll leave specific error handling to methods
+            // Handle Rate Limiting (429) and Service Unavailable (503)
+            if (!response.ok && (response.status === 429 || response.status === 503)) {
+                if (retries > 0) {
+                    const delay = 1000 * (4 - retries) + Math.random() * 500; // 1s, 2s, 3s + jitter
+                    console.log(`[WebDav] Rate limited (${response.status}), retrying in ${delay.toFixed(0)}ms...`);
+                    await new Promise(resolve => setTimeout(() => resolve(undefined), delay));
+                    return this.requestWithRetry(method, key, headers, body, retries - 1);
+                }
+            }
+
             return response;
         } catch (error: any) {
+            // Retry on network errors
+            if (retries > 0 && (error?.message === 'Network request failed' || error?.message?.includes('Network request failed'))) {
+                const delay = 1000 * (4 - retries) + Math.random() * 500;
+                console.log(`[WebDav] Network error, retrying in ${delay.toFixed(0)}ms...`);
+                await new Promise(resolve => setTimeout(() => resolve(undefined), delay));
+                return this.requestWithRetry(method, key, headers, body, retries - 1);
+            }
+
             if (error?.message === 'Network request failed' || error?.message?.includes('Network request failed')) {
                 console.log(`[WebDav] Network request failed: ${method} ${url}`);
             } else {
@@ -59,6 +84,7 @@ export class WebDavProvider implements ICloudProvider {
             throw error;
         }
     }
+
 
     async uploadFile(key: string, filePath: string, expectedEtag?: string): Promise<{ etag: string; lastModified: string } | void> {
         const content = await fsService.readFile(filePath);
@@ -287,5 +313,32 @@ export class WebDavProvider implements ICloudProvider {
         }
 
         return files;
+    }
+}
+
+class ConcurrencyLimiter {
+    private queue: (() => void)[] = [];
+    private activeCount = 0;
+    private maxConcurrency: number;
+
+    constructor(maxConcurrency: number) {
+        this.maxConcurrency = maxConcurrency;
+    }
+
+    async add<T>(fn: () => Promise<T>): Promise<T> {
+        if (this.activeCount >= this.maxConcurrency) {
+            await new Promise<void>(resolve => this.queue.push(() => resolve()));
+        }
+
+        this.activeCount++;
+        try {
+            return await fn();
+        } finally {
+            this.activeCount--;
+            if (this.queue.length > 0) {
+                const next = this.queue.shift();
+                next?.();
+            }
+        }
     }
 }

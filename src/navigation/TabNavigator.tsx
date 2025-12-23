@@ -39,6 +39,7 @@ export const TabNavigator = () => {
 
     return (
         <Tab.Navigator
+            backBehavior="none"
             screenOptions={{
                 headerTitleAlign: 'center',
                 headerShadowVisible: false,

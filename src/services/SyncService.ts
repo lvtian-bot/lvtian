@@ -5,6 +5,7 @@ import { fsService } from './FileSystemService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { normalizePath } from '../utils/pathUtils';
 import { shadowFileService } from './ShadowFileService';
+import { mergeUtils } from '../utils/mergeUtils';
 
 export type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error' | 'offline' | 'not-configured' | 'uploading' | 'downloading';
 export type ConflictType = 'cloudNewer' | 'localNewer' | 'bidirectional' | null;
@@ -24,6 +25,8 @@ export interface UploadOptions {
 
 export interface SyncOptions {
     useShadow?: boolean;
+    localFiles?: string[];
+    smartMerge?: boolean;
 }
 
 class SyncService {
@@ -100,6 +103,18 @@ class SyncService {
 
             // 情况 C: 哈希不匹配 (冲突/需要同步)
 
+            // 情况 C: 哈希不匹配 (冲突/需要同步)
+
+            // Special: 检查本地文件是否存在但无 Metadata (未受控文件)
+            // 这种情况下，如果直接视为 cloudNewer 会导致本地文件被覆盖丢失
+            if (!localMetadata) {
+                const exists = await fsService.exists(filePath);
+                if (exists) {
+                    console.log(`[SyncDebug] ${filePath}: Detected Unmanaged Local File (Conflict)`);
+                    return { status: 'conflict', conflictType: 'bidirectional', localHash, syncedHash, cloudHash };
+                }
+            }
+
             // C1: 仅云端更新 (localHash == syncedHash) -> 云端较新 (需要下载)
             if (localHash === syncedHash) {
                 console.log(`[SyncDebug] ${filePath}: Detected Cloud Newer (local==synced)`);
@@ -140,6 +155,153 @@ class SyncService {
     }
 
     /**
+     * 批量同步文件 (Batch Sync)
+     * 统一处理云端和本地文件，执行标准同步检查
+     * 
+     * @param cloudFiles 云端文件列表 (含 ETag)
+     * @param localFiles 本地文件列表 (可选)
+     * @param options 配置项
+     */
+    async syncBatchFiles(
+        cloudFiles: import('./CloudService').CloudFileItem[],
+        fileFilter?: (filename: string) => boolean,
+        options: SyncOptions = {}
+    ): Promise<{ synced: number; errors: number; conflicts: number }> {
+        const { getMetadata } = useFileMetadataStore.getState();
+        const results = { synced: 0, errors: 0, conflicts: 0 };
+        const localFileList = options.localFiles || [];
+
+        // 1. 构建全量文件集合 (Union of Cloud & Local)
+        const allFiles = new Set<string>();
+        const cloudMap = new Map<string, import('./CloudService').CloudFileItem>();
+
+        cloudFiles.forEach(f => {
+            const path = normalizePath(f.key);
+            if (fileFilter && !fileFilter(path)) return;
+            cloudMap.set(path, f);
+            allFiles.add(path);
+        });
+
+        localFileList.forEach(f => {
+            const path = normalizePath(f);
+            if (fileFilter && !fileFilter(path)) return;
+            allFiles.add(path);
+        });
+
+        console.log(`[BatchSync] Processing ${allFiles.size} unique files from cloud+local`);
+
+        const tasks: Array<() => Promise<void>> = [];
+
+        // 2. 遍历集合并生成任务
+        for (const path of allFiles) {
+            const cloudItem = cloudMap.get(path);
+            const localMetadata = getMetadata(path);
+
+            const syncedHash = localMetadata?.syncedHash ?? null;
+            const localHash = localMetadata?.localHash ?? null;
+            const cloudHash = cloudItem?.etag ?? null;
+
+            // --- 逻辑与 checkSyncStatus 保持一致 ---
+
+            // 情况 A: 云端不存在 (Local Only)
+            if (!cloudItem) {
+                tasks.push(async () => {
+                    const exists = await fsService.exists(path);
+                    if (exists) {
+                        if (!localMetadata) {
+                            console.log(`[BatchSync] ${path}: New local file detected (No Metadata) -> Uploading`);
+                            await this.performUpload(path, options);
+                            results.synced++;
+                        } else {
+                            console.log(`[BatchSync] ${path}: Local exists but missing on cloud -> Re-uploading`);
+                            await this.performUpload(path, options);
+                            results.synced++;
+                        }
+                    } else {
+                        console.log(`[BatchSync] ${path}: Missing on both (Skipped)`);
+                    }
+                });
+                continue;
+            }
+
+            // 情况 B: 哈希匹配 (已同步)
+            if (localHash === cloudHash) {
+                console.log(`[BatchSync] ${path}: Synced (skipped)`);
+                // 自愈 Metadata
+                if (syncedHash !== cloudHash) {
+                    useFileMetadataStore.getState().setMetadata(path, cloudHash!, localHash, cloudItem.lastModified);
+                }
+                continue;
+            }
+
+            // 情况 C: 冲突/更新
+
+            // C1: Cloud Newer
+            if (localHash === syncedHash && syncedHash !== cloudHash) {
+                tasks.push(async () => {
+                    console.log(`[BatchSync] ${path}: Cloud update detected -> Downloading`);
+                    await this.performDownload(path, options);
+                    results.synced++;
+                });
+                continue;
+            }
+
+            // C2: Local Newer
+            if (cloudHash === syncedHash && localHash !== syncedHash) {
+                tasks.push(async () => {
+                    console.log(`[BatchSync] ${path}: Local update detected -> Uploading`);
+                    await this.performUpload(path, options);
+                    results.synced++;
+                });
+                continue;
+            }
+
+            // C3: 复杂情况 / 冲突
+            if (!localMetadata) {
+                tasks.push(async () => {
+                    const exists = await fsService.exists(path);
+                    if (exists) {
+                        console.log(`[BatchSync] ${path}: Conflict (Unmanaged Local + Cloud Exists)`);
+                        results.conflicts++;
+                    } else {
+                        console.log(`[BatchSync] ${path}: New cloud file -> Downloading`);
+                        await this.performDownload(path, options);
+                        results.synced++;
+                    }
+                });
+                continue;
+            }
+
+            console.log(`[BatchSync] ${path}: Conflict detected (Bidirectional)`);
+
+            if (options.smartMerge) {
+                tasks.push(async () => {
+                    const merged = await this.trySmartMerge(path, options);
+                    if (merged) {
+                        results.synced++;
+                    } else {
+                        results.conflicts++;
+                    }
+                });
+            } else {
+                results.conflicts++;
+            }
+        }
+
+        // 3. 并发执行任务
+        const CHUNK_SIZE = 5;
+        for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
+            const chunk = tasks.slice(i, i + CHUNK_SIZE);
+            await Promise.all(chunk.map(t => t().catch(e => {
+                console.error('[BatchSync] Task failed', e);
+                results.errors++;
+            })));
+        }
+
+        return results;
+    }
+
+    /**
      * 尝试自动同步文件
      * 处理 'Cloud Newer' (自动下载) 和 'Local Newer' (自动上传)
      * 返回操作后的最终状态
@@ -162,6 +324,10 @@ class SyncService {
                 return success ? 'synced' : 'conflict';
             }
             // 双向冲突 -> 无法自动同步
+            if (options.smartMerge) {
+                const merged = await this.trySmartMerge(filePath, options);
+                if (merged) return 'synced';
+            }
             return 'conflict';
         }
 
@@ -283,6 +449,67 @@ class SyncService {
     }
 
     /**
+     * 尝试智能三路合并
+     * Returns true if merge succeeded and uploaded, false if execution failed or conflict remains
+     */
+    private async trySmartMerge(filePath: string, options: SyncOptions): Promise<boolean> {
+        try {
+            console.log(`[SyncService] Attempting Smart Merge for ${filePath}`);
+
+            // 1. 获取 Base (Shadow)
+            const baseContent = await shadowFileService.getShadow(filePath);
+            if (baseContent === null) {
+                console.log(`[SyncService] Smart Merge aborted: No shadow file (Base) found.`);
+                return false;
+            }
+
+            // 2. 获取 Local
+            const localContent = await fsService.readFile(filePath);
+
+            // 3. Download Cloud (Theirs) to memory
+            const tempRelativePath = `.merge_temp/temp_merge_${Date.now()}.md`;
+
+            // Ensure temp directory exists
+            await fsService.createDirectory('.merge_temp');
+
+            // Get absolute path for CloudService (which likely needs file:// URI)
+            const absoluteTempPath = fsService.getAbsolutePath(tempRelativePath);
+
+            await cloudService.downloadFile(filePath, absoluteTempPath);
+            const cloudContent = await fsService.readFile(tempRelativePath);
+
+            // Cleanup temp
+            await fsService.deleteFile(tempRelativePath);
+
+            // 4. Perform Merge
+            const result = mergeUtils.threeWayMerge(baseContent, localContent, cloudContent);
+
+            if (result.hasConflict) {
+                console.log(`[SyncService] Smart Merge failed: Conflict in content.`);
+                return false;
+            }
+
+            console.log(`[SyncService] Smart Merge Success! Writing merged content and uploading.`);
+
+            // 5. Write Merged Content to Local
+            // We must also update Metadata to avoid immediate re-conflict detection?
+            // Actually, performUpload will handle metadata / shadow updates.
+
+            await fsService.writeFile(filePath, result.mergedContent);
+
+            // 6. Upload Merged Content
+            // useShadow: true ensures we update the shadow to this new merged state
+            const uploadSuccess = await this.performUpload(filePath, { ...options, useShadow: true });
+
+            return uploadSuccess;
+
+        } catch (e) {
+            console.error(`[SyncService] Smart Merge exception:`, e);
+            return false;
+        }
+    }
+
+    /**
      * Clear local cache files
      * @param options.includeUnsynced If true, deletes ALL files including modified/uploading/failed ones.
      */
@@ -296,7 +523,6 @@ class SyncService {
 
             if (options.includeUnsynced) {
                 // Destructive clear: Delete EVERYTHING in root
-                const rootFiles = await fsService.listFiles('');
                 // We can just delete root contents? Or use listFilesRecursive to be precise?
                 // fsService.deleteFile works on directories too.
                 // But we want to keep the root folder structure?

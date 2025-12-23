@@ -18,7 +18,7 @@ export const FlashNoteConfigScreen = () => {
         return normalizePath(path);
     });
     const [flashNoteSuffix, setFlashNoteSuffix] = useState(flashNoteConfig.suffix);
-    
+
     // 历史归档配置
     const [historyPattern, setHistoryPattern] = useState(flashNoteConfig.historyPattern || 'none');
     const [historyFolderPath, setHistoryFolderPath] = useState(flashNoteConfig.historyFolderPath || '');
@@ -79,20 +79,20 @@ export const FlashNoteConfigScreen = () => {
     const handleSaveHistoryConfig = async () => {
         setIsSyncingHistory(true);
         try {
-             const normalizedHistoryPath = historyFolderPath ? normalizePath(historyFolderPath) : '';
-             
-             setFlashNoteConfig({
+            const normalizedHistoryPath = historyFolderPath ? normalizePath(historyFolderPath) : '';
+
+            setFlashNoteConfig({
                 ...flashNoteConfig,
                 historyPattern,
                 historyFolderPath: normalizedHistoryPath
             });
-            
+
             await flashNoteService.syncHistoryFiles();
-            
+
             Alert.alert(t('settings.success'), t('flashNoteConfigScreen.configSavedHistorySynced'));
         } catch (error) {
-             console.error('Failed to sync history:', error);
-             Alert.alert(t('settings.failure'), t('flashNoteConfigScreen.saveSuccessHistorySyncFailed'));
+            console.error('Failed to sync history:', error);
+            Alert.alert(t('settings.failure'), t('flashNoteConfigScreen.saveSuccessHistorySyncFailed'));
         } finally {
             setIsSyncingHistory(false);
         }
@@ -109,13 +109,13 @@ export const FlashNoteConfigScreen = () => {
     );
 
     return (
-        <KeyboardAvoidingView 
-            style={styles.container} 
+        <KeyboardAvoidingView
+            style={styles.container}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
         >
             <ScrollView contentContainerStyle={styles.scrollContent}>
-                
+
                 {/* Section 1: Main File Configuration */}
                 <SectionHeader title={t('flashNoteConfigScreen.mainFileConfig')} />
                 <View style={styles.card}>
@@ -180,7 +180,7 @@ export const FlashNoteConfigScreen = () => {
                         onPress={handleSaveSuffixConfig}
                         disabled={isSavingSuffix}
                     >
-                         {isSavingSuffix ? (
+                        {isSavingSuffix ? (
                             <ActivityIndicator color={theme.colors.white} />
                         ) : (
                             <Text style={styles.saveButtonText}>{t('flashNoteConfigScreen.saveSuffixConfig')}</Text>
@@ -230,7 +230,7 @@ export const FlashNoteConfigScreen = () => {
                         onPress={handleSaveHistoryConfig}
                         disabled={isSyncingHistory}
                     >
-                         {isSyncingHistory ? (
+                        {isSyncingHistory ? (
                             <ActivityIndicator color={theme.colors.white} />
                         ) : (
                             <Text style={styles.saveButtonText}>{t('flashNoteConfigScreen.saveSyncHistoryArchive')}</Text>
@@ -239,7 +239,7 @@ export const FlashNoteConfigScreen = () => {
                 </View>
 
             </ScrollView>
-            
+
             {/* 全屏遮罩 (当正在同步时显示，防止用户操作) */}
             {(isSyncingMain || isSyncingHistory) && (
                 <View style={styles.loadingOverlay}>
@@ -262,7 +262,8 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.background,
     },
     scrollContent: {
-        padding: theme.spacing.m,
+        paddingHorizontal: theme.spacing.sm, // Standardize to 8px
+        paddingVertical: theme.spacing.m,
         paddingBottom: 40,
     },
     sectionHeader: {
@@ -279,14 +280,14 @@ const styles = StyleSheet.create({
     },
     card: {
         backgroundColor: theme.colors.surface,
-        borderRadius: 12,
+        borderRadius: theme.radius.sm, // 12 -> 8
         padding: theme.spacing.m,
-        marginBottom: theme.spacing.l,
+        marginBottom: theme.spacing.sm, // l -> sm (8px)
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-        elevation: 1,
+        shadowOpacity: 0.03, // 0.05 -> 0.03
+        shadowRadius: 4,
+        elevation: 0.5, // 1 -> 0.5
     },
     label: {
         fontSize: 15,

@@ -30,7 +30,7 @@ export const AIConfigScreen = () => {
         <ScrollView style={styles.container}>
             <View style={styles.form}>
                 <Text style={styles.description}>{t('ai.settingsSubtitle')}</Text>
-                
+
                 <View style={styles.inputGroup}>
                     <Text style={styles.label}>{t('ai.baseUrl')}</Text>
                     <TextInput
@@ -85,7 +85,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.background,
     },
     form: {
-        padding: theme.spacing.l,
+        padding: theme.spacing.sm, // theme.spacing.l (24) -> sm (8)
     },
     description: {
         fontSize: 14,

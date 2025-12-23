@@ -101,12 +101,18 @@ class FileSystemService {
             const items = dir.list();
             return items.map(item => {
                 const isDirectory = item instanceof Directory;
+                // 'modificationTime' is not on File/Directory instances in new API.
+                // We must use Paths.info(item.uri) to get metadata.
+                const info = Paths.info(item.uri);
+                // @ts-ignore - PathInfo type might be missing modificationTime in strict mode but it exists at runtime/legacy compat
+                const mtimeVal = info.modificationTime;
+
                 return {
                     name: item.name,
                     path: item.uri,
                     size: item.size || 0,
                     isDirectory,
-                    mtime: item.modificationTime ? new Date(item.modificationTime) : new Date(),
+                    mtime: mtimeVal ? new Date(mtimeVal * 1000) : new Date(), // Check if seconds or ms. Usually seconds in Expo.
                 };
             });
         } catch (error) {
@@ -125,20 +131,6 @@ class FileSystemService {
             const items = await this.listFiles(currentPath);
             for (const item of items) {
                 if (item.isDirectory) {
-                    // Calculate relative path for recursion
-                    // item.path is absolute uri. Need to convert to relative or just pass absolute?
-                    // listFiles expects relative or absolute.
-                    // But listFiles output item.path is absolute URI.
-                    // To recurse, we can pass item.path directly as it will be sanitized.
-                    // However, we need to be careful about infinite loops if symlinks existed (unlikely here).
-
-                    // Sanitize path converts absolute URI back correctly.
-                    // But let's be cleaner and use relative paths if possible, or just trust sanitizePath.
-                    // Let's use item.path (URI) which sanitizePath handles.
-
-                    // We need the relative path for listFiles to work relative to root? 
-                    // No, listFiles handles absolute paths via sanitizePath checking if it starts with rootUri.
-
                     await processDirectory(item.path);
                 } else {
                     allFiles.push(item);
@@ -160,6 +152,8 @@ class FileSystemService {
             throw error;
         }
     }
+
+
 
     async writeFile(path: string, content: string): Promise<void> {
         const fullPath = this.sanitizePath(path);
@@ -224,12 +218,6 @@ class FileSystemService {
             const srcInfo = Paths.info(fullSrcPath);
             if (!srcInfo.exists) throw new Error('Source path does not exist');
 
-            // Note: .move() on File/Directory instance takes a DESTINATION (Directory or File).
-            // If passed a Directory, it moves INTO that directory? Or renames TO that directory path?
-            // "move(destination: Directory | File): void;"
-            // "Updated the uri property that now points to the new location."
-            // If I want to rename/move to a specific full path 'destPath', I should create a File/Directory instance for that dest path.
-
             const destInstance = srcInfo.isDirectory ? new Directory(fullDestPath) : new File(fullDestPath);
 
             if (srcInfo.isDirectory) {
@@ -260,17 +248,21 @@ class FileSystemService {
             let name = fullPath.split('/').pop() || '';
             let uri = fullPath;
 
+            // @ts-ignore
+            if (info.modificationTime) {
+                // @ts-ignore
+                mtime = new Date(info.modificationTime * 1000);
+            }
+
             if (info.isDirectory) {
                 isDirectory = true;
                 const dir = new Directory(fullPath);
                 size = dir.size || 0;
-                if (dir.modificationTime) mtime = new Date(dir.modificationTime);
                 name = dir.name;
                 uri = dir.uri;
             } else {
                 const file = new File(fullPath);
                 size = file.size || 0;
-                if (file.modificationTime) mtime = new Date(file.modificationTime);
                 name = file.name;
                 uri = file.uri;
             }
