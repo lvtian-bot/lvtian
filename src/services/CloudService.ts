@@ -25,9 +25,10 @@ import * as SecureStore from 'expo-secure-store';
 // Better to pass config to init method or read from SecureStore + async storage manually if needed.
 // Actually, accessing store.getState() inside a method is usually fine.
 import { useSettingsStore } from '../store/useSettingsStore';
+import { UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT } from '../constants/events';
 
-export const UPLOAD_COMPLETED_EVENT = 'UPLOAD_COMPLETED';
-export const CLOUD_INIT_COMPLETED_EVENT = 'CLOUD_INIT_COMPLETED';
+// Re-export events for backward compatibility
+export { UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT };
 
 
 class CloudService {

@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
+import { useTranslation } from 'react-i18next';
 
 export interface ActionItem {
     label: string;
@@ -32,6 +33,7 @@ export const ActionSheetModal: React.FC<ActionSheetModalProps> = ({
     actions,
     onCancel,
 }) => {
+    const { t } = useTranslation();
     if (!visible) return null;
 
     return (
@@ -100,7 +102,7 @@ export const ActionSheetModal: React.FC<ActionSheetModalProps> = ({
                             ))}
                         </View>
                         <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-                            <Text style={styles.cancelText}>取消</Text>
+                            <Text style={styles.cancelText}>{t('common.cancel')}</Text>
                         </TouchableOpacity>
                     </SafeAreaView>
                 </TouchableWithoutFeedback>

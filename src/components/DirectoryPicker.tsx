@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
     Modal,
     View,
@@ -26,6 +27,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
     onConfirm,
     onCancel,
 }) => {
+    const { t } = useTranslation();
     const [currentDir, setCurrentDir] = useState('');
     const [directories, setDirectories] = useState<FileItem[]>([]);
     const [loading, setLoading] = useState(false);
@@ -88,12 +90,12 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
 
     const renderBreadcrumb = () => {
         if (!currentDir) {
-            return <Text style={styles.breadcrumb}>根目录</Text>;
+            return <Text style={styles.breadcrumb}>{t('browser.root')}</Text>;
         }
         const parts = currentDir.split('/').filter(Boolean);
         return (
             <Text style={styles.breadcrumb}>
-                {parts.length > 0 ? parts.join(' / ') : '根目录'}
+                {parts.length > 0 ? parts.join(' / ') : t('browser.root')}
             </Text>
         );
     };
@@ -108,11 +110,11 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
             <View style={styles.container}>
                 <View style={styles.header}>
                     <TouchableOpacity onPress={onCancel} style={styles.headerButton}>
-                        <Text style={styles.headerButtonText}>取消</Text>
+                        <Text style={styles.headerButtonText}>{t('common.cancel')}</Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>选择目标目录</Text>
+                    <Text style={styles.headerTitle}>{t('browser.selectTargetDir')}</Text>
                     <TouchableOpacity onPress={handleConfirm} style={styles.headerButton}>
-                        <Text style={[styles.headerButtonText, styles.confirmText]}>确认</Text>
+                        <Text style={[styles.headerButtonText, styles.confirmText]}>{t('common.confirm')}</Text>
                     </TouchableOpacity>
                 </View>
 
@@ -126,7 +128,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                 </View>
 
                 <View style={styles.currentDirInfo}>
-                    <Text style={styles.infoText}>当前目录</Text>
+                    <Text style={styles.infoText}>{t('browser.currentDir')}</Text>
                 </View>
 
                 {loading ? (
@@ -147,7 +149,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                         keyExtractor={(item) => item.path}
                         ListEmptyComponent={
                             <View style={styles.emptyContainer}>
-                                <Text style={styles.emptyText}>此目录下没有子目录</Text>
+                                <Text style={styles.emptyText}>{t('browser.emptyDir')}</Text>
                             </View>
                         }
                     />

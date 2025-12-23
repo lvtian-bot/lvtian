@@ -10,6 +10,7 @@ import {
     Platform,
 } from 'react-native';
 import { theme } from '../utils/theme';
+import { useTranslation } from 'react-i18next';
 
 interface RenameDialogProps {
     visible: boolean;
@@ -24,6 +25,7 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
     onConfirm,
     onCancel,
 }) => {
+    const { t } = useTranslation();
     const [newName, setNewName] = useState(currentName);
     const inputRef = useRef<TextInput>(null);
 
@@ -57,14 +59,14 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
                 style={styles.overlay}
             >
                 <View style={styles.container}>
-                    <Text style={styles.title}>重命名</Text>
+                    <Text style={styles.title}>{t('common.rename')}</Text>
 
                     <TextInput
                         ref={inputRef}
                         style={styles.input}
                         value={newName}
                         onChangeText={setNewName}
-                        placeholder="输入新名称"
+                        placeholder={t('common.enterNewName')}
                         autoFocus
                         selectTextOnFocus
                         onSubmitEditing={handleConfirm}
@@ -75,14 +77,14 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
                             style={[styles.button, styles.cancelButton]}
                             onPress={onCancel}
                         >
-                            <Text style={styles.cancelButtonText}>取消</Text>
+                            <Text style={styles.cancelButtonText}>{t('common.cancel')}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             style={[styles.button, styles.confirmButton]}
                             onPress={handleConfirm}
                         >
-                            <Text style={styles.confirmButtonText}>确认</Text>
+                            <Text style={styles.confirmButtonText}>{t('common.confirm')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>

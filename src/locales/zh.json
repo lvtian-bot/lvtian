@@ -80,7 +80,11 @@
     "createNewFile": "新建文件",
     "enterFilename": "请输入文件名 (例如: MyNote)",
     "emptyFilenameError": "文件名不能为空",
-    "fileAlreadyExists": "文件已存在"
+    "fileAlreadyExists": "文件已存在",
+    "selectTargetDir": "选择目标目录",
+    "currentDir": "当前目录",
+    "emptyDir": "此目录下没有子目录",
+    "imageNotFound": "图片未找到"
   },
   "timeline": {
     "add": "添加",
@@ -94,6 +98,11 @@
     "saveError": "保存闪念笔记失败",
     "emptyNoteError": "笔记内容不能为空！",
     "deleteError": "删除闪念笔记失败"
+  },
+  "editor": {
+    "loadFileFailed": "加载文件失败",
+    "uploadFailedTitle": "上传失败",
+    "uploadFailedMessage": "文件已保存到本地，但云上传失败。您可以稍后重新同步。"
   },
   "common": {
     "back": "返回",
@@ -218,5 +227,19 @@
     "saveSyncHistoryArchive": "保存并同步历史归档",
     "syncingMainFile": "正在同步主文件...",
     "scanningDownloadingHistory": "正在扫描并下载历史归档..."
+  },
+  "date": {
+    "year": "年",
+    "month": "月",
+    "day": "日"
+  },
+  "statusBanner": {
+    "unconfigured": "未配置云服务：当前仅使用本地存储",
+    "uploadFailed": "上次上传失败",
+    "uploadFailedShort": "上传失败",
+    "conflict": "本地和云端已同时修改 (冲突)",
+    "resolveUseLocal": "上传本地覆盖云端",
+    "resolveUseCloud": "使用云端版本",
+    "resolveSaveCopy": "保存副本"
   }
 }

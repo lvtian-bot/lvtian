@@ -28,7 +28,8 @@ export const useFileMetadataStore = create<FileMetadataState>()(
     persist(
         (set, get) => ({
             metadata: {},
-            setMetadata: (filePath, syncedHash, localHash, lastModified) =>
+            setMetadata: (filePath, syncedHash, localHash, lastModified) => {
+                console.log('[Metadata] setMetadata:', filePath, '{ syncedHash:', syncedHash, 'localHash:', localHash, '}');
                 set((state) => ({
                     metadata: {
                         ...state.metadata,
@@ -39,7 +40,8 @@ export const useFileMetadataStore = create<FileMetadataState>()(
                             uploadState: null,
                         },
                     },
-                })),
+                }));
+            },
             setUploadState: (filePath, uploadState) =>
                 set((state) => ({
                     metadata: {
@@ -51,15 +53,19 @@ export const useFileMetadataStore = create<FileMetadataState>()(
                     },
                 })),
             markFileAsModified: (filePath) =>
-                set((state) => ({
-                    metadata: {
+                set((state) => {
+                    const currentMetadata = state.metadata[filePath];
+                    console.log('[Metadata] markFileAsModified:', filePath, 'Current:', JSON.stringify(currentMetadata));
+                    const newMetadata = {
                         ...state.metadata,
                         [filePath]: {
                             ...(state.metadata[filePath] || { syncedHash: null, lastModified: null, uploadState: null }),
                             localHash: LOCAL_MODIFIED_HASH,
                         },
-                    },
-                })),
+                    };
+                    console.log('[Metadata] After mark:', filePath, 'New:', JSON.stringify(newMetadata[filePath]));
+                    return { metadata: newMetadata };
+                }),
             getMetadata: (filePath) => {
                 const state = get();
                 return state.metadata[filePath];
@@ -108,8 +114,19 @@ export const useFileMetadataStore = create<FileMetadataState>()(
         {
             name: 'file-metadata-storage',
             storage: createJSONStorage(() => AsyncStorage),
-            onRehydrateStorage: () => (state) => {
-                state?.resetUploadingToFailed();
+            partialize: (state) => {
+                // Clone metadata to avoid mutating state
+                const newMetadata: Record<string, FileMetadata> = {};
+                for (const key in state.metadata) {
+                    const meta = state.metadata[key];
+                    // Only persist 'failed' / 'conflict-failed' states (or null)
+                    // If 'uploading', persist as null (so restart means "not uploading")
+                    newMetadata[key] = {
+                        ...meta,
+                        uploadState: meta.uploadState === 'uploading' ? null : meta.uploadState,
+                    };
+                }
+                return { metadata: newMetadata };
             },
         }
     )

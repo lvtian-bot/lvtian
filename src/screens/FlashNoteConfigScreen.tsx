@@ -57,7 +57,7 @@ export const FlashNoteConfigScreen = () => {
             });
 
             // 同步主文件
-            await flashNoteService.syncMainFile();
+            await flashNoteService.syncAll();
 
             Alert.alert(t('settings.success'), t('settings.success'));
         } catch (error) {
@@ -93,7 +93,7 @@ export const FlashNoteConfigScreen = () => {
                 historyFolderPath: normalizedHistoryPath
             });
 
-            await flashNoteService.syncHistoryFiles();
+            await flashNoteService.syncAll();
 
             Alert.alert(t('settings.success'), t('flashNoteConfigScreen.configSavedHistorySynced'));
         } catch (error) {
@@ -151,8 +151,8 @@ export const FlashNoteConfigScreen = () => {
                     <View style={styles.chipContainer}>
                         {[
                             { label: t('settings.suffixPresets.none'), value: '' },
-                            { label: `\\n> ${t('flashNoteConfigScreen.reference')}`, value: '\n>' },
-                            { label: `\\n> ${t('flashNoteConfigScreen.referenceWithSpace')}`, value: '\n> ' }
+                            { label: '\\n>', value: '\n>' },
+                            { label: '\\n👉', value: '\n👉' }
                         ].map((preset) => (
                             <TouchableOpacity
                                 key={preset.label}

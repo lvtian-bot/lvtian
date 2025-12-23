@@ -74,7 +74,11 @@
     "createNewFile": "Create New File",
     "enterFilename": "Enter filename (e.g. MyNote)",
     "emptyFilenameError": "Filename cannot be empty",
-    "fileAlreadyExists": "File already exists"
+    "fileAlreadyExists": "File already exists",
+    "selectTargetDir": "Select Target Directory",
+    "currentDir": "Current Directory",
+    "emptyDir": "No subdirectories found",
+    "imageNotFound": "Image not found"
   },
   "timeline": {
     "add": "Add",
@@ -88,6 +92,11 @@
     "saveError": "Failed to save flash note",
     "emptyNoteError": "Note content cannot be empty!",
     "deleteError": "Failed to delete flash note"
+  },
+  "editor": {
+    "loadFileFailed": "Failed to load file",
+    "uploadFailedTitle": "Upload Failed",
+    "uploadFailedMessage": "File saved locally but cloud upload failed. You can sync later."
   },
   "common": {
     "back": "Back",
@@ -206,5 +215,19 @@
     "saveSyncHistoryArchive": "Save and Sync History Archive",
     "syncingMainFile": "Syncing main file...",
     "scanningDownloadingHistory": "Scanning and downloading history archives..."
+  },
+  "date": {
+    "year": "Year",
+    "month": "Month",
+    "day": "Day"
+  },
+  "statusBanner": {
+    "unconfigured": "Cloud not configured: Using local storage only",
+    "uploadFailed": "Last upload failed",
+    "uploadFailedShort": "Upload failed",
+    "conflict": "Conflict: Local and Cloud modified",
+    "resolveUseLocal": "Overwrite Cloud with Local",
+    "resolveUseCloud": "Use Cloud Version",
+    "resolveSaveCopy": "Save Copy"
   }
 }

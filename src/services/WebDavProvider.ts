@@ -93,13 +93,19 @@ export class WebDavProvider implements ICloudProvider {
         };
 
         if (expectedEtag) {
-            headers['If-Match'] = `"${expectedEtag}"`;
+            headers['If-Match'] = expectedEtag;
         }
 
         const response = await this.request('PUT', key, headers, content);
 
         if (!response.ok) {
             if (response.status === 412) {
+                // 立即查询云端的实际 ETag
+                const actualMetadata = await this.headFile(key);
+                const actualEtag = actualMetadata?.etag || 'UNKNOWN';
+                console.log('[WebDav Upload] 412 Precondition Failed for:', key);
+                console.log('[WebDav Upload] Expected ETag:', expectedEtag);
+                console.log('[WebDav Upload] Actual cloud ETag:', actualEtag);
                 const e: any = new Error('Precondition Failed');
                 e.code = 'PreconditionFailed';
                 throw e;
@@ -109,6 +115,7 @@ export class WebDavProvider implements ICloudProvider {
 
         // Fetch verification metadata
         const metadata = await this.headFile(key);
+        console.log('[WebDav Upload] Upload successful, new ETag:', metadata?.etag, 'for file:', key);
         if (metadata) {
             return metadata;
         }

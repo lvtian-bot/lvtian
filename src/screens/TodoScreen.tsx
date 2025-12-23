@@ -41,7 +41,9 @@ export const TodoScreen = () => {
         conflictType,
         isSyncing,
         checkSync,
-        resolveConflict
+        resolveConflict,
+        conflictedFiles,
+        uploadErrorFiles
     } = useFlashNoteList<TodoItem>({
         parser: (content, filePath) => flashNoteService.extractTodos(flashNoteService.parseNotes(content, filePath)),
         // enableAutoCheck: false, // Removed
@@ -335,6 +337,8 @@ export const TodoScreen = () => {
                 conflictType={conflictType}
                 checkSync={checkSync}
                 hasFailedUpload={hasFailedUpload}
+                conflictedFiles={conflictedFiles}
+                uploadErrorFiles={uploadErrorFiles}
                 onResolveUseCloud={() => resolveConflict('useCloud').then(handleRefresh)}
                 onResolveUseLocal={() => resolveConflict('useLocal').then(handleRefresh)}
                 onResolveSaveCopy={() => resolveConflict('saveCopy').then(handleRefresh)}

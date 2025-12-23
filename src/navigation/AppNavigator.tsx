@@ -26,7 +26,7 @@ export const AppNavigator = () => {
                 component={CloudRepoConfigScreen}
                 options={{
                     headerShown: true,
-                    title: t('settings.cloudRepoConfig') || '云端仓库配置' // 可以在i18n中配置
+                    title: t('settings.cloudRepoConfig')
                 }}
             />
             {/* 新增：AI 配置页面 */}
@@ -35,7 +35,7 @@ export const AppNavigator = () => {
                 component={AIConfigScreen}
                 options={{
                     headerShown: true,
-                    title: t('ai.settingsTitle') || 'AI Settings'
+                    title: t('ai.settingsTitle')
                 }}
             />
             {/* 新增：闪念笔记设置二级页面 */}
@@ -44,7 +44,7 @@ export const AppNavigator = () => {
                 component={FlashNoteConfigScreen}
                 options={{
                     headerShown: true,
-                    title: t('settings.flashNoteConfig') || '闪念笔记设置' // 可以在i18n中配置
+                    title: t('settings.flashNoteConfig')
                 }}
             />
             {/* 新增：缓存管理页面 */}
@@ -53,7 +53,7 @@ export const AppNavigator = () => {
                 component={CacheManagerScreen}
                 options={{
                     headerShown: true,
-                    title: t('settings.cacheManager') || '缓存管理'
+                    title: t('settings.cacheManager')
                 }}
             />
         </Stack.Navigator>

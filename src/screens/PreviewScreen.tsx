@@ -15,6 +15,7 @@ import { theme } from '../utils/theme';
 import { markdownThemes } from '../utils/markdownThemes';
 import { useCloudSync } from '../hooks/useCloudSync';
 import { StatusBanner } from '../components/StatusBanner';
+import { StatusBannerContainer } from '../components/StatusBannerContainer';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -39,7 +40,6 @@ export const PreviewScreen = () => {
     const shouldShowConflictBanner = syncStatus === 'conflict' && (
         conflictType === 'bidirectional' ||
         !conflictType || // Fallback
-        fileMetadata?.uploadState === 'failed' ||
         fileMetadata?.uploadState === 'conflict-failed'
     );
 
@@ -159,8 +159,8 @@ export const PreviewScreen = () => {
                     </Text>
                     {isEffectivelySyncing && <ActivityIndicator size="small" color={theme.colors.primary} />}
                     {!isEffectivelySyncing && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
-                    {!isEffectivelySyncing && (syncStatus === 'conflict' || syncStatus === 'offline') && <Text style={styles.syncIcon}>⚠️</Text>}
-                    {!isEffectivelySyncing && syncStatus === 'error' && <Text style={styles.syncIcon}>❌</Text>}
+                    {!isEffectivelySyncing && (syncStatus === 'conflict' || syncStatus === 'offline' || syncStatus === 'not-configured' || (syncStatus === 'error' && fileMetadata?.uploadState === 'failed')) && <Text style={styles.syncIcon}>⚠️</Text>}
+                    {!isEffectivelySyncing && syncStatus === 'error' && fileMetadata?.uploadState !== 'failed' && <Text style={styles.syncIcon}>❌</Text>}
                 </View>
                 <TouchableOpacity
                     onPress={() => navigation.navigate('Editor', { filePath })}
@@ -176,35 +176,17 @@ export const PreviewScreen = () => {
                 </View>
             ) : (
                 <>
-                    {syncStatus === 'offline' && (
-                        <StatusBanner
-                            visible={true}
-                            message={`${t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}${(fileMetadata?.uploadState === 'failed' || fileMetadata?.uploadState === 'conflict-failed')
-                                ? ' (上次上传失败)'
-                                : ''
-                                }`}
-                            type="warning"
-                            onPress={checkSync}
-                        />
-                    )}
-
-                    {shouldShowConflictBanner && (
-                        <StatusBanner
-                            visible={true}
-                            message={fileMetadata?.uploadState === 'failed'
-                                ? '上传失败'
-                                : '本地和云端已同时修改 (冲突)'
-                            }
-                            type="warning"
-                            actions={fileMetadata?.uploadState === 'failed' ? [
-                                { label: '上传本地覆盖云端', onPress: handleUploadOverwrite }
-                            ] : [
-                                { label: '使用云端版本覆盖本地', onPress: handleOverwriteLocal },
-                                { label: '保存本地为副本', onPress: handleSaveCopy },
-                                { label: '上传本地覆盖云端', onPress: handleUploadOverwrite }
-                            ]}
-                        />
-                    )}
+                    <StatusBannerContainer
+                        syncStatus={syncStatus}
+                        conflictType={conflictType}
+                        checkSync={checkSync}
+                        hasFailedUpload={fileMetadata?.uploadState === 'failed'}
+                        uploadErrorFiles={fileMetadata?.uploadState === 'failed' ? [filePath] : []}
+                        conflictedFiles={shouldShowConflictBanner ? [filePath] : []}
+                        onResolveUseCloud={handleOverwriteLocal}
+                        onResolveUseLocal={handleUploadOverwrite}
+                        onResolveSaveCopy={handleSaveCopy}
+                    />
 
                     <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
                         <Markdown
@@ -299,7 +281,7 @@ const styles = StyleSheet.create({
         height: 200,
     },
     center: {
-        justifyContent: 'center', 
+        justifyContent: 'center',
         alignItems: 'center',
     },
     loadingBg: {
@@ -309,7 +291,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#f0f0f0',
     },
     errorText: {
-        color: '#999', 
+        color: '#999',
         fontSize: 12,
     },
 });
@@ -441,7 +423,7 @@ const RepoImage = ({ src, alt, style, currentFilePath }: { src: string, alt?: st
     if (error || !localUri) {
         return (
             <View style={[styles.image, styles.center, styles.errorBg]}>
-                <Text style={styles.errorText}>{t('common.error')}: {alt || 'Image not found'}</Text>
+                <Text style={styles.errorText}>{t('common.error')}: {alt || t('browser.imageNotFound') || 'Image not found'}</Text>
             </View>
         );
     }

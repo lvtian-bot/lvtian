@@ -65,7 +65,7 @@ export const TabNavigator = () => {
                 component={TodoScreen}
                 options={{
                     headerShown: true,
-                    title: t('tabs.todo') || '待办',
+                    title: t('tabs.todo'),
                     tabBarIcon: TodoIcon,
                 }}
             />
@@ -74,7 +74,7 @@ export const TabNavigator = () => {
                 component={AgentScreen}
                 options={{
                     headerShown: false, // Custom header in screen
-                    title: t('tabs.agent') || '代理',
+                    title: t('tabs.agent'),
                     tabBarIcon: AgentIcon,
                     tabBarStyle: {
                         borderTopWidth: 0, // Ensure no border matches main style

@@ -13,12 +13,12 @@ import {
 import { theme } from '../utils/theme';
 
 interface WheelPickerProps {
-    data: string[];
-    selectedIndex: number;
-    onValueChange: (index: number) => void;
-    itemHeight?: number;
-    visibleItems?: number;
-    width?: DimensionValue; // Use correct type
+    data: string[]; // 数据源数组
+    selectedIndex: number; // 当前选中项的索引
+    onValueChange: (index: number) => void; // 值改变时的回调
+    itemHeight?: number; // 每一项的高度，默认为 40
+    visibleItems?: number; // 可见项数量，默认为 5
+    width?: DimensionValue; // 组件宽度
 }
 
 export const WheelPicker: React.FC<WheelPickerProps> = ({
@@ -32,15 +32,11 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
     const flatListRef = useRef<FlatList>(null);
     const [isScrolling, setIsScrolling] = useState(false);
 
-    // Calculate container height
+    // 计算容器高度
     const containerHeight = itemHeight * visibleItems;
-    const halfContainerHeight = containerHeight / 2;
-    const textStyle = { fontSize: itemHeight * 0.45 };
 
-    // Pad data to center the first and last items
+    // 填充数据以使第一项和最后一项居中
     const paddingCount = Math.floor(visibleItems / 2);
-    // We don't actually modify data array for padding in FlatList with contentContainerStyle usually,
-    // but for snapToInterval to work perfectly with centering, top/bottom padding is key.
 
     useEffect(() => {
         // Scroll to initial index on mount

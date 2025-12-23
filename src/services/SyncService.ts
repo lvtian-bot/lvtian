@@ -6,8 +6,9 @@ import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { normalizePath } from '../utils/pathUtils';
 import { shadowFileService } from './ShadowFileService';
 import { mergeUtils } from '../utils/mergeUtils';
+import { BATCH_SYNC_STATUS_CHANGED_EVENT } from '../constants/events';
 
-export type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error' | 'offline' | 'not-configured' | 'uploading' | 'downloading';
+export type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error' | 'offline' | 'not-configured';
 export type ConflictType = 'cloudNewer' | 'localNewer' | 'bidirectional' | null;
 
 export interface SyncCheckResult {
@@ -30,6 +31,7 @@ export interface SyncOptions {
 }
 
 class SyncService {
+    private autoRetryCache = new Set<string>(); // Cache for files that have been auto-retried once
 
     /**
      * 检查文件的同步状态
@@ -39,7 +41,13 @@ class SyncService {
         const { getMetadata } = useFileMetadataStore.getState();
         const localMetadata = getMetadata(filePath);
 
-        // 1. 检查云端配置
+        // 1. 检查网络状态 (优先于配置检查，离线时应直接显示本地内容)
+        const netState = await NetInfo.fetch();
+        if (netState.isConnected === false) {
+            return { status: 'offline', conflictType: null };
+        }
+
+        // 2. 检查云端配置
         // 必须先检查是否初始化完成，否则可能在启动过程中误报未配置
         if (!cloudService.isInitialized()) {
             return { status: 'checking', conflictType: null };
@@ -48,16 +56,24 @@ class SyncService {
         if (!cloudService.isConfigured()) {
             return { status: 'not-configured', conflictType: null };
         }
-
-        // 2. 检查网络状态
-        const netState = await NetInfo.fetch();
-        if (netState.isConnected === false) {
-            return { status: 'offline', conflictType: null };
+        if (localMetadata?.uploadState === 'uploading') {
+            return { status: 'checking', conflictType: null };
         }
 
-        // 3. 检查上传状态
-        if (localMetadata?.uploadState === 'uploading') {
-            return { status: 'uploading', conflictType: null };
+        // 自动重试逻辑：如果是普通失败，仅重试一次
+        if (localMetadata?.uploadState === 'failed') {
+            if (!this.autoRetryCache.has(filePath)) {
+                this.autoRetryCache.add(filePath);
+                this.uploadFile(filePath).catch(console.error);
+                return { status: 'checking', conflictType: null };
+            }
+            // 否则，不再重试，返回 error 状态 (UI 将根据 uploadState='failed' 显示重试 Banner)
+            return { status: 'error', conflictType: null };
+        }
+
+        // 冲突逻辑：如果是乐观锁失败，直接视为双向冲突
+        if (localMetadata?.uploadState === 'conflict-failed') {
+            return { status: 'conflict', conflictType: 'bidirectional', localHash: localMetadata.localHash, syncedHash: localMetadata.syncedHash, cloudHash: null };
         }
 
         try {
@@ -95,9 +111,13 @@ class SyncService {
                     );
                 }
                 // 如果之前标记为失败，清除它
-                if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                    useFileMetadataStore.getState().setUploadState(filePath, null);
-                }
+                // 如果之前标记为失败，清除它
+                // (注意：前面的 Early Return 已经处理了 failed/conflict-failed，能走到这里说明状态已重置或为 null，
+                // 但为了保险起见，如果是 null 以外的残留状态（虽然 TS 认为只有 null），可以保留清理逻辑，但必须绕过 TS 检查
+                // 或者更简单：既然 localHash === cloudHash (synced)，那么 uploadState 理应被置空。)
+                // useFileMetadataStore.getState().setUploadState(filePath, null); 
+                // 其实 setMetadata 内部已经把 uploadState 置为 null 了（见 store 定义）。
+                // 所以这里的 check 是完全多余的。直接移除。
                 return { status: 'synced', conflictType: null, localHash, syncedHash, cloudHash };
             }
 
@@ -105,15 +125,7 @@ class SyncService {
 
             // 情况 C: 哈希不匹配 (冲突/需要同步)
 
-            // Special: 检查本地文件是否存在但无 Metadata (未受控文件)
-            // 这种情况下，如果直接视为 cloudNewer 会导致本地文件被覆盖丢失
-            if (!localMetadata) {
-                const exists = await fsService.exists(filePath);
-                if (exists) {
-                    console.log(`[SyncDebug] ${filePath}: Detected Unmanaged Local File (Conflict)`);
-                    return { status: 'conflict', conflictType: 'bidirectional', localHash, syncedHash, cloudHash };
-                }
-            }
+            // Special: 检查本地文件是否存在但无 Metadata (未受控文件) -> 这种情况现在按正常逻辑处理（即视为 cloudNewer，自动覆盖）
 
             // C1: 仅云端更新 (localHash == syncedHash) -> 云端较新 (需要下载)
             if (localHash === syncedHash) {
@@ -139,9 +151,11 @@ class SyncService {
 
             console.error('Sync Check Error:', error);
             // 如果之前本地上传失败，视为冲突/本地较新，以便用户重试
-            if (localMetadata?.uploadState === 'failed' || localMetadata?.uploadState === 'conflict-failed') {
-                return { status: 'conflict', conflictType: 'localNewer' };
-            }
+            // 如果之前本地上传失败，视为冲突/本地较新，以便用户重试
+            // Update: 这里也是 redundant，因为前面已经 Early Return 了。
+            // 如果走到这里 catch error，说明是 HEAD 请求或者网络挂了。
+            // 此时 localMetadata.uploadState 只能是 null 或 undefined (因为 failed/conflict-failed 早就 return 了)。
+            // 所以这个 if 永远为假。直接移除。
 
             // 检查本地文件是否存在，如果存在且出错，可能是网络或其他问题 -> Offline/Error
             try {
@@ -166,9 +180,9 @@ class SyncService {
         cloudFiles: import('./CloudService').CloudFileItem[],
         fileFilter?: (filename: string) => boolean,
         options: SyncOptions = {}
-    ): Promise<{ synced: number; errors: number; conflicts: number }> {
+    ): Promise<{ synced: number; errors: number; conflicts: number; conflictedFiles: string[]; errorFiles: string[] }> {
         const { getMetadata } = useFileMetadataStore.getState();
-        const results = { synced: 0, errors: 0, conflicts: 0 };
+        const results = { synced: 0, errors: 0, conflicts: 0, conflictedFiles: [] as string[], errorFiles: [] as string[] };
         const localFileList = options.localFiles || [];
 
         // 1. 构建全量文件集合 (Union of Cloud & Local)
@@ -200,6 +214,8 @@ class SyncService {
             const syncedHash = localMetadata?.syncedHash ?? null;
             const localHash = localMetadata?.localHash ?? null;
             const cloudHash = cloudItem?.etag ?? null;
+
+            console.log(`[BatchSync] File: ${path}, Cloud ETag: ${cloudHash}, Synced: ${syncedHash}, Local: ${localHash}`);
 
             // --- 逻辑与 checkSyncStatus 保持一致 ---
 
@@ -263,6 +279,7 @@ class SyncService {
                     if (exists) {
                         console.log(`[BatchSync] ${path}: Conflict (Unmanaged Local + Cloud Exists)`);
                         results.conflicts++;
+                        results.conflictedFiles.push(path);
                     } else {
                         console.log(`[BatchSync] ${path}: New cloud file -> Downloading`);
                         await this.performDownload(path, options);
@@ -281,10 +298,12 @@ class SyncService {
                         results.synced++;
                     } else {
                         results.conflicts++;
+                        results.conflictedFiles.push(path);
                     }
                 });
             } else {
                 results.conflicts++;
+                results.conflictedFiles.push(path);
             }
         }
 
@@ -295,6 +314,7 @@ class SyncService {
             await Promise.all(chunk.map(t => t().catch(e => {
                 console.error('[BatchSync] Task failed', e);
                 results.errors++;
+                // Note: We can't easily get path here in current structure, but errors are less common
             })));
         }
 
@@ -353,10 +373,19 @@ class SyncService {
         try {
             setUploadState(filePath, 'uploading');
 
+            // Broadcast uploading status for real-time UI feedback
+            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, {
+                status: 'checking',
+                conflicts: [],
+                uploadErrors: []
+            });
+
             // 1. 处理乐观锁
             let expectedEtag: string | undefined;
             if (options.withLock) {
-                expectedEtag = getMetadata(filePath)?.syncedHash || undefined;
+                const metadata = getMetadata(filePath);
+                expectedEtag = metadata?.syncedHash || undefined;
+                console.log('[Upload] File:', filePath, 'Expected ETag:', expectedEtag, 'Metadata:', JSON.stringify(metadata));
             }
 
             // 2. 执行上传
@@ -380,16 +409,39 @@ class SyncService {
                 }
 
                 DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: true });
+
+                // Broadcast success status for real-time UI feedback
+                DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, {
+                    status: 'synced',
+                    conflicts: [],
+                    uploadErrors: []
+                });
+
+                this.autoRetryCache.delete(filePath); // Clear retry cache on success
                 return true;
             }
             return false;
         } catch (error: any) {
-            console.error('SyncService Upload failed:', error);
-
             if (error.code === 'PreconditionFailed') {
+                console.warn('SyncService Upload prevented (Optimistic Lock):', error.message);
                 setUploadState(filePath, 'conflict-failed');
+
+                // Broadcast conflict status for real-time UI feedback
+                DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, {
+                    status: 'conflict',
+                    conflicts: [filePath],
+                    uploadErrors: []
+                });
             } else {
+                console.error('SyncService Upload failed:', error);
                 setUploadState(filePath, 'failed');
+
+                // Broadcast error status for real-time UI feedback
+                DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, {
+                    status: 'error',
+                    conflicts: [],
+                    uploadErrors: [filePath]
+                });
             }
 
             DeviceEventEmitter.emit(UPLOAD_COMPLETED_EVENT, { filePath, success: false });
@@ -401,7 +453,9 @@ class SyncService {
         const { setMetadata } = useFileMetadataStore.getState();
         try {
             const result = await cloudService.downloadFile(filePath, filePath);
+            console.log('[Download] Downloaded', filePath, 'etag:', result.etag);
             setMetadata(filePath, result.etag, result.etag, result.lastModified);
+            console.log('[Download] Set metadata - syncedHash:', result.etag, 'localHash:', result.etag);
 
             // 更新影子文件 (如果启用)
             if (options.useShadow) {
@@ -422,8 +476,9 @@ class SyncService {
     }
 
     async resolveConflict(filePath: string, strategy: 'useCloud' | 'useLocal' | 'saveCopy'): Promise<void> {
+        console.log('[ResolveConflict] Strategy:', strategy, 'File:', filePath);
         if (strategy === 'useCloud') {
-            await this.performDownload(filePath);
+            await this.performDownload(filePath, { useShadow: true });
         } else if (strategy === 'useLocal') {
             await this.performUpload(filePath);
         } else if (strategy === 'saveCopy') {
@@ -444,7 +499,7 @@ class SyncService {
             }
 
             // 下载云端版本
-            await this.performDownload(filePath);
+            await this.performDownload(filePath, { useShadow: true });
         }
     }
 

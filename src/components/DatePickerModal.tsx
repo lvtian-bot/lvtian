@@ -12,10 +12,10 @@ import { theme } from '../utils/theme';
 import { WheelPicker } from './WheelPicker';
 
 interface DatePickerModalProps {
-    visible: boolean;
-    initialDate?: string; // YYYY-MM-DD
-    onConfirm: (date: string) => void;
-    onCancel: () => void;
+    visible: boolean; // 模态框是否可见
+    initialDate?: string; // 初始日期，格式 YYYY-MM-DD
+    onConfirm: (date: string) => void; // 确认选择的回调
+    onCancel: () => void; // 取消选择的回调
 }
 
 export const DatePickerModal: React.FC<DatePickerModalProps> = ({
@@ -26,17 +26,19 @@ export const DatePickerModal: React.FC<DatePickerModalProps> = ({
 }) => {
     const { t } = useTranslation();
 
-    // Default to today if no initial date
+    // 如果没有初始日期，默认使用今天
     const today = new Date();
     const currentYear = today.getFullYear();
     const currentMonth = today.getMonth() + 1;
     const currentDay = today.getDate();
 
+    // 选中的年、月、日状态
     const [selectedYear, setSelectedYear] = useState(currentYear);
     const [selectedMonth, setSelectedMonth] = useState(currentMonth);
     const [selectedDay, setSelectedDay] = useState(currentDay);
 
-    // Initialize state when visible changes
+    // 当可见性改变时初始化状态
+
     useEffect(() => {
         if (visible) {
             let y = currentYear;
@@ -98,7 +100,6 @@ export const DatePickerModal: React.FC<DatePickerModalProps> = ({
     const yearIndex = years.indexOf(selectedYear.toString());
     const monthIndex = selectedMonth - 1; // 0-based
     const dayIndex = selectedDay - 1; // 0-based
-
     return (
         <Modal
             animationType="fade"

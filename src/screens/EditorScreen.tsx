@@ -57,11 +57,11 @@ export const EditorScreen = () => {
 
             if (draftContent && draftContent !== fileContent) {
                 Alert.alert(
-                    t('common.draftFound') || '发现未保存的草稿',
-                    t('common.restoreDraftPrompt') || '是否恢复上次未保存的内容？',
+                    t('common.draftFound'),
+                    t('common.restoreDraftPrompt'),
                     [
                         {
-                            text: t('common.discard') || '丢弃',
+                            text: t('common.discard'),
                             style: 'destructive',
                             onPress: async () => {
                                 await AsyncStorage.removeItem(DRAFT_KEY);
@@ -71,7 +71,7 @@ export const EditorScreen = () => {
                             },
                         },
                         {
-                            text: t('common.restore') || '恢复',
+                            text: t('common.restore'),
                             onPress: () => {
                                 setContent(draftContent);
                                 initialContentRef.current = fileContent; // Initial is still file content
@@ -89,7 +89,7 @@ export const EditorScreen = () => {
 
         } catch (error) {
             console.error('[EditorScreen] Error loading file:', error);
-            Alert.alert('加载文件失败', JSON.stringify(error));
+            Alert.alert(t('editor.loadFileFailed'), JSON.stringify(error));
             setContent('');
             initialContentRef.current = '';
             isDraftLoaded.current = true;
@@ -167,7 +167,7 @@ export const EditorScreen = () => {
                 // 但我们可能想给用户一个 Alert
                 const metadata = useFileMetadataStore.getState().getMetadata(filePath);
                 if (metadata?.uploadState === 'conflict-failed' || metadata?.uploadState === 'failed') {
-                    Alert.alert('上传失败', '文件已保存到本地，但云上传失败。您可以稍后重新同步。');
+                    Alert.alert(t('editor.uploadFailedTitle'), t('editor.uploadFailedMessage'));
                 }
             }
 
@@ -181,11 +181,11 @@ export const EditorScreen = () => {
     const handleBackPress = useCallback(() => {
         if (isDirty) {
             Alert.alert(
-                t('common.confirm') || '确认',
-                t('common.saveChangesPrompt') || '是否保存更改？',
+                t('common.confirm'),
+                t('common.saveChangesPrompt'),
                 [
                     {
-                        text: t('common.dontSave') || '暂不保存',
+                        text: t('common.dontSave'),
                         style: 'destructive',
                         onPress: async () => {
                             await AsyncStorage.removeItem(DRAFT_KEY);
@@ -193,11 +193,11 @@ export const EditorScreen = () => {
                         },
                     },
                     {
-                        text: t('common.cancel') || '取消',
+                        text: t('common.cancel'),
                         style: 'cancel',
                     },
                     {
-                        text: t('common.save') || '保存',
+                        text: t('common.save'),
                         onPress: () => handleManualSave(content),
                     },
                 ]
@@ -215,13 +215,13 @@ export const EditorScreen = () => {
 
     // Handle header back button
     const headerLeft = useCallback(() => (
-        <HeaderBackButton 
+        <HeaderBackButton
             onPress={() => {
                 if (!handleBackPress()) {
                     navigation.goBack();
                 }
-            }} 
-            text={t('common.back')} 
+            }}
+            text={t('common.back')}
         />
     ), [handleBackPress, navigation, t]);
 

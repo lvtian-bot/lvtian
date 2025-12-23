@@ -36,7 +36,9 @@ export const FlashScreen = () => {
         conflictType,
         isSyncing,
         checkSync,
-        resolveConflict
+        resolveConflict,
+        conflictedFiles,
+        uploadErrorFiles
     } = useFlashNoteList<FlashNote>({
         parser: (content, filePath) => flashNoteService.parseNotes(content, filePath),
         // enableAutoCheck: true, // Removed
@@ -55,7 +57,7 @@ export const FlashScreen = () => {
     // For general status banner, we might check if ANY file failed.
     const fileMetadataStore = useFileMetadataStore();
     // Simple check: do we have any failed uploads in the store?
-    const hasFailedUpload = Object.values(fileMetadataStore.metadata).some(m => m.uploadState === 'failed');
+    const hasFailedUpload = Object.values(fileMetadataStore.metadata).some(m => m.uploadState === 'failed' || m.uploadState === 'conflict-failed');
 
     const headerRight = useCallback(() => (
         <HeaderSyncStatus isSyncing={isSyncing} syncStatus={syncStatus} conflictType={conflictType} />
@@ -140,7 +142,7 @@ export const FlashScreen = () => {
                 icon: 'content-copy',
                 onPress: () => {
                     Clipboard.setString(selectedNote.content.trim());
-                    Alert.alert(t('common.notice'), '闪念笔记已复制到剪贴板');
+                    Alert.alert(t('common.notice'), t('common.copiedToClipboard'));
                 },
             },
             {
@@ -178,6 +180,8 @@ export const FlashScreen = () => {
                 conflictType={conflictType}
                 checkSync={checkSync}
                 hasFailedUpload={hasFailedUpload}
+                conflictedFiles={conflictedFiles}
+                uploadErrorFiles={uploadErrorFiles}
                 onResolveUseCloud={() => resolveConflict('useCloud').then(handleRefresh)}
                 onResolveUseLocal={() => resolveConflict('useLocal').then(handleRefresh)}
                 onResolveSaveCopy={() => resolveConflict('saveCopy').then(handleRefresh)}

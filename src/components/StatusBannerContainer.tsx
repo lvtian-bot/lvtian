@@ -20,6 +20,8 @@ interface StatusBannerContainerProps {
     // But syncStatus is already aggregated.
     // Let's pass the 'isFailed' state or similar if simpler.
     hasFailedUpload?: boolean;
+    conflictedFiles?: string[];
+    uploadErrorFiles?: string[];
 }
 
 export const StatusBannerContainer: React.FC<StatusBannerContainerProps> = ({
@@ -29,53 +31,78 @@ export const StatusBannerContainer: React.FC<StatusBannerContainerProps> = ({
     onResolveUseCloud,
     onResolveUseLocal,
     onResolveSaveCopy,
-    hasFailedUpload
+    hasFailedUpload,
+    conflictedFiles = [],
+    uploadErrorFiles = []
 }) => {
     const navigation = useNavigation();
     const { t } = useTranslation();
 
-    // Helper to determine if we should show the conflict banner
-    const shouldShowConflictBanner = syncStatus === 'conflict' && (
-        conflictType === 'bidirectional' ||
-        !conflictType ||
-        hasFailedUpload
-    );
-
-    return (
-        <View>
-            {syncStatus === 'not-configured' && (
+    // Priority 1: Offline
+    if (syncStatus === 'offline') {
+        return (
+            <View>
                 <StatusBanner
                     visible={true}
-                    message={'未配置云服务：当前仅使用本地存储'}
-                    type="info"
-                    onPress={() => (navigation as any).navigate('MainTabs', { screen: 'Settings' })}
-                />
-            )}
-            {syncStatus === 'offline' && (
-                <StatusBanner
-                    visible={true}
-                    message={`${t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}${hasFailedUpload ? ' (上次上传失败)' : ''}`}
+                    message={t('preview.offlineMode') || '离线模式：当前显示本地版本，可能不是最新'}
                     type="warning"
                     onPress={checkSync}
                 />
-            )}
-            {shouldShowConflictBanner && (
+            </View>
+        );
+    }
+
+    // Priority 2: Not Configured
+    if (syncStatus === 'not-configured') {
+        return (
+            <View>
                 <StatusBanner
                     visible={true}
-                    message={hasFailedUpload
-                        ? '上传失败'
-                        : '本地和云端已同时修改 (冲突)'
-                    }
+                    message={t('statusBanner.unconfigured')}
+                    type="info"
+                    onPress={() => (navigation as any).navigate('MainTabs', { screen: 'Settings' })}
+                />
+            </View>
+        );
+    }
+
+    // Priority 3: Upload Errors (Retry)
+    if (uploadErrorFiles.length > 0) {
+        const errorFileName = uploadErrorFiles[0].split('/').pop();
+        const msg = t('statusBanner.uploadFailedShort') + `: ${errorFileName}` + (uploadErrorFiles.length > 1 ? ` (+${uploadErrorFiles.length - 1})` : '');
+        return (
+            <View>
+                <StatusBanner
+                    visible={true}
+                    message={msg}
                     type="warning"
-                    actions={hasFailedUpload ? [
-                        { label: '上传本地覆盖云端', onPress: onResolveUseLocal || (() => { }) }
-                    ] : [
-                        { label: '使用云端版本', onPress: onResolveUseCloud || (() => { }) },
-                        { label: '保存副本', onPress: onResolveSaveCopy || (() => { }) },
-                        { label: '上传覆盖', onPress: onResolveUseLocal || (() => { }) }
+                    actions={[
+                        { label: '重试', onPress: onResolveUseLocal || (() => { }) } // useLocal acts as retry for upload error
                     ]}
                 />
-            )}
-        </View>
-    );
+            </View>
+        );
+    }
+
+    // Priority 4: Conflicts (Resolve One by One)
+    if (conflictedFiles.length > 0) {
+        const conflictFileName = conflictedFiles[0].split('/').pop();
+        const msg = t('statusBanner.conflict') + `: ${conflictFileName}` + (conflictedFiles.length > 1 ? ` (+${conflictedFiles.length - 1})` : '');
+        return (
+            <View>
+                <StatusBanner
+                    visible={true}
+                    message={msg}
+                    type="warning"
+                    actions={[
+                        { label: t('statusBanner.resolveUseCloud'), onPress: onResolveUseCloud || (() => { }) },
+                        { label: t('statusBanner.resolveUseLocal'), onPress: onResolveUseLocal || (() => { }) },
+                        { label: t('statusBanner.resolveSaveCopy'), onPress: onResolveSaveCopy || (() => { }) }
+                    ]}
+                />
+            </View>
+        );
+    }
+
+    return null;
 };

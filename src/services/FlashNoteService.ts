@@ -8,6 +8,11 @@ import { syncService } from './SyncService';
 import { TodoItem, TodoStatus } from '../types/todo';
 import { TodoParser } from '../utils/TodoParser';
 import NetInfo from "@react-native-community/netinfo";
+import {
+    FLASH_NOTES_UPDATED_EVENT,
+    SHARE_RECEIVED_EVENT,
+    BATCH_SYNC_STATUS_CHANGED_EVENT
+} from '../constants/events';
 
 export interface FlashNote {
     id: string;
@@ -22,9 +27,15 @@ export type { TodoItem, TodoStatus };
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
 // TODO_REGEX is now handled by TodoParser
 
-export const FLASH_NOTES_UPDATED_EVENT = 'FLASH_NOTES_UPDATED';
-export const SHARE_RECEIVED_EVENT = 'SHARE_RECEIVED_EVENT';
-export const BATCH_SYNC_STATUS_CHANGED_EVENT = 'BATCH_SYNC_STATUS_CHANGED_EVENT';
+// Re-export events for backward compatibility
+export { FLASH_NOTES_UPDATED_EVENT, SHARE_RECEIVED_EVENT, BATCH_SYNC_STATUS_CHANGED_EVENT };
+
+// Updated event payload type
+export interface BatchSyncStatusPayload {
+    status: 'checking' | 'synced' | 'conflict' | 'offline' | 'error' | 'not-configured';
+    conflicts: string[];
+    uploadErrors: string[];
+}
 
 class FlashNoteService {
     private getFlashNotePath(): string {
@@ -223,7 +234,7 @@ class FlashNoteService {
         useFileMetadataStore.getState().markFileAsModified(filePath);
 
         // Upload to cloud if configured (async, don't wait)
-        syncService.uploadFile(filePath, { useShadow: true }).catch(error => {
+        syncService.uploadFile(filePath, { useShadow: true, withLock: true }).catch(error => {
             console.error('FlashNoteService addNote upload failed:', error);
         });
 
@@ -254,7 +265,7 @@ class FlashNoteService {
             useFileMetadataStore.getState().markFileAsModified(filePath);
 
             // Upload to cloud if configured (async, don't wait)
-            syncService.uploadFile(filePath, { useShadow: true }).catch(error => {
+            syncService.uploadFile(filePath, { useShadow: true, withLock: true }).catch(error => {
                 console.error('FlashNoteService updateNote upload failed:', error);
             });
 
@@ -320,7 +331,7 @@ class FlashNoteService {
             useFileMetadataStore.getState().markFileAsModified(targetPath);
 
             // Upload to cloud logic
-            syncService.uploadFile(targetPath, { useShadow: true }).catch(error => {
+            syncService.uploadFile(targetPath, { useShadow: true, withLock: true }).catch(error => {
                 console.error('FlashNoteService updateTodoStatus upload failed:', error);
             });
 
@@ -394,7 +405,7 @@ class FlashNoteService {
             await fsService.writeFile(targetPath, newContent);
             useFileMetadataStore.getState().markFileAsModified(targetPath);
 
-            syncService.uploadFile(targetPath, { useShadow: true }).catch(error => {
+            syncService.uploadFile(targetPath, { useShadow: true, withLock: true }).catch(error => {
                 console.error('FlashNoteService updateTodoContent upload failed:', error);
             });
 
@@ -433,11 +444,47 @@ class FlashNoteService {
         useFileMetadataStore.getState().markFileAsModified(filePath);
 
         // Upload to cloud if configured
-        syncService.uploadFile(filePath, { useShadow: true }).catch(error => {
+        syncService.uploadFile(filePath, { useShadow: true, withLock: true }).catch(error => {
             console.error('Upload failed:', error);
         });
 
         DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+    }
+
+    /**
+     * Stage 2: Retry Local Upload Failures
+     * Checks for files with 'failed' or 'conflict-failed' states.
+     * Retries upload or attempts smart merge for optimistic lock failures.
+     */
+    private async retryLocalFailures(allFiles: string[]): Promise<{ uploadErrors: string[], conflicts: string[] }> {
+        const { getMetadata } = useFileMetadataStore.getState();
+        const uploadErrors: string[] = [];
+        const conflicts: string[] = [];
+
+        for (const filePath of allFiles) {
+            const metadata = getMetadata(filePath);
+            if (!metadata) continue;
+
+            if (metadata.uploadState === 'failed') {
+                // Simple retry
+                console.log(`[FlashNoteService] Retrying failed upload for ${filePath}`);
+                const success = await syncService.uploadFile(filePath);
+                if (!success) {
+                    uploadErrors.push(filePath);
+                }
+            } else if (metadata.uploadState === 'conflict-failed') {
+                // Optimistic lock failure -> Try Smart Merge immediately
+                console.log(`[FlashNoteService] Optimistic lock failure for ${filePath} -> Attempting Smart Merge`);
+                const mergeSuccess = await syncService.syncFile(filePath, { smartMerge: true });
+                if (mergeSuccess !== 'synced') {
+                    console.log(`[FlashNoteService] Smart Merge failed for ${filePath} -> Marking as Conflict`);
+                    conflicts.push(filePath);
+                } else {
+                    console.log(`[FlashNoteService] Smart Merge recovered ${filePath}`);
+                }
+            }
+        }
+        return { uploadErrors, conflicts };
     }
 
     async syncAll(): Promise<void> {
@@ -446,26 +493,32 @@ class FlashNoteService {
         const dirPath = flashNoteConfig.path || '';
         const scanDirPath = flashNoteConfig.historyFolderPath || dirPath;
 
-        // Broadcast checking status
-        DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'checking');
+        const emitStatus = (payload: BatchSyncStatusPayload) => {
+            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, payload);
+        };
 
-        // Normalize main path for comparison
+        // Broadcast checking status
+        emitStatus({ status: 'checking', conflicts: [], uploadErrors: [] });
+
+        // Normalize main path
         const mainPath = normalizePath(dirPath ? `${dirPath}/${mainFilename}` : mainFilename);
 
-        // 1. Network Check
+        // 1. Stage 1: Environment Checks
         const netState = await NetInfo.fetch();
         if (!netState.isConnected) {
             console.log('[FlashNoteService] Offline, skipping sync.');
-            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'offline');
+            emitStatus({ status: 'offline', conflicts: [], uploadErrors: [] });
             return;
         }
 
         if (!cloudService.isConfigured()) {
-            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'error'); // Or not-configured if we had that mapping
+            emitStatus({ status: 'not-configured', conflicts: [], uploadErrors: [] }); // or error
             return;
         }
 
-        // 2. Construct Regex for History Files
+        // 2. Prepare Local File List (Main + History)
+        // We reuse logic from getSortedFilePaths but specific for sync scanning
+        // Construct Regex
         const namePart = mainFilename.replace(/\.md$/i, '');
         let regex: RegExp | null = null;
         const pattern = flashNoteConfig.historyPattern || 'none';
@@ -484,76 +537,95 @@ class FlashNoteService {
             regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
         }
 
-        // Filter function for batch sync
-        const fileFilter = (key: string) => {
-            const normalizedKey = normalizePath(key);
-
-            // 1. Match Main File
-            if (normalizedKey === mainPath) return true;
-
-            // 2. Match History Files
-            if (pattern !== 'none' && regex) {
-                // Extract filename
-                const filename = normalizedKey.split('/').pop() || '';
-                // Ideally check directory too, but simplistic filename check is often enough if prefix is correct
-                return regex.test(filename);
-            }
-            return false;
-        };
+        const localFiles: string[] = [mainPath];
+        if (pattern !== 'none' && regex && scanDirPath && (await fsService.exists(scanDirPath))) {
+            const files = await fsService.listFiles(scanDirPath);
+            files.forEach(f => {
+                if (!f.isDirectory && regex!.test(f.name)) {
+                    const relativePath = scanDirPath ? `${scanDirPath}/${f.name}` : f.name;
+                    // Avoid duplicate if mainPath is in scanDir
+                    const normalized = normalizePath(relativePath);
+                    if (normalized !== mainPath) localFiles.push(normalized);
+                }
+            });
+        }
 
         try {
-            // 3. Scan Local Files
-            const localFiles: string[] = [];
+            // 3. Stage 2: Retry Local Failures
+            // Check known local files for failure states
+            const { uploadErrors: retryErrors, conflicts: retryConflicts } = await this.retryLocalFailures(localFiles);
 
-            // Explicitly add main file (ensure it participates in sync even if not in history folder)
-            localFiles.push(mainPath);
+            // 4. Stage 3: Full Sync & Conflict Detection
+            // Fetch Cloud Files
+            let prefix = scanDirPath;
+            if (prefix && !prefix.endsWith('/')) prefix += '/';
 
-            // Scan history folder
-            if (pattern !== 'none' && regex) {
-                if (scanDirPath && (await fsService.exists(scanDirPath))) {
-                    const files = await fsService.listFiles(scanDirPath);
-                    files.forEach(f => {
-                        if (!f.isDirectory && regex!.test(f.name)) {
-                            const relativePath = scanDirPath ? `${scanDirPath}/${f.name}` : f.name;
-                            localFiles.push(normalizePath(relativePath));
-                        }
+            console.log(`[FlashNoteService] Starting Full Sync. Cloud Prefix: ${prefix}`);
+
+            const [cloudList, mainFileMeta] = await Promise.all([
+                cloudService.listFiles(prefix).catch(e => {
+                    console.warn('[FlashNoteService] Failed to list prefix:', e);
+                    return [] as import('./CloudService').CloudFileItem[];
+                }),
+                cloudService.headFile(mainPath).catch(e => {
+                    return null;
+                })
+            ]);
+
+            const cloudFiles = [...cloudList];
+            if (mainFileMeta) {
+                const alreadyExists = cloudFiles.some(f => normalizePath(f.key) === mainPath);
+                if (!alreadyExists) {
+                    cloudFiles.push({
+                        key: mainPath,
+                        etag: mainFileMeta.etag,
+                        lastModified: mainFileMeta.lastModified,
+                        size: 0,
+                        isDirectory: false
                     });
                 }
             }
 
-            // 4. List Cloud Files
-            // Use scanDirPath as prefix to cover history files.
-            let prefix = scanDirPath;
-            if (prefix && !prefix.endsWith('/')) prefix += '/';
+            // Filter function
+            const fileFilter = (key: string) => {
+                const normalizedKey = normalizePath(key);
+                if (normalizedKey === mainPath) return true;
+                if (pattern !== 'none' && regex) {
+                    const filename = normalizedKey.split('/').pop() || '';
+                    return regex.test(filename);
+                }
+                return false;
+            };
 
-            console.log(`[FlashNoteService] Starting Batch Sync. Cloud Prefix: ${prefix}, Local Candidates: ${localFiles.length}`);
-            const cloudFiles = await cloudService.listFiles(prefix);
-
-            // 5. Perform Unified Batch Sync
-            // Pass localFiles so local-only history files are picked up.
-            // Main file is also in localFiles, so it will be checked.
-            const results = await syncService.syncBatchFiles(cloudFiles, fileFilter, {
+            // Use enhanced syncBatchFiles (no extra HEAD requests, returns specific conflict files)
+            const batchResults = await syncService.syncBatchFiles(cloudFiles, fileFilter, {
                 useShadow: true,
                 localFiles: localFiles,
                 smartMerge: true
             });
 
-            console.log('[FlashNoteService] Batch Sync Completed:', results);
+            // Merge Stage 2 results with Stage 3 results
+            const conflicts: string[] = [...retryConflicts, ...batchResults.conflictedFiles];
+            const uploadErrors: string[] = [...retryErrors, ...batchResults.errorFiles];
 
-            if (results.synced > 0) {
+            console.log(`[FlashNoteService] Sync Complete. Conflicts: ${conflicts.length}, Errors: ${uploadErrors.length}`);
+
+            if (conflicts.length > 0 || uploadErrors.length > 0) {
                 DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
-            }
-
-            if (results.errors > 0 || results.conflicts > 0) {
-                DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'error'); // Generalize conflict/error as 'attention needed' or just error
+                emitStatus({ status: 'conflict', conflicts, uploadErrors });
             } else {
-                DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'synced');
+                DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+                emitStatus({ status: 'synced', conflicts: [], uploadErrors: [] });
             }
 
         } catch (e) {
             console.error('[FlashNoteService] Batch Sync Failed:', e);
-            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'error');
+            emitStatus({ status: 'error', conflicts: [], uploadErrors: [] });
         }
+    }
+
+    async resolveConflictForFile(filePath: string, strategy: 'useCloud' | 'useLocal' | 'saveCopy'): Promise<void> {
+        return syncService.resolveConflict(filePath, strategy);
     }
 }
 

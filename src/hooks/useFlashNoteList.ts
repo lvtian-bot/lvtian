@@ -36,9 +36,11 @@ export function useFlashNoteList<T>({
     const [refreshing, setRefreshing] = useState(false);
 
     // Sync State
-    const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking'); // Default to checking (or synced?) - Let's use checking to indicate initial uncertainty until syncAll runs
+    const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
     const [conflictType, setConflictType] = useState<ConflictType>(null);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [conflictedFiles, setConflictedFiles] = useState<string[]>([]);
+    const [uploadErrorFiles, setUploadErrorFiles] = useState<string[]>([]);
 
     // File path state
     const [allFilePaths, setAllFilePaths] = useState<string[]>([]);
@@ -55,14 +57,23 @@ export function useFlashNoteList<T>({
         await flashNoteService.syncAll();
     }, []);
 
-    const resolveConflict = useCallback(async (strategy: 'useCloud' | 'useLocal' | 'saveCopy') => {
-        // Conflict resolution for batch mode is tricky.
-        // For now, if we report error/conflict, simple re-sync might fix it if it's transient.
-        // Or we might need UI to open specific file.
-        // But requested is just to remove single file check.
-        // Let's just trigger syncAll again.
+    const resolveConflict = useCallback(async (strategy: 'useCloud' | 'useLocal' | 'saveCopy', filePath?: string) => {
+        if (filePath) {
+            // Target specific file
+            await flashNoteService.resolveConflictForFile(filePath, strategy);
+        } else if (conflictedFiles.length > 0) {
+            // Fallback: Resolve first detected conflict
+            await flashNoteService.resolveConflictForFile(conflictedFiles[0], strategy);
+        } else if (uploadErrorFiles.length > 0) {
+            // For upload errors, 'useLocal' acts as retry upload
+            if (strategy === 'useLocal') {
+                await flashNoteService.resolveConflictForFile(uploadErrorFiles[0], 'useLocal');
+            }
+        }
+
+        // After resolution, re-sync to update status lists
         await flashNoteService.syncAll();
-    }, []);
+    }, [conflictedFiles, uploadErrorFiles]);
 
     // Helper: Load content from specific file
     const loadFileContent = useCallback(async (filePath: string): Promise<T[]> => {
@@ -179,9 +190,18 @@ export function useFlashNoteList<T>({
         const updateSub = DeviceEventEmitter.addListener(FLASH_NOTES_UPDATED_EVENT, refreshLoadedData);
 
         // Listen for Batch Sync Status
-        const statusSub = DeviceEventEmitter.addListener(BATCH_SYNC_STATUS_CHANGED_EVENT, (status: SyncStatus) => {
-            setSyncStatus(status);
-            setIsSyncing(status === 'checking' || status === 'uploading' || status === 'downloading');
+        const statusSub = DeviceEventEmitter.addListener(BATCH_SYNC_STATUS_CHANGED_EVENT, (payload: any) => {
+            // Payload might be string (old) or object (new) - handle both during transition
+            if (typeof payload === 'string') {
+                setSyncStatus(payload as SyncStatus);
+                setIsSyncing(payload === 'checking');
+            } else {
+                const { status, conflicts, uploadErrors } = payload;
+                setSyncStatus(status);
+                setIsSyncing(status === 'checking');
+                setConflictedFiles(conflicts || []);
+                setUploadErrorFiles(uploadErrors || []);
+            }
         });
 
         const initSub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, () => {
@@ -228,6 +248,8 @@ export function useFlashNoteList<T>({
         conflictType,
         isSyncing,
         checkSync,
-        resolveConflict
+        resolveConflict,
+        conflictedFiles,
+        uploadErrorFiles
     };
 }

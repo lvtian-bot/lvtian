@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
+import { useTranslation } from 'react-i18next';
 
 export interface FileAction {
     label: string;
@@ -30,6 +31,7 @@ export const FileActionSheet: React.FC<FileActionSheetProps> = ({
     actions,
     onCancel,
 }) => {
+    const { t } = useTranslation();
     return (
         <Modal
             animationType="fade"
@@ -75,7 +77,7 @@ export const FileActionSheet: React.FC<FileActionSheetProps> = ({
                                 style={styles.cancelButton}
                                 onPress={onCancel}
                             >
-                                <Text style={styles.cancelText}>取消</Text>
+                                <Text style={styles.cancelText}>{t('common.cancel')}</Text>
                             </TouchableOpacity>
                         </View>
                     </TouchableWithoutFeedback>
