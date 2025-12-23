@@ -7,6 +7,7 @@ import { theme } from '../utils/theme';
 import { TencentCOSProvider } from '../services/TencentCOSProvider';
 import { WebDavProvider } from '../services/WebDavProvider'; // Import WebDavProvider
 import { cloudService } from '../services/CloudService'; // Import cloudService
+import { syncService } from '../services/SyncService';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 // Enable LayoutAnimation on Android
@@ -69,6 +70,7 @@ export const CloudRepoConfigScreen = () => {
 
     const handleSave = async () => {
         setIsLoading(true);
+        let needsConfirmation = false;
 
         try {
             if (activeTab === 'tencent') {
@@ -81,12 +83,6 @@ export const CloudRepoConfigScreen = () => {
                 const testProvider = new TencentCOSProvider(secretId, secretKey, bucket, region);
                 await testProvider.listFiles(''); // Test connection
 
-                // Save
-                await SecureStore.setItemAsync('COS_SECRET_ID', secretId);
-                await SecureStore.setItemAsync('COS_SECRET_KEY', secretKey);
-                setCosConfig({ bucket, region });
-                setCloudProvider('tencent');
-
             } else {
                 if (!server || !username || !password) {
                     Alert.alert(t('settings.failure'), t('settings.error.notEmpty'));
@@ -96,17 +92,70 @@ export const CloudRepoConfigScreen = () => {
                 // Verify WebDAV
                 const testProvider = new WebDavProvider({ server, username, password });
                 await testProvider.listFiles(''); // Test connection
-
-                // Save
-                await SecureStore.setItemAsync('WEBDAV_PASSWORD', password);
-                setWebDavConfig({ server, username });
-                setCloudProvider('webdav');
             }
 
-            // Sync with CloudService (Re-init)
-            await cloudService.initProvider();
+            // Check for Significant Change
+            const isSwitchingProvider = cloudProvider !== 'none' && cloudProvider !== activeTab;
+            let isRepoChanged = false;
 
-            Alert.alert(t('settings.success'), t('settings.success'));
+            if (activeTab === 'tencent' && cloudProvider === 'tencent') {
+                if (bucket !== cosConfig.bucket || region !== cosConfig.region) {
+                    isRepoChanged = true;
+                }
+            } else if (activeTab === 'webdav' && cloudProvider === 'webdav') {
+                if (server !== webDavConfig.server) {
+                    isRepoChanged = true;
+                }
+            }
+
+            needsConfirmation = isSwitchingProvider || isRepoChanged;
+
+            const performSave = async () => {
+                if (activeTab === 'tencent') {
+                    await SecureStore.setItemAsync('COS_SECRET_ID', secretId);
+                    await SecureStore.setItemAsync('COS_SECRET_KEY', secretKey);
+                    setCosConfig({ bucket, region });
+                    setCloudProvider('tencent');
+                } else {
+                    await SecureStore.setItemAsync('WEBDAV_PASSWORD', password);
+                    setWebDavConfig({ server, username });
+                    setCloudProvider('webdav');
+                }
+
+                // Sync with CloudService (Re-init)
+                await cloudService.initProvider();
+
+                Alert.alert(t('settings.success'), t('settings.success'));
+            };
+
+            if (needsConfirmation) {
+                Alert.alert(
+                    t('settings.warning'),
+                    t('settings.switchCloudWarning'),
+                    [
+                        { text: t('common.cancel'), style: 'cancel', onPress: () => { } },
+                        {
+                            text: t('common.confirm'),
+                            style: 'destructive',
+                            onPress: async () => {
+                                setIsLoading(true);
+                                try {
+                                    await syncService.clearCache({ includeUnsynced: true });
+                                    await performSave();
+                                } catch (e) {
+                                    console.error('Failed during destructive save:', e);
+                                    Alert.alert(t('common.error'), 'Failed to switch service');
+                                } finally {
+                                    setIsLoading(false);
+                                }
+                            }
+                        }
+                    ]
+                );
+                return;
+            }
+
+            await performSave();
 
         } catch (error: any) {
             console.error('Failed to save settings:', error);
@@ -121,7 +170,9 @@ export const CloudRepoConfigScreen = () => {
 
             Alert.alert(t('settings.failure'), errorMessage);
         } finally {
-            setIsLoading(false);
+            if (!needsConfirmation) {
+                setIsLoading(false);
+            }
         }
     };
 
@@ -185,7 +236,6 @@ export const CloudRepoConfigScreen = () => {
                     <View style={styles.headerIconContainer}>
                         <Icon name={activeTab === 'tencent' ? 'cloud-upload' : 'server-network'} size={40} color={theme.colors.primary} />
                     </View>
-                    <Text style={styles.headerTitle}>{t('settings.cloudRepoConfig')}</Text>
                     <Text style={styles.headerSubtitle}>{t('settings.cloudProvider.subtitle')}</Text>
                 </View>
 
@@ -276,12 +326,6 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.1,
         shadowRadius: 8,
         elevation: 4,
-    },
-    headerTitle: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: theme.colors.text,
-        marginBottom: 4,
     },
     headerSubtitle: {
         fontSize: 14,

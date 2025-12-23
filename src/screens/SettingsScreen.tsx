@@ -13,7 +13,7 @@ import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export const SettingsScreen = () => {
-    const { t, i18n } = useTranslation();
+    const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
     // Config Store
@@ -74,6 +74,19 @@ export const SettingsScreen = () => {
                 <View style={styles.smallCardLeft}>
                     <Icon name="flash-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
                     <Text style={styles.smallCardTitle}>{t('settings.flashNoteConfig')}</Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+
+            {/* AI Settings - Independent Small Card */}
+            <TouchableOpacity
+                style={styles.smallCard}
+                onPress={() => navigation.navigate('AIConfig')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.smallCardLeft}>
+                    <Icon name="robot-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Text style={styles.smallCardTitle}>{t('settings.aiConfig')}</Text>
                 </View>
                 <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
             </TouchableOpacity>

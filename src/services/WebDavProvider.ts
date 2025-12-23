@@ -39,6 +39,8 @@ export class WebDavProvider implements ICloudProvider {
                 method,
                 headers: {
                     'Authorization': this.authHeader,
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
                     ...headers
                 },
                 body: body as any
@@ -130,20 +132,37 @@ export class WebDavProvider implements ICloudProvider {
     }
 
     async headFile(key: string): Promise<{ etag: string; lastModified: string } | null> {
-        const response = await this.request('HEAD', key);
+        // Use PROPFIND with Depth 0 to get file properties
+        // WebDAV servers (like Nutstore) often don't return ETag in HEAD requests
+        const headers: Record<string, string> = {
+            'Depth': '0'
+        };
+
+        const response = await this.request('PROPFIND', key, headers);
 
         if (response.status === 404) {
             return null;
         }
 
         if (!response.ok) {
-            throw new Error(`WebDav Head Failed: ${response.status}`);
+            throw new Error(`WebDav Head (PROPFIND) Failed: ${response.status}`);
         }
 
-        const etag = (response.headers.get('ETag') || '').replace(/"/g, ''); // Nutstore returns quoted ETag
-        const lastModified = response.headers.get('Last-Modified') || new Date().toISOString();
+        const xmlText = await response.text();
+        // Parse the single file response
+        const items = this.parsePropFindResponse(xmlText, key, true);
 
-        return { etag, lastModified };
+        if (items.length === 0) {
+            return null;
+        }
+
+        const item = items[0];
+        // console.log(`[WebDav] Head ${key} -> ETag: ${item.etag}, LastMod: ${item.lastModified}`);
+
+        return {
+            etag: item.etag,
+            lastModified: item.lastModified
+        };
     }
 
     async listFiles(prefix: string = ''): Promise<CloudFileItem[]> {
@@ -161,10 +180,10 @@ export class WebDavProvider implements ICloudProvider {
         }
 
         const xmlText = await response.text();
-        return this.parsePropFindResponse(xmlText, prefix);
+        return this.parsePropFindResponse(xmlText, prefix, false);
     }
 
-    private parsePropFindResponse(xml: string, prefix: string): CloudFileItem[] {
+    private parsePropFindResponse(xml: string, prefix: string, includeSelf: boolean = false): CloudFileItem[] {
         const files: CloudFileItem[] = [];
 
         // Simple XML regex parsing (Robust enough for standard WebDAV responses)
@@ -245,7 +264,7 @@ export class WebDavProvider implements ICloudProvider {
             const normalizedPrefix = prefix.replace(/\/+$/, '').replace(/^\/+/, '');
             const normalizedKey = relativeKey.replace(/\/+$/, '').replace(/^\/+/, '');
 
-            if (normalizedKey === normalizedPrefix) {
+            if (!includeSelf && normalizedKey === normalizedPrefix) {
                 continue;
             }
 

@@ -77,12 +77,12 @@ export const CacheManagerScreen = () => {
         try {
             const getRelativePath = (fullPath: string) => {
                 const rootPath = fsService.getRootPath();
-                
+
                 const decodedFull = decodeURIComponent(fullPath);
                 const decodedRoot = decodeURIComponent(rootPath);
 
-                                 const cleanFull = decodedFull.replace(/^file:\/+/g, '/');
-                                 const cleanRoot = decodedRoot.replace(/^file:\/+/g, '/');
+                const cleanFull = decodedFull.replace(/^file:\/+/g, '/');
+                const cleanRoot = decodedRoot.replace(/^file:\/+/g, '/');
                 let relative = '';
                 if (cleanFull.startsWith(cleanRoot)) {
                     relative = cleanFull.substring(cleanRoot.length);
@@ -90,30 +90,18 @@ export const CacheManagerScreen = () => {
                     const rawFullClean = fullPath.replace(/^file:\/+/g, '/');
                     const rawRootClean = rootPath.replace(/^file:\/+/g, '/');
                     if (rawFullClean.startsWith(rawRootClean)) {
-                         relative = rawFullClean.substring(rawRootClean.length);
-                         relative = decodeURIComponent(relative);
+                        relative = rawFullClean.substring(rawRootClean.length);
+                        relative = decodeURIComponent(relative);
                     } else {
-                         return fullPath; 
+                        return fullPath;
                     }
                 }
-                
+
                 return relative.replace(/^\/+/, '');
             };
 
-            const allFiles: FileItem[] = [];
-            const processDirectory = async (path: string) => {
-                const items = await fsService.listFiles(path);
-                for (const item of items) {
-                    if (item.isDirectory) {
-                        const relativePath = getRelativePath(item.path);
-                        await processDirectory(relativePath);
-                    } else {
-                        allFiles.push(item);
-                    }
-                }
-            };
-
-            await processDirectory('');
+            // Use recursive list from SyncService enhancement
+            const allFiles = await fsService.listFilesRecursive('');
 
             const processedFiles: CacheFileItem[] = allFiles.map(file => {
                 const relativePath = getRelativePath(file.path);
@@ -178,16 +166,16 @@ export const CacheManagerScreen = () => {
         try {
             console.log(`[CacheManager] Deleting file: ${file.relativePath}`);
             await fsService.deleteFile(file.relativePath);
-            
+
             // Robust metadata clearing
             const rawPath = file.relativePath;
             const decodedPath = decodeURIComponent(rawPath);
-            
+
             console.log(`[CacheManager] Removing metadata for keys: '${rawPath}', '${decodedPath}'`);
-            
+
             removeMetadata(rawPath);
             if (rawPath !== decodedPath) removeMetadata(decodedPath);
-            
+
             // Verify deletion
             const check = getMetadata(rawPath);
             console.log(`[CacheManager] Metadata verification after delete:`, check ? 'Still exists' : 'Removed');
@@ -237,22 +225,15 @@ export const CacheManagerScreen = () => {
                     onPress: async () => {
                         setLoading(true);
                         try {
-                            const safeFiles = files.filter(f => f.isSafeToDelete);
-                            for (const file of safeFiles) {
-                                console.log(`[CacheManager] Clearing safe file: ${file.relativePath}`);
-                                await fsService.deleteFile(file.path);
-                                
-                                // Robust metadata clearing
-                                const rawPath = file.relativePath;
-                                const decodedPath = decodeURIComponent(rawPath);
-                                removeMetadata(rawPath);
-                                if (rawPath !== decodedPath) removeMetadata(decodedPath);
-                            }
+                            const { syncService } = require('../services/SyncService');
+                            await syncService.clearCache({ includeUnsynced: false });
+
                             Alert.alert(t('common.success'), t('cache.clearSuccess'));
                             loadFiles();
                         } catch (error) {
                             console.error('Failed to clear cache:', error);
                             Alert.alert(t('common.error'), t('cache.clearFailed'));
+                        } finally {
                             setLoading(false);
                         }
                     }

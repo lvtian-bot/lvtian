@@ -8,6 +8,7 @@ interface FileListState {
     cachedLists: Record<string, CloudFileItem[]>;
     setCachedList: (path: string, items: CloudFileItem[]) => void;
     getCachedList: (path: string) => CloudFileItem[] | undefined;
+    clearAll: () => void;
 }
 
 export const useFileListStore = create<FileListState>()(
@@ -22,6 +23,7 @@ export const useFileListStore = create<FileListState>()(
                     },
                 })),
             getCachedList: (path) => get().cachedLists[path],
+            clearAll: () => set({ cachedLists: {} }),
         }),
         {
             name: 'file-list-storage',

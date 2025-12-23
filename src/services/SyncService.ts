@@ -281,6 +281,82 @@ class SyncService {
             await this.performDownload(filePath);
         }
     }
+
+    /**
+     * Clear local cache files
+     * @param options.includeUnsynced If true, deletes ALL files including modified/uploading/failed ones.
+     */
+    async clearCache(options: { includeUnsynced: boolean }): Promise<void> {
+        const { getMetadata, removeMetadata, clearAll: clearAllMetadata } = useFileMetadataStore.getState();
+        const { clearAll: clearAllFileList } = require('../store/useFileListStore').useFileListStore.getState();
+        // Dynamic require to avoid circular dependency if file list store imports sync service (unlikely but safe)
+
+        try {
+            console.log('[SyncService] Starting cache clear. includeUnsynced:', options.includeUnsynced);
+
+            if (options.includeUnsynced) {
+                // Destructive clear: Delete EVERYTHING in root
+                const rootFiles = await fsService.listFiles('');
+                // We can just delete root contents? Or use listFilesRecursive to be precise?
+                // fsService.deleteFile works on directories too.
+                // But we want to keep the root folder structure?
+                // Actually cache manager logic was deleting files individually.
+
+                // Let's use recursive list to be safe and consistent
+                const allFiles = await fsService.listFilesRecursive('');
+
+                for (const file of allFiles) {
+                    try {
+                        await fsService.deleteFile(file.path);
+                    } catch (e) {
+                        console.warn(`[SyncService] Failed to delete ${file.path}`, e);
+                    }
+                }
+
+                // Clear Stores
+                clearAllMetadata();
+                clearAllFileList();
+                console.log('[SyncService] Cache cleared completely.');
+
+            } else {
+                // Safe clear: Only synced files
+                const allFiles = await fsService.listFilesRecursive('');
+
+                for (const file of allFiles) {
+                    const relativePath = decodeURIComponent(file.path.replace(fsService.getRootPath(), '').replace(/^\/+/, ''));
+                    const metadata = getMetadata(relativePath);
+
+                    // Logic from CasheManagerScreen
+                    const isModified = metadata?.localHash === 'LOCAL_MODIFIED'; // Hardcoded constant import issue avoidance
+                    const isUploading = metadata?.uploadState === 'uploading';
+                    const isFailed = metadata?.uploadState === 'failed';
+
+                    const isSafeToDelete = !isModified && !isUploading && !isFailed;
+
+                    if (isSafeToDelete) {
+                        try {
+                            await fsService.deleteFile(file.path);
+                            // Clean metadata
+                            // Metadata store key logic might need unify, but let's try standard relative path
+                            const rawPath = relativePath;
+                            const decodedPath = decodeURIComponent(rawPath);
+
+                            removeMetadata(rawPath);
+                            if (rawPath !== decodedPath) removeMetadata(decodedPath);
+
+                        } catch (e) {
+                            console.warn(`[SyncService] Failed to delete safe file ${file.path}`, e);
+                        }
+                    }
+                }
+                console.log('[SyncService] Safe cache clear completed.');
+            }
+
+        } catch (error) {
+            console.error('[SyncService] clearCache failed:', error);
+            throw error;
+        }
+    }
 }
 
 export const syncService = new SyncService();

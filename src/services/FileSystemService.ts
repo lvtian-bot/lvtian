@@ -115,6 +115,41 @@ class FileSystemService {
         }
     }
 
+    /**
+     * Recursively list all files (not directories) in the given path
+     * @param path Relative path to start from
+     */
+    async listFilesRecursive(path: string = ''): Promise<FileItem[]> {
+        const allFiles: FileItem[] = [];
+        const processDirectory = async (currentPath: string) => {
+            const items = await this.listFiles(currentPath);
+            for (const item of items) {
+                if (item.isDirectory) {
+                    // Calculate relative path for recursion
+                    // item.path is absolute uri. Need to convert to relative or just pass absolute?
+                    // listFiles expects relative or absolute.
+                    // But listFiles output item.path is absolute URI.
+                    // To recurse, we can pass item.path directly as it will be sanitized.
+                    // However, we need to be careful about infinite loops if symlinks existed (unlikely here).
+
+                    // Sanitize path converts absolute URI back correctly.
+                    // But let's be cleaner and use relative paths if possible, or just trust sanitizePath.
+                    // Let's use item.path (URI) which sanitizePath handles.
+
+                    // We need the relative path for listFiles to work relative to root? 
+                    // No, listFiles handles absolute paths via sanitizePath checking if it starts with rootUri.
+
+                    await processDirectory(item.path);
+                } else {
+                    allFiles.push(item);
+                }
+            }
+        };
+
+        await processDirectory(path);
+        return allFiles;
+    }
+
     async readFile(path: string): Promise<string> {
         const fullPath = this.sanitizePath(path);
         try {

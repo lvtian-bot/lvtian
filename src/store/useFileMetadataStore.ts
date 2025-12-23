@@ -21,6 +21,7 @@ interface FileMetadataState {
     clearUploadingState: () => void;
     resetUploadingToFailed: () => void;
     removeMetadata: (filePath: string) => void; // Add this line
+    clearAll: () => void;
 }
 
 export const useFileMetadataStore = create<FileMetadataState>()(
@@ -99,6 +100,10 @@ export const useFileMetadataStore = create<FileMetadataState>()(
                     }
                     return { metadata: newMetadata };
                 }),
+            clearAll: () =>
+                set(() => ({
+                    metadata: {},
+                })),
         }),
         {
             name: 'file-metadata-storage',

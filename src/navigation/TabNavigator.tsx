@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
+import { AgentScreen } from '../screens/AgentScreen';
 import { NoteNavigator } from './NoteNavigator';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { MainTabParamList } from '../types/navigation';
@@ -19,6 +20,10 @@ const FlashIcon = ({ color, size }: { color: string; size: number }) => (
 
 const TodoIcon = ({ color, size }: { color: string; size: number }) => (
     <Icon name="task-alt" color={color} size={size} />
+);
+
+const AgentIcon = ({ color, size }: { color: string; size: number }) => (
+    <Icon name="auto-awesome" color={color} size={size} />
 );
 
 const NoteIcon = ({ color, size }: { color: string; size: number }) => (
@@ -39,6 +44,9 @@ export const TabNavigator = () => {
                 headerShadowVisible: false,
                 headerStyle: {
                     backgroundColor: theme.colors.background,
+                },
+                tabBarStyle: {
+                    backgroundColor: theme.colors.surface,
                 },
             }}
         >
@@ -61,6 +69,21 @@ export const TabNavigator = () => {
                 }}
             />
             <Tab.Screen
+                name="Agent"
+                component={AgentScreen}
+                options={{
+                    headerShown: false, // Custom header in screen
+                    title: t('tabs.agent') || '代理',
+                    tabBarIcon: AgentIcon,
+                    tabBarStyle: {
+                        borderTopWidth: 0, // Ensure no border matches main style
+                        elevation: 0,
+                        shadowOpacity: 0,
+                        backgroundColor: theme.colors.surface, // Match Agent page background
+                    },
+                }}
+            />
+            <Tab.Screen
                 name="Note"
                 component={NoteNavigator}
                 options={{
@@ -78,6 +101,6 @@ export const TabNavigator = () => {
                     tabBarIcon: SettingsIcon,
                 }}
             />
-        </Tab.Navigator>
+        </Tab.Navigator >
     );
 };

@@ -309,7 +309,7 @@ export const TodoScreen = () => {
                 {/* Row 2: Checkbox + Content */}
                 <View style={styles.itemBody}>
                     <TouchableOpacity onPress={() => handleToggleStatus(item)} style={styles.iconContainer}>
-                        <Icon name={iconName} size={24} color={iconColor} />
+                        <Icon name={iconName as any} size={24} color={iconColor} />
                     </TouchableOpacity>
 
                     <View // Changed from TouchableOpacity to View
@@ -322,7 +322,7 @@ export const TodoScreen = () => {
                         <View style={styles.metaRow}>
                             {priorityInfo && (
                                 <View style={styles.priorityContainer}>
-                                    <Icon name={priorityInfo.icon} size={14} color={priorityInfo.color} style={styles.metaIcon} />
+                                    <Icon name={priorityInfo.icon as any} size={14} color={priorityInfo.color} style={styles.metaIcon} />
                                     <Text style={[styles.metaText, { color: priorityInfo.color }]}>{priorityInfo.label}</Text>
                                 </View>
                             )}
@@ -513,14 +513,14 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         padding: theme.spacing.m,
         backgroundColor: theme.colors.surface,
-        borderRadius: 8,
+        borderRadius: theme.radius.sm,
         marginBottom: theme.spacing.s,
         marginHorizontal: theme.spacing.xs,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.20,
-        shadowRadius: 1.41,
-        elevation: 2,
+        shadowOpacity: 0.05,
+        shadowRadius: 4, // Increased radius for softer shadow
+        elevation: 1, // Reduced elevation
     },
     itemBody: {
         flexDirection: 'row',
@@ -538,7 +538,7 @@ const styles = StyleSheet.create({
         lineHeight: 24,
     },
     noteTime: {
-        fontSize: 10,
+        fontSize: 14,
         color: theme.colors.textSecondary,
         marginBottom: 4,
     },
@@ -598,6 +598,10 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: theme.colors.textSecondary,
         marginLeft: 2,
+    },
+    metaEmoji: {
+        fontSize: 12,
+        marginRight: 2,
     },
     priorityContainer: {
         flexDirection: 'row',

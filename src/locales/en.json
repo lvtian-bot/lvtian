@@ -3,7 +3,30 @@
     "timeline": "Flash",
     "browser": "Notes",
     "todo": "Todos",
+    "agent": "AI Agent",
     "settings": "Settings"
+  },
+  "ai": {
+    "title": "AI Agent",
+    "settingsTitle": "AI Settings",
+    "settingsSubtitle": "Configure your LLM provider (OpenAI compatible)",
+    "welcome": "Welcome! Please configure your AI settings to start chatting.",
+    "askPlaceholder": "Ask me anything...",
+    "configPlaceholder": "Please configure API Key",
+    "baseUrl": "Base URL",
+    "baseUrlDesc": "e.g., https://api.deepseek.com",
+    "apiKey": "API Key",
+    "model": "Model Name",
+    "modelDesc": "e.g., deepseek-chat, gpt-4o",
+    "thinking": "Thinking...",
+    "error": "Error",
+    "newChat": "New Chat",
+    "history": "History",
+    "deleteSession": "Delete",
+    "untitled": "Untitled Chat",
+    "confirmDelete": "Delete this chat?",
+    "deleteSuccess": "Deleted successfully",
+    "noSessions": "No history"
   },
   "todo": {
     "inProgress": "In Progress",
@@ -88,6 +111,7 @@
     "loadMore": "Load More"
   },
   "settings": {
+    "save": "Save",
     "saveAndValidate": "Validate and Save",
     "success": "Configuration validated and saved successfully!",
     "failure": "Save Failed",
@@ -98,6 +122,7 @@
       "network": "Validation failed: Network error. Please check your internet connection.",
       "notEmpty": "All configuration fields are required."
     },
+    "switchCloudWarning": "Switching cloud service requires clearing local cache of the old service (including unsynced changes). Are you sure?",
     "cosConfig": "COS Configuration",
     "cloudProvider": {
       "tencentCOS": "Tencent Cloud COS",
@@ -127,6 +152,7 @@
     "flashNoteConfig": "Flash Note Configuration",
     "current": "Current:",
     "cacheManager": "Cache Manager",
+    "aiConfig": "AI Settings",
     "historyFolderPath": "History Folder Path",
     "historyFolderPathDesc": "Optional. Folder path for historical flash notes. Leave empty to use the same path as the main file. E.g.: archive/flash_notes",
     "themes": {
