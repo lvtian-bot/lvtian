@@ -23,13 +23,13 @@ export const NoteNavigator = () => {
             <Stack.Screen
                 name="NoteList"
                 component={NoteScreen}
-                options={({ route }) => ({
+                options={{
                     title: t('tabs.browser'),
                     // Only show title on the root screen, or maybe just 'Browser' everywhere?
                     // Or "Folder Name" for sub-folders?
                     // For now, consistent title is fine, or dynamic title based on prefix could be nice.
                     // Let's stick to standard behavior for now.
-                })}
+                }}
             />
         </Stack.Navigator>
     );

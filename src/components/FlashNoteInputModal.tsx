@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
     Modal,
     View,
     TextInput,
     TouchableOpacity,
     StyleSheet,
-    KeyboardAvoidingView,
+
     Platform,
     Dimensions,
     Alert,
@@ -18,6 +18,7 @@ import Icon from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
 import { Priority } from '../types/todo';
+import { DatePickerModal } from './DatePickerModal';
 
 interface FlashNoteInputModalProps {
     visible: boolean;
@@ -54,7 +55,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const [priority, setPriority] = useState<Priority>(initialPriority || 'none');
     const [dueAt, setDueAt] = useState<string | undefined>(initialDueAt);
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
-    const [showDateInput, setShowDateInput] = useState(false);
+    const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
 
     const inputRef = useRef<TextInput>(null);
     const isDraftLoaded = useRef(false); // Ref to track if draft check is done to avoid overwriting with initialContent
@@ -115,7 +116,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             // For simplicity, draft only restores text. Fields reset to initial.)
             setPriority(initialPriority || 'none');
             setDueAt(initialDueAt);
-            setShowDateInput(!!initialDueAt);
+            setIsDatePickerVisible(false);
         }
     }, [visible, initialId, initialContent, initialPriority, initialDueAt, MIN_HEIGHT, t]);
 
@@ -272,90 +273,99 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
         };
     }, []);
 
+    const keyboardAvoidingStyle = useMemo(() => [
+        styles.keyboardAvoidingView,
+        { paddingBottom: Platform.OS === 'ios' ? keyboardHeight : 0 }
+    ], [keyboardHeight]);
+
+    const modalContentStyle = useMemo(() => [
+        styles.modalContentContainer,
+        { marginBottom: Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight : 0 }
+    ], [keyboardHeight]);
+
     const priorityDisplay = getPriorityDisplay();
 
     return (
-        <Modal
-            animationType="slide"
-            transparent={true}
-            visible={visible}
-            onRequestClose={handleCancel}
-            onShow={() => {
-                setTimeout(() => {
-                    inputRef.current?.focus();
-                }, 100);
-            }}
-        >
-            <View style={[styles.keyboardAvoidingView, { paddingBottom: Platform.OS === 'ios' ? keyboardHeight : 0 }]}>
-                <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={handleCancel} />
+        <>
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={visible}
+                onRequestClose={handleCancel}
+                onShow={() => {
+                    setTimeout(() => {
+                        inputRef.current?.focus();
+                    }, 100);
+                }}
+            >
+                <View style={keyboardAvoidingStyle}>
+                    <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={handleCancel} />
 
-                <View style={[styles.modalContentContainer, { marginBottom: Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight : 0 }]}>
-                    <TextInput
-                        ref={inputRef}
-                        style={[
-                            styles.input,
-                            { height: Math.max(MIN_HEIGHT, Math.min(inputMeasuredHeight, MAX_HEIGHT)) }
-                        ]}
-                        multiline
-                        placeholder={t('timeline.placeholder')}
-                        value={inputText}
-                        onChangeText={setInputText}
-                        textAlignVertical="top"
-                        onContentSizeChange={(event) => {
-                            setInputMeasuredHeight(event.nativeEvent.contentSize.height);
-                        }}
-                    />
-                    <View style={styles.actionContainer}>
-                        <View style={styles.toolbar}>
-                            {mode === 'todo' && (
-                                <>
-                                    <TouchableOpacity
-                                        onPress={togglePriority}
-                                        style={styles.priorityButton}
-                                    >
-                                        <Icon name={priorityDisplay.icon as any} size={24} color={priorityDisplay.color} />
-                                        {priority !== 'none' && (
-                                            <Text style={[styles.priorityButtonText, { color: priorityDisplay.color }]}>
-                                                {priorityDisplay.label}
-                                            </Text>
-                                        )}
-                                    </TouchableOpacity>
+                    <View style={modalContentStyle}>
+                        <TextInput
+                            ref={inputRef}
+                            style={[
+                                styles.input,
+                                { height: Math.max(MIN_HEIGHT, Math.min(inputMeasuredHeight, MAX_HEIGHT)) }
+                            ]}
+                            multiline
+                            placeholder={t('timeline.placeholder')}
+                            value={inputText}
+                            onChangeText={setInputText}
+                            textAlignVertical="top"
+                            onContentSizeChange={(event) => {
+                                setInputMeasuredHeight(event.nativeEvent.contentSize.height);
+                            }}
+                        />
+                        <View style={styles.actionContainer}>
+                            <View style={styles.toolbar}>
+                                {mode === 'todo' && (
+                                    <>
+                                        <TouchableOpacity
+                                            onPress={togglePriority}
+                                            style={styles.priorityButton}
+                                        >
+                                            <Icon name={priorityDisplay.icon as any} size={24} color={priorityDisplay.color} />
+                                            {priority !== 'none' && (
+                                                <Text style={[styles.priorityButtonText, { color: priorityDisplay.color }]}>
+                                                    {priorityDisplay.label}
+                                                </Text>
+                                            )}
+                                        </TouchableOpacity>
 
-                                    {showDateInput || dueAt ? (
-                                        <View style={styles.dateInputContainer}>
-                                            <Icon name="event" size={18} color={theme.colors.primary} style={styles.dateIcon} />
-                                            <TextInput
-                                                style={styles.dateInput}
-                                                value={dueAt || ''}
-                                                onChangeText={setDueAt}
-                                                placeholder="YYYY-MM-DD"
-                                                placeholderTextColor={theme.colors.textSecondary}
-                                                keyboardType="numeric"
-                                                maxLength={10}
-                                                autoFocus
-                                                onBlur={() => { if (!dueAt) setShowDateInput(false); }}
-                                            />
-                                            {dueAt ? (
-                                                <TouchableOpacity onPress={() => { setDueAt(undefined); setShowDateInput(false); }} style={styles.clearDateButton}>
+                                        {dueAt ? (
+                                            <TouchableOpacity onPress={() => setIsDatePickerVisible(true)} style={styles.dateInputContainer}>
+                                                <Icon name="event" size={18} color={theme.colors.primary} style={styles.dateIcon} />
+                                                <Text style={styles.dateInputText}>{dueAt}</Text>
+                                                <TouchableOpacity onPress={() => setDueAt(undefined)} style={styles.clearDateButton}>
                                                     <Icon name="close" size={16} color={theme.colors.textSecondary} />
                                                 </TouchableOpacity>
-                                            ) : null}
-                                        </View>
-                                    ) : (
-                                        <TouchableOpacity onPress={() => setShowDateInput(true)} style={styles.toolbarButton}>
-                                            <Icon name="event" size={20} color={theme.colors.textSecondary} />
-                                        </TouchableOpacity>
-                                    )}
-                                </>
-                            )}
+                                            </TouchableOpacity>
+                                        ) : (
+                                            <TouchableOpacity onPress={() => setIsDatePickerVisible(true)} style={styles.toolbarButton}>
+                                                <Icon name="event" size={20} color={theme.colors.textSecondary} />
+                                            </TouchableOpacity>
+                                        )}
+                                    </>
+                                )}
+                            </View>
+                            <TouchableOpacity onPress={handleSaveWithTags} style={styles.sendButton}>
+                                <Icon name="send" size={24} color={theme.colors.primary} />
+                            </TouchableOpacity>
                         </View>
-                        <TouchableOpacity onPress={handleSaveWithTags} style={styles.sendButton}>
-                            <Icon name="send" size={24} color={theme.colors.primary} />
-                        </TouchableOpacity>
                     </View>
                 </View>
-            </View>
-        </Modal>
+            </Modal>
+            <DatePickerModal
+                visible={isDatePickerVisible}
+                initialDate={dueAt}
+                onConfirm={(date) => {
+                    setDueAt(date);
+                    setIsDatePickerVisible(false);
+                }}
+                onCancel={() => setIsDatePickerVisible(false)}
+            />
+        </>
     );
 };
 
@@ -433,11 +443,10 @@ const styles = StyleSheet.create({
     dateIcon: {
         marginRight: 4,
     },
-    dateInput: {
+    dateInputText: {
         fontSize: 12,
         color: theme.colors.text,
-        minWidth: 90,
-        paddingVertical: 0,
+        marginRight: 4,
     },
     clearDateButton: {
         padding: 4,

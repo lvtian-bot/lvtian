@@ -1,4 +1,4 @@
-import { EditorView, keymap, highlightSpecialChars, drawSelection, highlightActiveLine, dropCursor, lineNumbers } from "@codemirror/view"
+import { EditorView, keymap, highlightSpecialChars, drawSelection, dropCursor } from "@codemirror/view"
 import { EditorState, Compartment } from "@codemirror/state"
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
@@ -6,7 +6,7 @@ import { languages } from "@codemirror/language-data"
 import { oneDark } from "@codemirror/theme-one-dark"
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, HighlightStyle } from "@codemirror/language"
 import { yaml } from "@codemirror/lang-yaml"
-import { Decoration, ViewPlugin, WidgetType } from "@codemirror/view"
+import { Decoration, ViewPlugin } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
 
 // 自定义高亮样式，明确指定标题的类名

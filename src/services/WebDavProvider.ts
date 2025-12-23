@@ -1,6 +1,5 @@
 import { ICloudProvider, CloudFileItem } from './CloudService';
 import { fsService } from './FileSystemService';
-import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import CryptoJS from 'crypto-js';
 
@@ -258,12 +257,12 @@ export class WebDavProvider implements ICloudProvider {
             let serverPath = '';
             try {
                 // Simple parser for server path
-                const match = this.server.match(/^https?:\/\/[^\/]+(\/.*)?$/);
+                const match = this.server.match(new RegExp('^https?://[^/]+(/.*)?$'));
                 if (match && match[1]) {
                     serverPath = match[1];
                 }
                 if (serverPath.endsWith('/')) serverPath = serverPath.slice(0, -1);
-            } catch (e) {
+            } catch {
                 // Fallback
             }
 

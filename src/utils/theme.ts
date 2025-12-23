@@ -10,6 +10,7 @@ export const colors = {
     mutedText: '#6B7280',
     border: '#E5E7EB',
     danger: '#EF4444',
+    error: '#EF4444',
     success: '#10B981',
     warning: '#FFC107',
     info: '#17A2B8',

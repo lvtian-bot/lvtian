@@ -10,8 +10,7 @@ import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
 // Imports for cloud service initialization
 import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
-import { TencentCOSProvider } from './src/services/TencentCOSProvider';
-import * as SecureStore from 'expo-secure-store';
+
 import { theme } from './src/utils/theme';
 import { useShareStore } from './src/store/useShareStore';
 import { RootStackParamList } from './src/types/navigation';
@@ -41,7 +40,7 @@ function App(props: { sharedText?: string }): React.JSX.Element {
 
     // Explicitly call the async function without await (useEffect cannot be async)
     // The initialization will complete in the background
-    void initializeCloud();
+    initializeCloud();
   }, [cosConfig, webDavConfig, cloudProvider, hasHydrated]);
 
   // Shared handler for processing shared content

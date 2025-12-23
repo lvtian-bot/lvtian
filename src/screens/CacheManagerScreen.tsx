@@ -19,7 +19,7 @@ export const CacheManagerScreen = () => {
     const { t } = useTranslation();
     const [files, setFiles] = useState<CacheFileItem[]>([]);
     const [loading, setLoading] = useState(true);
-    const [totalSize, setTotalSize] = useState(0);
+    // const [totalSize, setTotalSize] = useState(0);
     const [safeToDeleteSize, setSafeToDeleteSize] = useState(0);
 
     const { getMetadata, removeMetadata } = useFileMetadataStore();
@@ -47,16 +47,16 @@ export const CacheManagerScreen = () => {
 
             if (historyPattern === 'dash-yyyymm') {
                 const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{6})\.md$`, 'i');
+                regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
             } else if (historyPattern === 'underscore-yyyymm') {
                 const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}_(\\d{6})\.md$`, 'i');
+                regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
             } else if (historyPattern === 'dash-yyyy') {
                 const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{4})\.md$`, 'i');
+                regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
             } else if (historyPattern === 'chinese-yyyymm') {
                 const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\.md$`, 'i');
+                regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
             }
 
             if (regex) {
@@ -137,9 +137,9 @@ export const CacheManagerScreen = () => {
             }
             setFiles(finalFiles);
 
-            const total = processedFiles.reduce((acc, file) => acc + file.size, 0);
+            // const total = processedFiles.reduce((acc, file) => acc + file.size, 0);
             const safe = processedFiles.filter(f => f.isSafeToDelete).reduce((acc, file) => acc + file.size, 0);
-            setTotalSize(total);
+            // setTotalSize(total);
             setSafeToDeleteSize(safe);
 
         } catch (error) {

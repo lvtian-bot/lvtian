@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, Platform, BackHandler } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, BackHandler } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -16,6 +16,13 @@ import { normalizePath } from '../utils/pathUtils';
 import { syncService } from '../services/SyncService';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
+
+// Helper Component for Header Button
+const HeaderBackButton = ({ onPress, text }: { onPress: () => void, text: string }) => (
+    <TouchableOpacity onPress={onPress} style={styles.headerButton}>
+        <Text style={styles.headerButtonText}>{text}</Text>
+    </TouchableOpacity>
+);
 
 export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
@@ -207,19 +214,22 @@ export const EditorScreen = () => {
     }, [handleBackPress]);
 
     // Handle header back button
+    const headerLeft = useCallback(() => (
+        <HeaderBackButton 
+            onPress={() => {
+                if (!handleBackPress()) {
+                    navigation.goBack();
+                }
+            }} 
+            text={t('common.back')} 
+        />
+    ), [handleBackPress, navigation, t]);
+
     useEffect(() => {
         navigation.setOptions({
-            headerLeft: () => (
-                <TouchableOpacity onPress={() => {
-                    if (!handleBackPress()) {
-                        navigation.goBack();
-                    }
-                }} style={styles.headerButton}>
-                    <Text style={styles.headerButtonText}>{t('common.back')}</Text>
-                </TouchableOpacity>
-            ),
+            headerLeft,
         });
-    }, [navigation, handleBackPress, t]);
+    }, [navigation, headerLeft]);
 
 
     const onWebViewMessage = (event: any) => {
@@ -274,7 +284,7 @@ export const EditorScreen = () => {
                 >
                     <Text style={[
                         styles.headerButtonText,
-                        !isDirty && { color: '#ccc' }
+                        !isDirty && styles.headerButtonTextDisabled
                     ]}>{t('common.save')}</Text>
                 </TouchableOpacity>
             </View>
@@ -322,6 +332,9 @@ const styles = StyleSheet.create({
         color: theme.colors.primary,
         fontSize: 16,
         fontWeight: 'bold',
+    },
+    headerButtonTextDisabled: {
+        color: '#ccc',
     },
     titleContainer: {
         flex: 1,

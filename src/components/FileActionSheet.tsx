@@ -55,7 +55,7 @@ export const FileActionSheet: React.FC<FileActionSheetProps> = ({
                                         onPress={action.onPress}
                                     >
                                         <Icon
-                                            name={action.icon}
+                                            name={action.icon as any}
                                             size={24}
                                             color={action.destructive ? theme.colors.error : theme.colors.text}
                                         />

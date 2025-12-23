@@ -56,7 +56,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onLon
 
                             const pad = (n: number) => n.toString().padStart(2, '0');
                             return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-                        } catch (e) {
+                        } catch {
                             return '-';
                         }
                     })()}

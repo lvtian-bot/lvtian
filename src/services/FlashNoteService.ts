@@ -24,6 +24,7 @@ const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
 
 export const FLASH_NOTES_UPDATED_EVENT = 'FLASH_NOTES_UPDATED';
 export const SHARE_RECEIVED_EVENT = 'SHARE_RECEIVED_EVENT';
+export const BATCH_SYNC_STATUS_CHANGED_EVENT = 'BATCH_SYNC_STATUS_CHANGED_EVENT';
 
 class FlashNoteService {
     private getFlashNotePath(): string {
@@ -144,12 +145,7 @@ class FlashNoteService {
     }
 
     parseNotes(content: string, filePath: string = ''): FlashNote[] {
-        const { flashNoteConfig } = useSettingsStore.getState();
-        const suffix = flashNoteConfig.suffix || '';
-
-        // Create regex to match suffix followed by only whitespace at end
-        // If suffix is empty, just trim trailing whitespace
-        const suffixRegex = suffix ? new RegExp(suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$') : /\s*$/;
+        // const { flashNoteConfig } = useSettingsStore.getState();
 
         const lines = content.split('\n');
         const parsedNotes: FlashNote[] = [];
@@ -159,23 +155,22 @@ class FlashNoteService {
             const match = line.match(HEADER_REGEX);
             if (match) {
                 if (currentNote.id) {
-                    currentNote.content = currentNote.content!.replace(suffixRegex, '');
+                    // Only remove trailing whitespace/empty lines, preserving suffix and content
+                    currentNote.content = currentNote.content!.replace(/\s+$/, '');
                     parsedNotes.push(currentNote as FlashNote);
                 }
                 const timestamp = match[2].trim();
                 currentNote = { id: timestamp, timestamp: timestamp, content: '', filePath: filePath };
             } else {
                 if (currentNote.id) {
-                    // 过滤掉只包含 > 和空白字符的行
-                    if (/^\s*>\s*$/.test(line)) {
-                        return;
-                    }
+                    // Append line, preserving content
                     currentNote.content += line + '\n';
                 }
             }
         });
         if (currentNote.id) {
-            currentNote.content = currentNote.content!.replace(suffixRegex, '');
+            // Only remove trailing whitespace/empty lines
+            currentNote.content = currentNote.content!.replace(/\s+$/, '');
             parsedNotes.push(currentNote as FlashNote);
         }
 
@@ -218,7 +213,7 @@ class FlashNoteService {
         const timestamp = this.getFormattedTimestamp();
         const { flashNoteConfig } = useSettingsStore.getState();
         const suffix = flashNoteConfig.suffix || '';
-        const newEntry = `\n## ${timestamp}\n${trimmedInput}${suffix}`;
+        const newEntry = `\n\n## ${timestamp}\n${trimmedInput}${suffix}`;
 
         const newContent = currentContent + newEntry;
 
@@ -451,6 +446,9 @@ class FlashNoteService {
         const dirPath = flashNoteConfig.path || '';
         const scanDirPath = flashNoteConfig.historyFolderPath || dirPath;
 
+        // Broadcast checking status
+        DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'checking');
+
         // Normalize main path for comparison
         const mainPath = normalizePath(dirPath ? `${dirPath}/${mainFilename}` : mainFilename);
 
@@ -458,10 +456,12 @@ class FlashNoteService {
         const netState = await NetInfo.fetch();
         if (!netState.isConnected) {
             console.log('[FlashNoteService] Offline, skipping sync.');
+            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'offline');
             return;
         }
 
         if (!cloudService.isConfigured()) {
+            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'error'); // Or not-configured if we had that mapping
             return;
         }
 
@@ -544,8 +544,15 @@ class FlashNoteService {
                 DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
             }
 
+            if (results.errors > 0 || results.conflicts > 0) {
+                DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'error'); // Generalize conflict/error as 'attention needed' or just error
+            } else {
+                DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'synced');
+            }
+
         } catch (e) {
             console.error('[FlashNoteService] Batch Sync Failed:', e);
+            DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, 'error');
         }
     }
 }

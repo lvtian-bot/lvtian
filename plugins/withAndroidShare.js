@@ -8,8 +8,8 @@ const withAndroidShare = (config) => {
 
 // 1. Add <intent-filter> to AndroidManifest.xml
 const withShareIntentFilter = (config) => {
-  return withAndroidManifest(config, async (config) => {
-    const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(config.modResults);
+  return withAndroidManifest(config, async (modConfig) => {
+    const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(modConfig.modResults);
 
     // Check if filter already exists to avoid duplicates
     const hasShareIntent = mainActivity['intent-filter']?.some(filter =>
@@ -27,14 +27,14 @@ const withShareIntentFilter = (config) => {
       });
     }
 
-    return config;
+    return modConfig;
   });
 };
 
 // 2. Inject Kotlin code into MainActivity.kt
 const withShareActivityModification = (config) => {
-  return withMainActivity(config, async (config) => {
-    let content = config.modResults.contents;
+  return withMainActivity(config, async (modConfig) => {
+    let content = modConfig.modResults.contents;
 
     // A. Add Imports
     if (!content.includes('import android.content.Intent')) {
@@ -218,50 +218,10 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
     }
 
     // E. Modify createReactActivityDelegate to pass initialProps (Cold Start Fix)
-    const oldDelegate = `
-  override fun createReactActivityDelegate(): ReactActivityDelegate {
-    return ReactActivityDelegateWrapper(
-          this,
-          BuildConfig.IS_NEW_ARCHITECTURE_ENABLED,
-          object : DefaultReactActivityDelegate(
-              this,
-              mainComponentName,
-              fabricEnabled
-          ){})
-  }
-`;
-
-    const newDelegate = `
-  override fun createReactActivityDelegate(): ReactActivityDelegate {
-    return ReactActivityDelegateWrapper(
-          this,
-          BuildConfig.IS_NEW_ARCHITECTURE_ENABLED,
-          object : DefaultReactActivityDelegate(
-              this,
-              mainComponentName,
-              fabricEnabled
-          ){
-            override fun getLaunchOptions(): Bundle? {
-              val initialProps = Bundle()
-              val sharedText = intent?.getStringExtra(Intent.EXTRA_TEXT)
-              val type = intent?.type
-              android.util.Log.i("MainActivity", "getLaunchOptions: type=" + type + ", sharedText=" + (if (sharedText != null) "found" else "null"))
-              if (intent?.action == Intent.ACTION_SEND && type != null && type.startsWith("text/") && sharedText != null) {
-                android.util.Log.i("MainActivity", "getLaunchOptions: Injecting sharedText into initialProps")
-                initialProps.putString("sharedText", sharedText)
-              }
-              return initialProps
-            }
-          })
-  }
-`;
-
-    // Normalize whitespace for comparison (optional but safer) or just replace directly
-    // Since we know the exact string from previous file read:
+    // We try to replace the whole function block.
+    // Note: Regex might be safer to handle varying whitespace, but direct string replacement is safer if exact match.
+    // Let's try to match the "closure" of the object expression.
     if (content.includes('object : DefaultReactActivityDelegate(') && !content.includes('getLaunchOptions')) {
-      // We try to replace the whole function block.
-      // Note: Regex might be safer to handle varying whitespace, but direct string replacement is safer if exact match.
-      // Let's try to match the "closure" of the object expression.
       content = content.replace(/object : DefaultReactActivityDelegate\(\s*this,\s*mainComponentName,\s*fabricEnabled\s*\)\{\}/,
         `object : DefaultReactActivityDelegate(
               this,
@@ -282,8 +242,8 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
           }`);
     }
 
-    config.modResults.contents = content;
-    return config;
+    modConfig.modResults.contents = content;
+    return modConfig;
   });
 };
 

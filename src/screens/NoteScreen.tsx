@@ -10,7 +10,7 @@ import {
     Alert,
     BackHandler,
 } from 'react-native';
-import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -161,16 +161,18 @@ export const NoteScreen = ({ route, navigation }: Props) => {
     }, [loadFiles]);
 
     // Header Options
+    const headerRight = useCallback(() => (
+        <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
+            <Icon name="note-add" size={24} color={theme.colors.primary} />
+        </TouchableOpacity>
+    ), []);
+
     useEffect(() => {
         navigation.setOptions({
             title: prefix ? prefix.split('/').filter(Boolean).pop() : t('tabs.browser'),
-            headerRight: () => (
-                <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
-                    <Icon name="note-add" size={24} color={theme.colors.primary} />
-                </TouchableOpacity>
-            ),
+            headerRight: headerRight,
         });
-    }, [navigation, prefix, t]);
+    }, [navigation, prefix, t, headerRight]);
 
     // Create File Logic
     const handleCreateFile = async (filename: string) => {

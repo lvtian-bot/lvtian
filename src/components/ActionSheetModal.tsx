@@ -71,7 +71,7 @@ export const ActionSheetModal: React.FC<ActionSheetModalProps> = ({
                                 >
                                     {action.icon && (
                                         <Icon
-                                            name={action.icon}
+                                            name={action.icon as any}
                                             size={24}
                                             color={
                                                 action.color ||

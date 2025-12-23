@@ -8,6 +8,12 @@ import { theme } from '../utils/theme';
 import { normalizePath } from '../utils/pathUtils';
 import { flashNoteService } from '../services/FlashNoteService';
 
+const SectionHeader = ({ title }: { title: string }) => (
+    <View style={styles.sectionHeader}>
+        <Text style={styles.sectionHeaderText}>{title}</Text>
+    </View>
+);
+
 export const FlashNoteConfigScreen = () => {
     const { t } = useTranslation();
     const { flashNoteConfig, setFlashNoteConfig } = useSettingsStore();
@@ -68,7 +74,7 @@ export const FlashNoteConfigScreen = () => {
         try {
             setFlashNoteConfig({ ...flashNoteConfig, suffix: flashNoteSuffix });
             Alert.alert(t('settings.success'), t('settings.success'));
-        } catch (error) {
+        } catch {
             Alert.alert(t('settings.failure'), t('flashNoteConfigScreen.saveFailed'));
         } finally {
             setIsSavingSuffix(false);
@@ -101,12 +107,6 @@ export const FlashNoteConfigScreen = () => {
     const handleSelectPresetSuffix = (suffix: string) => {
         setFlashNoteSuffix(suffix);
     };
-
-    const SectionHeader = ({ title }: { title: string }) => (
-        <View style={styles.sectionHeader}>
-            <Text style={styles.sectionHeaderText}>{title}</Text>
-        </View>
-    );
 
     return (
         <KeyboardAvoidingView

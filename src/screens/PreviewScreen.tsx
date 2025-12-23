@@ -116,34 +116,36 @@ export const PreviewScreen = () => {
         }, [loadFile, performAutoSync])
     );
 
-    const rules = useMemo<RenderRules>(() => ({
-        image: (node, children, parent, styles) => {
-            const { src, alt } = node.attributes;
+    const renderImageRule = useCallback((node: any, children: any, parent: any, styles: any) => {
+        const { src, alt } = node.attributes;
 
-            // Check if it's a web URL
-            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
-                return (
-                    <AutoImage
-                        key={node.key}
-                        source={{ uri: src }}
-                        style={styles.image}
-                        accessibilityLabel={alt}
-                    />
-                );
-            }
-
-            // Otherwise, treat as local/repo file
+        // Check if it's a web URL
+        if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
             return (
-                <RepoImage
+                <AutoImage
                     key={node.key}
-                    src={src}
-                    alt={alt}
+                    source={{ uri: src }}
                     style={styles.image}
-                    currentFilePath={filePath}
+                    accessibilityLabel={alt}
                 />
             );
-        },
-    }), [filePath]);
+        }
+
+        // Otherwise, treat as local/repo file
+        return (
+            <RepoImage
+                key={node.key}
+                src={src}
+                alt={alt}
+                style={styles.image}
+                currentFilePath={filePath}
+            />
+        );
+    }, [filePath]);
+
+    const rules = useMemo<RenderRules>(() => ({
+        image: renderImageRule,
+    }), [renderImageRule]);
 
     return (
         <View style={[styles.container, { paddingBottom: insets.bottom }]}>
@@ -290,6 +292,26 @@ const styles = StyleSheet.create({
         resizeMode: 'contain',
         marginVertical: theme.spacing.s,
     },
+    fullWidth: {
+        width: '100%',
+    },
+    defaultHeight: {
+        height: 200,
+    },
+    center: {
+        justifyContent: 'center', 
+        alignItems: 'center',
+    },
+    loadingBg: {
+        backgroundColor: theme.colors.surface,
+    },
+    errorBg: {
+        backgroundColor: '#f0f0f0',
+    },
+    errorText: {
+        color: '#999', 
+        fontSize: 12,
+    },
 });
 
 const AutoImage = ({ source, style, accessibilityLabel }: any) => {
@@ -310,8 +332,8 @@ const AutoImage = ({ source, style, accessibilityLabel }: any) => {
             source={source}
             style={[
                 style,
-                { width: '100%' },
-                ratio ? { aspectRatio: ratio } : { height: 200 }
+                styles.fullWidth,
+                ratio ? { aspectRatio: ratio } : styles.defaultHeight
             ]}
             contentFit="contain"
             accessibilityLabel={accessibilityLabel}
@@ -410,7 +432,7 @@ const RepoImage = ({ src, alt, style, currentFilePath }: { src: string, alt?: st
 
     if (loadingImage) {
         return (
-            <View style={[styles.image, { justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface }]}>
+            <View style={[styles.image, styles.center, styles.loadingBg]}>
                 <ActivityIndicator size="small" color={theme.colors.primary} />
             </View>
         );
@@ -418,8 +440,8 @@ const RepoImage = ({ src, alt, style, currentFilePath }: { src: string, alt?: st
 
     if (error || !localUri) {
         return (
-            <View style={[styles.image, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f0f0' }]}>
-                <Text style={{ color: '#999', fontSize: 12 }}>{t('common.error')}: {alt || 'Image not found'}</Text>
+            <View style={[styles.image, styles.center, styles.errorBg]}>
+                <Text style={styles.errorText}>{t('common.error')}: {alt || 'Image not found'}</Text>
             </View>
         );
     }

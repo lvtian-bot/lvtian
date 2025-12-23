@@ -9,13 +9,13 @@ const pkg = require('./package.json');
  * Plugin 1: Disable Android Predictive Back Gesture
  */
 const withDisablePredictiveBack = (config) => {
-    return withAndroidManifest(config, async (config) => {
-        const app = config.modResults.manifest.application?.[0];
+    return withAndroidManifest(config, async (modConfig) => {
+        const app = modConfig.modResults.manifest.application?.[0];
         if (app) {
             // Add or update attribute
             app.$['android:enableOnBackInvokedCallback'] = 'false';
         }
-        return config;
+        return modConfig;
     });
 };
 
@@ -24,8 +24,8 @@ const withDisablePredictiveBack = (config) => {
  * Includes: Keystore configuration, NDK architecture filtering
  */
 const withCustomBuildGradle = (config) => {
-    return withAppBuildGradle(config, async (config) => {
-        let content = config.modResults.contents;
+    return withAppBuildGradle(config, async (modConfig) => {
+        let content = modConfig.modResults.contents;
 
         // --- A. Inject Keystore Loading Logic ---
         if (!content.includes('keystorePropertiesFile = rootProject.file("../keystore/keystore.properties")')) {
@@ -97,8 +97,8 @@ if (keystorePropertiesFile.exists()) {
             content = content.replace(/defaultConfig\s*\{/, lintBlock + 'defaultConfig {');
         }
 
-        config.modResults.contents = content;
-        return config;
+        modConfig.modResults.contents = content;
+        return modConfig;
     });
 };
 
@@ -107,22 +107,22 @@ if (keystorePropertiesFile.exists()) {
  * Sets reactNativeArchitectures to prevent third-party libs from building 32-bit archs
  */
 const withCustomGradleProperties = (config) => {
-    return withGradleProperties(config, (config) => {
+    return withGradleProperties(config, (modConfig) => {
         const key = 'reactNativeArchitectures';
         const value = 'arm64-v8a';
 
         // Check if already exists
-        const existing = config.modResults.find(item => item.key === key);
+        const existing = modConfig.modResults.find(item => item.key === key);
         if (existing) {
             existing.value = value;
         } else {
-            config.modResults.push({
+            modConfig.modResults.push({
                 type: 'property',
                 key,
                 value,
             });
         }
-        return config;
+        return modConfig;
     });
 };
 

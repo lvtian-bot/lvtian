@@ -1,3 +1,4 @@
+/* eslint-disable no-bitwise */
 import * as FileSystem from 'expo-file-system/legacy';
 import { normalizePath } from '../utils/pathUtils';
 

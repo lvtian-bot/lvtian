@@ -68,7 +68,7 @@ export const AgentScreen = () => {
                 // Logic kept simple to avoid store side-effects during render
             }
         }
-    }, [config.apiKey, isLoading, messages.length]);
+    }, [config.apiKey, isLoading, messages.length, sessions.length]);
 
     const handleSend = async () => {
         if (!inputText.trim()) return;
@@ -150,7 +150,7 @@ export const AgentScreen = () => {
                 <Text style={styles.headerTitle} numberOfLines={1}>
                     {currentSession?.title || t('ai.title')}
                 </Text>
-                
+
                 <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
                     <Icon name="add" size={24} color={theme.colors.text} />
                 </TouchableOpacity>

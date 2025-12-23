@@ -218,7 +218,7 @@ export const CloudRepoConfigScreen = () => {
                 name={icon}
                 size={24}
                 color={activeTab === key ? theme.colors.primary : theme.colors.textSecondary}
-                style={{ marginBottom: 4 }}
+                style={styles.tabIcon}
             />
             <Text style={[styles.tabText, activeTab === key && styles.tabTextActive]}>
                 {title}
@@ -255,7 +255,7 @@ export const CloudRepoConfigScreen = () => {
                     <>
                         <View style={styles.card}>
                             <View style={styles.infoBox}>
-                                <Icon name="information-outline" size={20} color={theme.colors.primary} style={{ marginRight: 8 }} />
+                                <Icon name="information-outline" size={20} color={theme.colors.primary} style={styles.infoIcon} />
                                 <Text style={styles.infoText}>推荐使用坚果云。请使用应用专用密码。</Text>
                             </View>
                             <Text style={styles.cardTitle}>WebDAV 配置</Text>
@@ -276,7 +276,7 @@ export const CloudRepoConfigScreen = () => {
                         <ActivityIndicator color={theme.colors.white} />
                     ) : (
                         <>
-                            <Icon name="check-circle-outline" size={20} color={theme.colors.white} style={{ marginRight: 8 }} />
+                            <Icon name="check-circle-outline" size={20} color={theme.colors.white} style={styles.saveIcon} />
                             <Text style={styles.saveButtonText}>
                                 {t('settings.save')} {activeTab === 'tencent' ? 'COS' : 'WebDAV'}
                             </Text>
@@ -332,6 +332,9 @@ const styles = StyleSheet.create({
     tabTextActive: {
         color: theme.colors.primary,
         fontWeight: 'bold',
+    },
+    tabIcon: {
+        marginBottom: 4,
     },
     card: {
         backgroundColor: theme.colors.surface,
@@ -428,5 +431,11 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
         fontSize: 12,
         flex: 1,
+    },
+    infoIcon: {
+        marginRight: 8,
+    },
+    saveIcon: {
+        marginRight: 8,
     },
 });
