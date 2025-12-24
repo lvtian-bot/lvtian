@@ -1,5 +1,6 @@
 import React from 'react';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 
@@ -12,26 +13,91 @@ import { MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
 
-const Tab = createBottomTabNavigator<MainTabParamList>();
+// 1. Create Stacks for screens that need headers (Flash, Todo, Settings)
+// This is necessary because MaterialTopTabs does not provide a built-in header.
+const FlashStack = createNativeStackNavigator();
+const TodoStack = createNativeStackNavigator();
+const SettingsStack = createNativeStackNavigator();
 
-const FlashIcon = ({ color, size }: { color: string; size: number }) => (
-    <Icon name="flash-on" color={color} size={size} />
+const FlashStackScreen = () => {
+    const { t } = useTranslation();
+    return (
+        <FlashStack.Navigator
+            screenOptions={{
+                headerTitleAlign: 'center',
+                headerShadowVisible: false,
+                headerStyle: { backgroundColor: theme.colors.background },
+            }}
+        >
+            <FlashStack.Screen
+                name="FlashScreen"
+                component={FlashScreen}
+                options={{ title: t('tabs.timeline') }}
+            />
+        </FlashStack.Navigator>
+    );
+};
+
+const TodoStackScreen = () => {
+    const { t } = useTranslation();
+    return (
+        <TodoStack.Navigator
+            screenOptions={{
+                headerTitleAlign: 'center',
+                headerShadowVisible: false,
+                headerStyle: { backgroundColor: theme.colors.background },
+            }}
+        >
+            <TodoStack.Screen
+                name="TodoScreen"
+                component={TodoScreen}
+                options={{ title: t('tabs.todo') }}
+            />
+        </TodoStack.Navigator>
+    );
+};
+
+const SettingsStackScreen = () => {
+    const { t } = useTranslation();
+    return (
+        <SettingsStack.Navigator
+            screenOptions={{
+                headerTitleAlign: 'center',
+                headerShadowVisible: false,
+                headerStyle: { backgroundColor: theme.colors.background },
+            }}
+        >
+            <SettingsStack.Screen
+                name="SettingsScreen"
+                component={SettingsScreen}
+                options={{ title: t('tabs.settings') }}
+            />
+        </SettingsStack.Navigator>
+    );
+};
+
+const Tab = createMaterialTopTabNavigator<MainTabParamList>();
+
+// Icons
+// MaterialTopTabs passes { focused, color } (no size by default)
+const FlashIcon = ({ color }: { color: string }) => (
+    <Icon name="flash-on" color={color} size={24} />
 );
 
-const TodoIcon = ({ color, size }: { color: string; size: number }) => (
-    <Icon name="task-alt" color={color} size={size} />
+const TodoIcon = ({ color }: { color: string }) => (
+    <Icon name="task-alt" color={color} size={24} />
 );
 
-const AgentIcon = ({ color, size }: { color: string; size: number }) => (
-    <Icon name="auto-awesome" color={color} size={size} />
+const AgentIcon = ({ color }: { color: string }) => (
+    <Icon name="auto-awesome" color={color} size={24} />
 );
 
-const NoteIcon = ({ color, size }: { color: string; size: number }) => (
-    <Icon name="folder" color={color} size={size} />
+const NoteIcon = ({ color }: { color: string }) => (
+    <Icon name="folder" color={color} size={24} />
 );
 
-const SettingsIcon = ({ color, size }: { color: string; size: number }) => (
-    <Icon name="settings" color={color} size={size} />
+const SettingsIcon = ({ color }: { color: string }) => (
+    <Icon name="settings" color={color} size={24} />
 );
 
 export const TabNavigator = () => {
@@ -39,32 +105,45 @@ export const TabNavigator = () => {
 
     return (
         <Tab.Navigator
-            backBehavior="none"
+            tabBarPosition="bottom"
+            initialLayout={{ width: 0 }}
             screenOptions={{
-                headerTitleAlign: 'center',
-                headerShadowVisible: false,
-                headerStyle: {
-                    backgroundColor: theme.colors.background,
-                },
+                swipeEnabled: true,
+                animationEnabled: false, // Disable animation on click
+                tabBarShowIcon: true,
+                tabBarShowLabel: true,
+                tabBarIndicatorStyle: { height: 0 }, // Hide the indicator line
                 tabBarStyle: {
                     backgroundColor: theme.colors.surface,
+                    borderTopWidth: 1,
+                    borderTopColor: '#e0e0e0',
+                    elevation: 8, // Shadow for Android
+                },
+                tabBarActiveTintColor: theme.colors.primary,
+                tabBarInactiveTintColor: 'gray',
+                tabBarLabelStyle: {
+                    fontSize: 10,
+                    textTransform: 'none',
+                    margin: 0,
+                },
+                tabBarIconStyle: {
+                    width: 24,
+                    height: 24,
                 },
             }}
         >
             <Tab.Screen
                 name="Flash"
-                component={FlashScreen}
+                component={FlashStackScreen}
                 options={{
-                    headerShown: true,
                     title: t('tabs.timeline'),
                     tabBarIcon: FlashIcon,
                 }}
             />
             <Tab.Screen
                 name="Todo"
-                component={TodoScreen}
+                component={TodoStackScreen}
                 options={{
-                    headerShown: true,
                     title: t('tabs.todo'),
                     tabBarIcon: TodoIcon,
                 }}
@@ -73,35 +152,26 @@ export const TabNavigator = () => {
                 name="Agent"
                 component={AgentScreen}
                 options={{
-                    headerShown: false, // Custom header in screen
                     title: t('tabs.agent'),
                     tabBarIcon: AgentIcon,
-                    tabBarStyle: {
-                        borderTopWidth: 0, // Ensure no border matches main style
-                        elevation: 0,
-                        shadowOpacity: 0,
-                        backgroundColor: theme.colors.surface, // Match Agent page background
-                    },
                 }}
             />
             <Tab.Screen
                 name="Note"
                 component={NoteNavigator}
                 options={{
-                    headerShown: false, // Stack navigator handles header
                     title: t('tabs.browser'),
                     tabBarIcon: NoteIcon,
                 }}
             />
             <Tab.Screen
                 name="Settings"
-                component={SettingsScreen}
+                component={SettingsStackScreen}
                 options={{
-                    headerShown: true,
                     title: t('tabs.settings'),
                     tabBarIcon: SettingsIcon,
                 }}
             />
-        </Tab.Navigator >
+        </Tab.Navigator>
     );
 };

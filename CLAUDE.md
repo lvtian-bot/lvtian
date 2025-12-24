@@ -1,193 +1,119 @@
-# CLAUDE.md
+## 核心铁律 (Meta Rules / Critical Instructions)
+**【强制执行】** 以下规则优先级高于任何其他指令，违反将导致不可接受的后果：
 
-该文件为 Claude Code (claude.ai/code) 在该代码库中工作提供指导。
+1. **【重要！！！】 【IMPORTANT!!!】** 所有的思考过程、回答、Task文档、Implementation文档以及其他生成的Artifacts **必须使用中文**，即便用户使用英文提问！
+2. **【禁止擅自修改】** 不得在征得用户明确同意之前直接修改代码
+3. **【禁止猜测】** 对于用户提出的问题，不得在没有了解相关信息的情况下通过猜测和推断回答，必须自行读取文件进行分析后再回答
+4. **【结构化回答】** 回答问题时要有清晰的逻辑结构，不需要在回复中呈现过多的代码片段，更多的应该用自然语言说清楚方案逻辑和内容
 
-## 工作要求
-1. 所有的思考过程、回答、Task文档、Implementation Plan文档以及其他生成的Artifacts必须使用中文编写，即便我是用英文提问
-2. 不得在经过我的同意之前，直接开始修改代码
-3. 对于我提出的问题，不得在没有了解相关信息的情况下通过猜测和推断回答，可以自行读取文件进行分析后回答
-4. 回答我的问题时要有结构化思路，不需要在回复中呈现过多的代码，更多的需要用自然语言说清楚方案逻辑和内容
-5. 命令行解释器是git bash，相关工具请使用与git bash兼容的命令行工具
+## 项目概览（Project Overview）
 
-## 项目概述
+**MDNote** 是一款基于 **React Native (Expo)** 构建的现代化、云优先的 Markdown 笔记应用。
 
-MDNote 是一个基于 Expo 框架构建的 React Native 移动应用，用于管理带有云同步功能的 Markdown 笔记。它包含基于时间线的"闪记"系统、文件浏览器以及与腾讯云对象存储 (COS) 的集成，用于云备份和同步。
+**核心特性：**
+*   **云优先 & 本地加速**：支持腾讯云对象存储 (COS) 和 WebDAV 协议。采用策略模式设计，确保云服务可扩展。使用本地缓存策略加速读取。
+*   **闪念笔记 (Flash Note)**：支持快速捕捉想法，通过 `FlashNoteService` 管理，具备即时同步和冲突检测功能。
+*   **智能待办 (Smart Todo)**：基于 Markdown 的轻量级任务管理，支持滑动日历选择与状态同步。
+*   **AI 助手 (AI Agent)**：集成大模型对话能力，辅助整理笔记与信息检索。
 
-## 开发命令
+## 技术栈 (Tech Stack)
 
-### 项目设置
-```bash
-# 安装依赖
-npm install
-```
+| 类别 | 技术 | 版本/说明 |
+|-----|------|----------|
+| **运行时** | Node.js, JDK | LTS v20+, JDK 17 |
+| **核心框架** | React Native<br>Expo<br>React | 0.81.5<br>SDK 54 (托管工作流 + 预构建插件)<br>19.1.0 |
+| **语言** | TypeScript | 5.x (严格模式) |
+| **状态管理** | Zustand | 轻量级，模块化 Store |
+| **导航** | React Navigation | 7 (Native Stack + Bottom Tabs) |
+| **国际化** | i18next | + react-i18next |
+| **核心库** | reanimated, gesture-handler<br>expo-file-system<br>expo-secure-store, crypto-js | 动画/手势<br>文件操作<br>安全存储/加密 |
 
-### 运行应用
-```bash
-# 启动 Metro 打包器
-npm start
+## 业务逻辑与架构细节 (Architecture & Business Logic)
 
-# 运行在 Android 设备上
-npm run android
+### 核心文件快速索引 (Quick File Index)
 
-# 运行在 iOS 设备上
-npm run ios
-```
+| 文件路径 | 关键职责 | 必读场景 |
+|---------|---------|---------|
+| `src/services/CloudService.ts` | 云策略入口 (TencentCOS/WebDAV) | 同步、上传、下载相关问题 |
+| `src/services/FlashNoteService.ts` | 闪念追加写入逻辑 | 闪念功能、时间格式问题 |
+| `src/services/FileSystemService.ts` | 文件操作唯一入口 | 文件读写、Scoped Storage |
+| `src/store/useFileMetadataStore.ts` | ETag/LastModified 存储 | 冲突检测、同步状态 |
+| `src/store/useSyncStore.ts` | 上传队列管理 | Write-Through 机制 |
+| `src/components/StatusBannerContainer.tsx` | 统一状态横幅 | UI 状态展示逻辑 |
 
-### 开发工具
-```bash
-# 运行代码检查
-npm run lint
+### 1. 核心代码 (`src/`)
+*   **`services/` (业务中枢)**：所有核心逻辑下沉于此。
+    *   `CloudService`: 云策略入口 (`TencentCOS` / `WebDAV`)。**操作前必检 `isConfigured()`**。
+    *   `FlashNoteService`: 追加写入 `flash_notes.md` (格式严守 `## YYYY-MM-DD HH:mm:ss`)。
+    *   `FileSystemService`: **文件操作唯一入口** (封装 Expo API 以兼容 Scoped Storage，严禁直接用 RNFS)。
+*   **`store/` (状态管理)**：基于 Zustand。
+    *   `useSettingsStore`: 基础配置 (SecretKey 存 SecureStore)。
+    *   `useFileMetadataStore`: 存 ETag/LastModified，**冲突检测核心依据** (`headFile` 对比)。
+    *   `useSyncStore`: 上传队列 (Write-Through 机制：写入即加入队列)。
+*   **`navigation/` & `screens/`**：
+    *   `FlashNoteInputModal`: 全局模态框，用于快速录入。
+    *   新页面开发需在 `types/navigation.ts` 定义路由，并使用 `useTranslation`。
+    *   `i18n.ts`: 国际化入口，App 启动首位加载。
 
-# 运行测试
-npm test
+### 2. 基础设施 (Non-src)
+*   **`android/`**：Expo Prebuild 生成物。**严禁直接修改**，必须通过 `app.config.js` 插件定制。
+*   **`editor-bundler/`**：CodeMirror 编辑器独立构建工程 (修改后需 rebuild)。
+*   **`docs/`**：复杂逻辑请查阅此目录 (如 `FlashScreen_TodoSreen_logic.md`, `PreviewScreen_logic.md`)。
+*   **`assets/`**：静态资源 (含 `codemirror.bundle.js`)。
 
-# 执行预构建 (生成原生项目文件)
-npm run prebuild
-```
+## 编码规范（Coding Conventions）
 
-## 架构概述
+*   **组件开发**：
+    *   全面使用 **Functional Components** 和 **Hooks**。
+    *   样式使用 `StyleSheet.create`，避免行内样式滥用。
+*   **逻辑复用与封装 (DRY Principle)**：
+    *   **核心逻辑统一**：严禁在 UI 组件（如 `FlashScreen`, `TodoScreen`, `PreviewScreen`）中重复编写同步、冲突检测或文件读写逻辑。
+    *   **服务层下沉**：所有涉及云同步、文件操作、冲突处理的业务逻辑，**必须**封装在 `src/services/` 下的独立服务中（如 `FlashNoteService`, `SyncService`）。
+    *   **Hooks 封装**：对于跨组件的状态逻辑（如监听同步状态），应提取为 Custom Hooks（如 `useCloudSync`）。
+*   **状态管理**：
+    *   全局状态优先使用 **Zustand**。
+    *   服务层 (Services) 需要读取状态时，使用 `store.getState()` 避免 Hooks 规则限制。
+*   **异步处理**：
+    *   统一使用 `async/await`。
+    *   关键业务逻辑（如同步、文件读写）必须包含 `try-catch` 错误处理。
+*   **事件通信**：
+    *   组件与非 React 上下文（如后台服务）通信时，使用 `DeviceEventEmitter`（例如 `SHARE_RECEIVED_EVENT`）。
+*   **类型安全**：
+    *   严禁使用 `any`，所有 Props 和接口必须定义明确的 TypeScript Interface。
 
-### 导航结构
-- **根导航器** (`AppNavigator`): Native Stack Navigator
-  - `MainTabs`: Bottom Tab Navigator (闪记时间线、文件浏览器、设置)
-  - `Editor`: 全屏编辑器，用于查看/编辑 Markdown 文件
+## 核心命令（Key Commands）
 
-### 状态管理 (Zustand)
-应用使用 Zustand 存储并结合 AsyncStorage 持久化：
+| 场景 | 命令 | 备注 |
+|-----|------|------|
+| **环境安装** | `npx expo install` | 初次安装依赖 |
+| **预构建原生** | `npx expo prebuild` | 修改 app.config.js 或原生依赖后需要 |
+| **启动开发** | `npx expo start` | Metro Bundler |
+| **运行 Android** | `npx expo run:android` | 开发构建 |
+| **运行 iOS** | `npx expo run:ios` | 开发构建 |
+| **编辑器构建** | `cd editor-bundler && npm run build` | 修改 editor-bundler/ 后必须执行 |
+| **代码检查** | `npx eslint .` | 风格检查 |
+| **运行测试** | `npx jest` | 单元测试 |
 
-1. **`useSettingsStore`** (`src/store/useSettingsStore.ts`)
-   - 主题设置
-   - 腾讯云 COS 配置 (bucket, region)
-   - 闪记配置 (路径、文件名)
-   - 注意：凭证 (secretId/secretKey) 单独存储在 react-native-keychain 中以确保安全
+## 重要提示（Important Notes）
 
-2. **`useSyncStore`** (`src/store/useSyncStore.ts`)
-   - 云同步上传队列
-   - 队列项状态跟踪 (pending, uploading, failed, success)
-   - 重试次数管理
+1.  **Android 构建配置 (Expo Prebuild)**：项目使用了高度定制的 `app.config.js`，包含"禁用预测性返回手势"、"Keystore 注入"等插件。**严禁直接修改 `android/` 目录下的代码！** 任何原生层面的修改**必须**通过编写 Config Plugin (`plugins/`) 实现，否则每次运行 `npx expo prebuild` 都会导致修改丢失。
+2. 不要硬编码中文或英文，使用国际化编码方式i18next。
+3.  **云同步逻辑**：`CloudService` 依赖于 `useSettingsStore` 的配置（Provider 类型）。在调用 `initProvider()` 前需确保 Store 已 Hydrate（`hasHydrated` 标志）。
+4.  **编辑器调试**：Webview 编辑器运行在独立环境中，调试需关注 WebView 的 console 消息传递机制。
+5.  **文件权限**：Android 端利用了 Scoped Storage，文件操作需严格依赖 `FileSystemService` 封装的方法。
+6.  **文件系统 API 演进**：项目目前混用 `expo-file-system` 的新老 API。新功能开发应优先考虑新版 API，但必须注意兼容性。后续有计划统一迁移至新版 API。
 
-3. **`useFileMetadataStore`** (`src/store/useFileMetadataStore.ts`)
-   - 存储文件的 etags 和 lastModified 时间戳
-   - 用于同步过程中的冲突检测
+## 详细文档索引 (Detailed Docs Index)
 
-4. **`useShareStore`** (`src/store/useShareStore.ts`)
-   - 处理分享内容的状态管理
-   - 保存待处理的分享内容
+当需要深入理解复杂逻辑时，请阅读以下文档：
 
-
-### 核心服务
-
-#### 文件系统服务 (`src/services/FileSystemService.ts`)
-- 封装 react-native-fs 用于本地文件操作
-- 根路径: `RNFS.DocumentDirectoryPath`
-- 提供的操作: listFiles, readFile, writeFile, createDirectory, deleteFile, moveFile, exists, stat
-
-#### 云服务 (`src/services/CloudService.ts`)
-- 云存储提供程序的抽象接口 (`ICloudProvider`)
-- 当前实现: `TencentCOSProvider`
-- 提供程序在应用初始化时根据设置进行配置
-- 提供的操作: uploadFile, downloadFile, getCloudFileContent, listFiles, deleteFile, headFile
-
-### 新增组件与导航
-
-#### 状态横幅组件 (`src/components/StatusBanner.tsx`)
-- 统一管理的状态提示组件
-- 支持 warning、info、error 三种类型
-- 支持自定义操作按钮
-- 模块化的离线、冲突等横幅提示
-
-#### 笔记导航器 (`src/navigation/NoteNavigator.tsx`)
-- 新增的笔记列表导航器
-- 使用 React Navigation Native Stack
-- 提供笔记文件的浏览和管理功能
-
-### 上传流程
-
-1. **初始化** (App.tsx):
-   - 应用启动时，检查有效的 COS 配置和凭证
-   - 如果找到，则初始化 TencentCOSProvider 并将其设置到 cloudService
-
-2. **写入流程**:
-   - 用户保存文件 → 本地写入 → 直接上传到云端
-   - 上传成功: 更新本地元数据 (etag, lastModified)
-   - 上传失败: 记录错误并加入重试队列
-   - 上传结果 (etag, lastModified) 存储在 FileMetadataStore 中
-
-3. **冲突检测**:
-   - EditorScreen 和 TimelineScreen 在加载时检查同步状态
-   - 通过 `headFile()` 比较本地 etag 与云端 etag
-   - 如果不匹配: 通过比较时间戳确定云端版本新还是本地版本新
-   - 用户可以选择: 使用云端版本、保留本地版本或上传本地版本 (强制)
-
-### 闪记功能
-
-闪记是存储在单个文件中的带时间戳的 Markdown 条目 (默认文件名: `flash_notes.md`)。
-
-**格式**:
-```markdown
-## 2025-01-19 14:30:00
-Note content here
-
-## 2025-01-18 10:15:00
-Another note
-```
-
-**实现**:
-- `TimelineScreen`: 解析闪记文件，按时间倒序显示
-- `FlashNoteInputModal`: 用于添加/编辑单个闪记的模态组件
-- 文件路径可通过设置配置 (flashNoteConfig.path + flashNoteConfig.filename)
-- `GlobalShareHandler`: 处理从其他应用分享的内容并自动显示闪记输入模态框
-
-### 国际化 (i18n)
-
-- 使用 i18next 配合 react-i18next
-- 翻译文件: `src/locales/en.json`, `src/locales/zh.json`
-- 默认语言: 中文 (`zh`), 回退语言: 英文 (`en`)
-- 在 `src/i18n.ts` 中初始化, 在 `App.tsx` 顶部导入
-
-### 主题
-
-- 主题集中管理在 `src/utils/theme.ts`
-- 当前使用浅色主题配色
-- 设置中存在主题模式选项，但深色模式尚未完全实现
-
-## 关键技术模式
-
-### 安全考虑
-- **永远不要提交凭证**: COS secretId/secretKey 存储在 react-native-keychain (加密存储) 中
-- 设置存储仅包含非敏感配置 (bucket, region)
-- 实现新的云提供程序时，请遵循相同的模式
-
-### 文件路径
-- 应用中的所有文件路径都相对于 `DocumentDirectoryPath`
-- 云端密钥通常与文件路径匹配以保持目录结构
-- 直接使用 `filePath` 作为云端密钥以保持层级结构
-
-### TypeScript 类型
-- 导航类型: `src/types/navigation.ts` (RootStackParamList, MainTabParamList)
-- 服务接口: 在各自的服务文件中定义
-- 文件/云端项目类型: `FileItem`, `CloudFileItem`
-
-## 常见开发任务
-
-当添加涉及文件操作的功能时:
-1. 所有本地文件操作都使用 `fsService` (不要直接使用 RNFS)
-2. 对于云操作，首先检查 `cloudService.isConfigured()`
-3. 上传成功后更新 FileMetadataStore 中的 etag/lastModified
-4. 考虑同步冲突 - 如果读取云文件，需要实现冲突检测
-
-当添加新屏幕时:
-1. 在 `src/types/navigation.ts` 中定义路由参数
-2. 将屏幕添加到适当的导航器 (AppNavigator 或 TabNavigator)
-3. 所有用户可见的字符串都使用 `useTranslation()` hook
-4. 遵循现有屏幕模式实现同步状态指示器
-
-当修改状态存储时:
-1. 所有存储都使用 Zustand 并配合 persist middleware
-2. 修改后测试持久化功能 (清除应用数据并重新加载)
-3. 敏感数据使用 react-native-keychain 而不是 AsyncStorage
-
-当使用 Expo 配置插件时:
-1. 在 `app.config.js` 中定义自定义配置插件
-2. 使用 `withAndroidManifest` 和 `withMainActivity` 等函数修改原生配置
-3. 遵循 Expo 最佳实践实现插件逻辑
+| 文档路径 | 核心内容 | 阅读时机 |
+|---------|---------|---------|
+| `docs/FlashScreen_TodoSreen_logic.md` | 闪念/待办页三阶段同步逻辑<br>(Stage 1-3, 状态矩阵) | 处理闪念/待办同步、冲突问题 |
+| `docs/PreviewScreen_logic.md` | 预览页状态判断流程<br>(uploadState + syncStatus 决策树) | 处理预览页同步、冲突问题 |
+| `docs/BrowerScreen_cloud_first.md` | 云端为主架构设计原则<br>("列表即菜单，点击即下单") | 理解文件浏览页设计哲学 |
+| `docs/editor-implementation-guide.md` | CodeMirror 编辑器集成细节 | 修改编辑器相关功能 |
+| `docs/architecture-deep-dive.md` | 完整架构蓝图、数据流、Store 设计 | 理解整体架构、扩展新功能 |
+| `docs/business-logic-details.md` | 三路合并、乐观锁、闪念格式等核心逻辑 | 处理同步、冲突、格式问题 |
+| `docs/coding-examples.md` | 云服务扩展、拖拽排序、AI对话等代码示例 | 需要参考具体实现时 |
+| `docs/troubleshooting-guide.md` | 同步、构建、性能等问题排查 | 遇到错误或异常行为时 |

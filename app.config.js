@@ -150,11 +150,11 @@ module.exports = {
         ios: {
             supportsTablet: true,
             bundleIdentifier: "com.mdnote",
-            buildNumber: "13"
+            buildNumber: "14"
         },
         android: {
             package: "com.mdnote",
-            versionCode: 13,
+            versionCode: 14,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",

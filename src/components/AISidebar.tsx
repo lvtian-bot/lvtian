@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Alert } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Alert, Animated } from 'react-native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { useAIStore, ChatSession } from '../store/useAIStore';
@@ -20,15 +20,53 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
     const navigation = useNavigation<NavigationProp>();
-    
-    const { 
-        sessions, 
-        currentSessionId, 
-        switchSession, 
+
+    const {
+        sessions,
+        currentSessionId,
+        switchSession,
         deleteSession,
     } = useAIStore();
 
-    if (!visible) return null;
+    // 动画相关 - 所有Hooks必须在条件渲染之前声明
+    const translateX = useRef(new Animated.Value(-300)).current;
+    const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        if (visible) {
+            // 显示动画
+            Animated.parallel([
+                Animated.timing(translateX, {
+                    toValue: 0,
+                    duration: 300,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(backdropOpacity, {
+                    toValue: 1,
+                    duration: 300,
+                    useNativeDriver: true,
+                }),
+            ]).start();
+        } else {
+            // 隐藏动画
+            Animated.parallel([
+                Animated.timing(translateX, {
+                    toValue: -300,
+                    duration: 300,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(backdropOpacity, {
+                    toValue: 0,
+                    duration: 300,
+                    useNativeDriver: true,
+                }),
+            ]).start(() => {
+                // 动画结束后将位置和透明度重置，确保下次打开时动画正常
+                translateX.setValue(-300);
+                backdropOpacity.setValue(0);
+            });
+        }
+    }, [visible]);
 
     const handleSessionPress = (sessionId: string) => {
         switchSession(sessionId);
@@ -41,8 +79,8 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
             t('ai.confirmDelete'),
             [
                 { text: t('common.cancel'), style: 'cancel' },
-                { 
-                    text: t('common.delete'), 
+                {
+                    text: t('common.delete'),
                     style: 'destructive',
                     onPress: () => deleteSession(sessionId)
                 }
@@ -53,14 +91,14 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
     const renderItem = ({ item }: { item: ChatSession }) => {
         const isActive = item.id === currentSessionId;
         return (
-            <TouchableOpacity 
+            <TouchableOpacity
                 style={[styles.sessionItem, isActive && styles.activeSessionItem]}
                 onPress={() => handleSessionPress(item.id)}
             >
-                <Icon 
-                    name="chat-bubble-outline" 
-                    size={20} 
-                    color={isActive ? theme.colors.primary : theme.colors.textSecondary} 
+                <Icon
+                    name="chat-bubble-outline"
+                    size={20}
+                    color={isActive ? theme.colors.primary : theme.colors.textSecondary}
                 />
                 <Text style={[styles.sessionTitle, isActive && styles.activeSessionTitle]} numberOfLines={1}>
                     {item.title || t('ai.untitled')}
@@ -74,9 +112,24 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
         );
     };
 
+    // 始终渲染组件，但通过动画控制可见性
+    // 并在不可见时设置pointerEvents='none'防止点击
     return (
-        <View style={styles.overlay}>
-            <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <Animated.View style={[
+            styles.overlay,
+            {
+                opacity: backdropOpacity,
+                pointerEvents: visible ? 'auto' : 'none'
+            }
+        ]}>
+            <Animated.View style={[
+                styles.container,
+                {
+                    paddingTop: insets.top,
+                    paddingBottom: insets.bottom,
+                    transform: [{ translateX }]
+                }
+            ]}>
                 <View style={styles.header}>
                     <Text style={styles.headerTitle}>{t('ai.history')}</Text>
                     <TouchableOpacity onPress={onClose}>
@@ -97,8 +150,8 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
                 />
 
                 <View style={styles.footer}>
-                    <TouchableOpacity 
-                        style={styles.footerItem} 
+                    <TouchableOpacity
+                        style={styles.footerItem}
                         onPress={() => {
                             onClose();
                             navigation.navigate('AIConfig');
@@ -108,9 +161,9 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
                         <Text style={styles.footerText}>{t('ai.settingsTitle')}</Text>
                     </TouchableOpacity>
                 </View>
-            </View>
+            </Animated.View>
             <TouchableOpacity style={styles.backdrop} onPress={onClose} activeOpacity={1} />
-        </View>
+        </Animated.View>
     );
 };
 

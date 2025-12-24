@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
+import { markdownThemes } from '../utils/markdownThemes';
 import { useAIStore } from '../store/useAIStore';
 import { LLMService } from '../services/LLMService';
 import { theme } from '../utils/theme';
@@ -125,7 +126,7 @@ export const AgentScreen = () => {
                     {isUser ? (
                         <Text style={styles.userText}>{item.content}</Text>
                     ) : (
-                        <Markdown style={markdownStyles}>
+                        <Markdown style={markdownThemes.default}>
                             {item.content}
                         </Markdown>
                     )}
@@ -304,21 +305,3 @@ const styles = StyleSheet.create({
     },
 });
 
-const markdownStyles = {
-    body: {
-        color: theme.colors.text,
-        fontSize: 16,
-        lineHeight: 24,
-    },
-    code_inline: {
-        backgroundColor: theme.colors.surface, // Surface for code blocks on background
-        color: theme.colors.primary,
-        borderRadius: 4,
-    },
-    fence: {
-        backgroundColor: theme.colors.surface, // Surface for code blocks on background
-        color: theme.colors.text,
-        borderColor: theme.colors.border,
-        borderWidth: 1,
-    }
-};

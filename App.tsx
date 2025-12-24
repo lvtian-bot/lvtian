@@ -21,12 +21,16 @@ import { FlashNoteInputModal } from './src/components/FlashNoteInputModal'; // G
 // Create navigation ref for programmatic navigation
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
-function App(props: { sharedText?: string }): React.JSX.Element {
+function App(props: { sharedText?: string }): React.JSX.Element | null {
   // Global Modal State
   const [isGlobalModalVisible, setIsGlobalModalVisible] = React.useState(false);
   const [globalShareContent, setGlobalShareContent] = React.useState<string>('');
   // Logic to initialize cloud service based on settings
   const { cosConfig, webDavConfig, cloudProvider, hasHydrated } = useSettingsStore();
+
+  if (!hasHydrated) {
+    return null;
+  }
 
   useEffect(() => {
     const initializeCloud = async () => {

@@ -253,7 +253,7 @@ class FlashNoteService {
         const newBlocks = noteBlocks.map(block => {
             if (block.trim().startsWith(`## ${id}`)) {
                 noteFound = true;
-                return `## ${id}\n${newText.trim()}${suffix}\n`;
+                return `## ${id}\n${newText.trim()}\n`;
             }
             return block;
         });

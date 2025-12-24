@@ -83,8 +83,10 @@ export const useSettingsStore = create<SettingsState>()(
         {
             name: 'settings-storage',
             storage: createJSONStorage(() => AsyncStorage),
-            onRehydrateStorage: () => (state) => {
-                state?.setHasHydrated(true);
+            onRehydrateStorage: () => () => {
+                // 使用 store.getState() 获取 setHasHydrated 方法
+                const { setHasHydrated } = useSettingsStore.getState();
+                setHasHydrated(true); // ✅ 正确设置 hasHydrated 为 true
             },
         }
     )

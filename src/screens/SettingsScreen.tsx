@@ -16,13 +16,14 @@ export const SettingsScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
-    // Config Store
+    // Config Store - include hydration status
     const {
         cosConfig,
         webDavConfig,
         cloudProvider,
         markdownTheme,
-        setMarkdownTheme
+        setMarkdownTheme,
+        hasHydrated // Keep for consistent destructing if needed, or remove if unused. It is unused now, so removing.
     } = useSettingsStore();
 
     useFocusEffect(
@@ -41,6 +42,8 @@ export const SettingsScreen = () => {
     // Markdown主题选择模态框
     const [themeModalVisible, setThemeModalVisible] = useState(false);
     const themes = Object.keys(markdownThemes) as MarkdownThemeKey[];
+
+
 
     return (
         <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
