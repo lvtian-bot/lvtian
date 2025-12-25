@@ -156,6 +156,26 @@ export class WebDavProvider implements ICloudProvider {
         return await response.text();
     }
 
+    async createDirectory(key: string): Promise<void> {
+        const response = await this.request('MKCOL', key);
+        if (!response.ok && response.status !== 405) {
+            if (response.status === 409) {
+                const parent = key.substring(0, key.lastIndexOf('/'));
+                if (parent) {
+                    await this.createDirectory(parent);
+                    await this.request('MKCOL', key);
+                    return;
+                }
+            }
+            if (response.status !== 405) {
+                throw new Error(`WebDav Create Directory Failed: ${response.status}`);
+            }
+        }
+    }
+
+
+
+
     async deleteFile(key: string): Promise<void> {
         const response = await this.request('DELETE', key);
         if (!response.ok && response.status !== 404) {

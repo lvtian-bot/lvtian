@@ -126,7 +126,9 @@
     "dontSave": "暂不保存",
     "close": "关闭",
     "copy": "复制",
-    "loadMore": "加载更多"
+    "loadMore": "加载更多",
+    "rename": "重命名",
+    "move": "移动"
   },
   "settings": {
     "save": "保存",

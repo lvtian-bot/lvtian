@@ -75,8 +75,12 @@ export const FlashScreen = () => {
             return true;
         };
         const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+        // Check sync on focus (with service-level cooldown)
+        checkSync();
+
         return () => subscription.remove();
-    }, []));
+    }, [checkSync]));
 
     // -- Action Handlers --
 

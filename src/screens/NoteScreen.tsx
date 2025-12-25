@@ -17,7 +17,8 @@ import Icon from '@expo/vector-icons/MaterialIcons';
 import { StatusBanner } from '../components/StatusBanner';
 
 import { FileListItem } from '../components/FileListItem';
-import { FileActionSheet, FileAction } from '../components/FileActionSheet';
+// FileActionSheet removed
+import { ActionSheetModal, ActionItem } from '../components/ActionSheetModal';
 import { RenameDialog } from '../components/RenameDialog';
 import { DirectoryPicker } from '../components/DirectoryPicker';
 import { CreateFileModal } from '../components/CreateFileModal';
@@ -367,11 +368,11 @@ export const NoteScreen = ({ route, navigation }: Props) => {
         setShowActionSheet(true);
     };
 
-    const getFileActions = (): FileAction[] => {
+    const getFileActions = (): ActionItem[] => {
         if (!selectedFile) return [];
         return [
             {
-                label: 'Rename',
+                label: t('common.rename'),
                 icon: 'edit',
                 onPress: () => {
                     setShowActionSheet(false);
@@ -379,7 +380,7 @@ export const NoteScreen = ({ route, navigation }: Props) => {
                 },
             },
             {
-                label: 'Move',
+                label: t('common.move'),
                 icon: 'drive-file-move',
                 onPress: () => {
                     setShowActionSheet(false);
@@ -387,7 +388,7 @@ export const NoteScreen = ({ route, navigation }: Props) => {
                 },
             },
             {
-                label: 'Delete',
+                label: t('common.delete'),
                 icon: 'delete',
                 onPress: () => {
                     setShowActionSheet(false);
@@ -465,9 +466,9 @@ export const NoteScreen = ({ route, navigation }: Props) => {
 
             {selectedFile && (
                 <>
-                    <FileActionSheet
+                    <ActionSheetModal
                         visible={showActionSheet}
-                        fileName={selectedFile.name}
+                        title={selectedFile.name}
                         actions={getFileActions()}
                         onCancel={() => {
                             setShowActionSheet(false);

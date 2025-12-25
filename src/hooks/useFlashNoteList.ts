@@ -230,6 +230,8 @@ export function useFlashNoteList<T>({
 
         // 2. Trigger background sync (silent)
         // We don't await this, so UI doesn't block or show refreshing state
+        // 2. Trigger background sync (silent)
+        // We don't await this, so UI doesn't block or show refreshing state
         flashNoteService.syncAll();
 
         // eslint-disable-next-line react-hooks/exhaustive-deps

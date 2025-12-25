@@ -104,15 +104,19 @@ export const TodoScreen = () => {
         setDoneItems(finished);
     }, [allTodos, t]);
 
-    // Back Handler
+    // Back Handler & Sync on Focus
     useFocusEffect(useCallback(() => {
         const onBackPress = () => {
             BackHandler.exitApp();
             return true;
         };
         const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+        // Check sync on focus
+        checkSync();
+
         return () => subscription.remove();
-    }, []));
+    }, [checkSync]));
 
     // -- Actions --
 

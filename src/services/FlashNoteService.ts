@@ -487,6 +487,9 @@ class FlashNoteService {
         return { uploadErrors, conflicts };
     }
 
+    private _isSyncing: boolean = false;
+    private lastSyncTime: number = 0;
+
     async syncAll(): Promise<void> {
         const { flashNoteConfig } = useSettingsStore.getState();
         const mainFilename = flashNoteConfig.filename;
@@ -496,6 +499,20 @@ class FlashNoteService {
         const emitStatus = (payload: BatchSyncStatusPayload) => {
             DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, payload);
         };
+
+        if (this._isSyncing) {
+            console.log('[FlashNoteService] syncAll skipped: Sync already in progress');
+            // Optionally emit current status if needed, but usually better to stay silent
+            return;
+        }
+
+        // 10s cooldown to prevent rapid tab switching triggers
+        if (Date.now() - this.lastSyncTime < 10000) {
+            console.log('[FlashNoteService] syncAll skipped: cooldown active');
+            return;
+        }
+
+        this._isSyncing = true;
 
         // Broadcast checking status
         emitStatus({ status: 'checking', conflicts: [], uploadErrors: [] });
@@ -508,11 +525,13 @@ class FlashNoteService {
         if (!netState.isConnected) {
             console.log('[FlashNoteService] Offline, skipping sync.');
             emitStatus({ status: 'offline', conflicts: [], uploadErrors: [] });
+            this._isSyncing = false;
             return;
         }
 
         if (!cloudService.isConfigured()) {
             emitStatus({ status: 'not-configured', conflicts: [], uploadErrors: [] }); // or error
+            this._isSyncing = false;
             return;
         }
 
@@ -621,6 +640,9 @@ class FlashNoteService {
         } catch (e) {
             console.error('[FlashNoteService] Batch Sync Failed:', e);
             emitStatus({ status: 'error', conflicts: [], uploadErrors: [] });
+        } finally {
+            this._isSyncing = false;
+            this.lastSyncTime = Date.now();
         }
     }
 

@@ -71,11 +71,11 @@ export class TencentCOSProvider implements ICloudProvider {
         // String length in JS is UTF-16 code units, but network sends UTF-8 bytes.
         // We need accurate byte length.
         const encoder = new TextEncoder();
-        const contentBytes = encoder.encode(content);
+        const contentLength = encoder.encode(content).length;
 
         const headers: Record<string, string> = {
             'Content-Type': 'text/markdown', // Assuming markdown based on app context
-            'Content-Length': contentBytes.length.toString(),
+            'Content-Length': contentLength.toString(),
         };
 
         if (expectedEtag) {

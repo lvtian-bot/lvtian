@@ -3,6 +3,7 @@ import { createMaterialTopTabNavigator } from '@react-navigation/material-top-ta
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
@@ -102,6 +103,7 @@ const SettingsIcon = ({ color }: { color: string }) => (
 
 export const TabNavigator = () => {
     const { t } = useTranslation();
+    const insets = useSafeAreaInsets();
 
     return (
         <Tab.Navigator
@@ -118,17 +120,19 @@ export const TabNavigator = () => {
                     borderTopWidth: 1,
                     borderTopColor: '#e0e0e0',
                     elevation: 8, // Shadow for Android
+                    paddingBottom: insets.bottom, // Limit to max 16px bottom padding
+                    paddingTop: 0, // No top padding for maximum compactness
                 },
                 tabBarActiveTintColor: theme.colors.primary,
                 tabBarInactiveTintColor: 'gray',
+                // 控制单个标签项（图标+文字）的垂直内边距
+                tabBarItemStyle: {
+                    paddingVertical: 6, // 减少图标和文字本身的上下留白
+                },
                 tabBarLabelStyle: {
                     fontSize: 10,
                     textTransform: 'none',
                     margin: 0,
-                },
-                tabBarIconStyle: {
-                    width: 24,
-                    height: 24,
                 },
             }}
         >
@@ -154,6 +158,15 @@ export const TabNavigator = () => {
                 options={{
                     title: t('tabs.agent'),
                     tabBarIcon: AgentIcon,
+                    // 仅为Agent tab移除标签栏阴影和顶部灰色横线
+                    tabBarStyle: {
+                        backgroundColor: theme.colors.surface,
+                        borderTopWidth: 0, // 移除顶部灰色横线
+                        elevation: 0, // 移除Android的阴影
+                        paddingBottom: insets.bottom,
+                        paddingTop: 0,
+                        shadowOpacity: 0, // 移除iOS的阴影
+                    },
                 }}
             />
             <Tab.Screen

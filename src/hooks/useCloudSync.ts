@@ -31,7 +31,7 @@ export const useCloudSync = (filePath: string | string[]) => {
         for (const path of paths) {
             const result = await syncService.checkSyncStatus(path);
 
-            if (result.status === 'checking' || result.status === 'uploading') hasChecking = true;
+            if (result.status === 'checking') hasChecking = true;
 
             if (result.status === 'conflict') {
                 aggregatedStatus = 'conflict';

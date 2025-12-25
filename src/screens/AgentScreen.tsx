@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, BackHandler } from 'react-native';
+import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, BackHandler, Animated, Dimensions } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -11,6 +11,10 @@ import { theme } from '../utils/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import { AISidebar } from '../components/AISidebar';
+import { AIChatStorageService } from '../services/AIChatStorageService';
+import { CloudFilePickerModal } from '../components/CloudFilePickerModal';
+import { fsService } from '../services/FileSystemService';
+import { syncService } from '../services/SyncService';
 
 type AgentScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -24,6 +28,8 @@ export const AgentScreen = () => {
     const flatListRef = useRef<FlatList>(null);
     const [inputText, setInputText] = React.useState('');
     const [sidebarVisible, setSidebarVisible] = useState(false);
+    const [filePickerVisible, setFilePickerVisible] = useState(false);
+    const [isProcessingFile, setIsProcessingFile] = useState(false);
 
     useFocusEffect(
         React.useCallback(() => {
@@ -46,7 +52,9 @@ export const AgentScreen = () => {
         isLoading,
         config,
         addMessage,
-        setLoading
+        setLoading,
+        syncFromLocalFiles,
+        syncWithCloud
     } = useAIStore();
 
     // Derived state
@@ -55,10 +63,25 @@ export const AgentScreen = () => {
 
     // Auto-create session if none exists
     useEffect(() => {
-        if (!currentSessionId && sessions.length === 0) {
-            createSession();
+        // 1. Sync Session List (Metadata) on mount
+        useAIStore.getState().syncWithCloud();
+
+        // 2. Load latest Local Files
+        useAIStore.getState().syncFromLocalFiles();
+    }, []);
+
+    useEffect(() => {
+        // 3. Sync Current Session specifically (Content)
+        if (currentSessionId) {
+            console.log('[AgentScreen] Syncing current session', currentSessionId);
+            AIChatStorageService.syncCurrentSession(currentSessionId).then(updated => {
+                if (updated) {
+                    // Force update if needed, though store should handle it
+                    console.log('[AgentScreen] Current session updated from cloud');
+                }
+            });
         }
-    }, [currentSessionId, sessions.length, createSession]);
+    }, [currentSessionId]);
 
     // 检查配置
     useEffect(() => {
@@ -112,6 +135,45 @@ export const AgentScreen = () => {
         setInputText('');
     };
 
+    const handleFileSelect = async (path: string) => {
+        setFilePickerVisible(false);
+        setIsProcessingFile(true);
+
+        try {
+            // 1. Check if file exists locally
+            let content = '';
+            const exists = await fsService.exists(path);
+
+            if (exists) {
+                content = await fsService.readFile(path);
+            } else {
+                // 2. Download if missing
+                const success = await syncService.performDownload(path);
+                if (success) {
+                    content = await fsService.readFile(path);
+                } else {
+                    throw new Error(t('browser.error.downloadFailed') || 'Download failed');
+                }
+            }
+
+            // 3. Append to Input
+            const fileName = path.split('/').pop();
+            const attachmentText = `\n\n--- File: ${fileName} ---\n\`\`\`markdown\n${content}\n\`\`\`\n\n`;
+
+            setInputText(prev => {
+                const newText = prev + attachmentText;
+                return newText;
+            });
+
+        } catch (error: any) {
+            console.error('Failed to attach file:', error);
+            // Optionally show alert
+            // Alert.alert(t('common.error'), error.message);
+        } finally {
+            setIsProcessingFile(false);
+        }
+    };
+
     const renderItem = ({ item }: { item: any }) => {
         const isUser = item.role === 'user';
         return (
@@ -135,6 +197,18 @@ export const AgentScreen = () => {
         );
     };
 
+    const slideAnim = useRef(new Animated.Value(0)).current;
+    const screenWidth = Dimensions.get('window').width;
+    const sidebarWidth = screenWidth * 0.8;
+
+    useEffect(() => {
+        Animated.timing(slideAnim, {
+            toValue: sidebarVisible ? sidebarWidth : 0,
+            duration: 300,
+            useNativeDriver: true,
+        }).start();
+    }, [sidebarVisible]);
+
     return (
         <KeyboardAvoidingView
             style={styles.container}
@@ -143,55 +217,106 @@ export const AgentScreen = () => {
         >
             <AISidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
 
-            <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) + (Platform.OS === 'android' ? 10 : 0) }]}>
-                <TouchableOpacity onPress={() => setSidebarVisible(true)} style={styles.headerButton}>
-                    <Icon name="menu" size={24} color={theme.colors.text} />
-                </TouchableOpacity>
+            <Animated.View style={[{ flex: 1 }, { transform: [{ translateX: slideAnim }] }]}>
+                <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) + (Platform.OS === 'android' ? 10 : 0) }]}>
+                    <TouchableOpacity onPress={() => setSidebarVisible(true)} style={styles.headerButton}>
+                        <Icon name="menu" size={24} color={theme.colors.text} />
+                    </TouchableOpacity>
 
-                <Text style={styles.headerTitle} numberOfLines={1}>
-                    {currentSession?.title || t('ai.title')}
-                </Text>
+                    <Text style={styles.headerTitle} numberOfLines={1}>
+                        {currentSession?.title || t('ai.title')}
+                    </Text>
 
-                <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
-                    <Icon name="add" size={24} color={theme.colors.text} />
-                </TouchableOpacity>
-            </View>
-
-            <FlatList
-                ref={flatListRef}
-                data={messages}
-                renderItem={renderItem}
-                keyExtractor={item => item.id}
-                contentContainerStyle={styles.listContent}
-                onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-                onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
-            />
-
-            {isLoading && (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="small" color={theme.colors.primary} />
-                    <Text style={styles.loadingText}>{t('ai.thinking')}</Text>
+                    <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
+                        <Icon name="add" size={24} color={theme.colors.text} />
+                    </TouchableOpacity>
                 </View>
-            )}
 
-            <View style={styles.inputContainer}>
-                <TextInput
-                    style={styles.input}
-                    value={inputText}
-                    onChangeText={setInputText}
-                    placeholder={config.apiKey ? t('ai.askPlaceholder') : t('ai.configPlaceholder')}
-                    placeholderTextColor={theme.colors.textSecondary}
-                    multiline
+                <FlatList
+                    ref={flatListRef}
+                    data={messages}
+                    renderItem={renderItem}
+                    keyExtractor={item => item.id}
+                    contentContainerStyle={styles.listContent}
+                    onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                    onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                    initialNumToRender={15}
+                    maxToRenderPerBatch={10}
+                    windowSize={5}
+                    removeClippedSubviews={Platform.OS === 'android'}
                 />
-                <TouchableOpacity
-                    style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]}
-                    onPress={handleSend}
-                    disabled={!inputText.trim() || isLoading}
+
+                {isLoading && (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <Text style={styles.loadingText}>{t('ai.thinking')}</Text>
+                    </View>
+                )}
+
+                <View style={styles.inputContainer}>
+                    <TextInput
+                        style={styles.input}
+                        value={inputText}
+                        onChangeText={setInputText}
+                        placeholder={config.apiKey ? t('ai.askPlaceholder') : t('ai.configPlaceholder')}
+                        placeholderTextColor={theme.colors.textSecondary}
+                        multiline
+                    />
+                    <View style={styles.buttonRow}>
+                        <TouchableOpacity
+                            style={[styles.attachButton, isProcessingFile && styles.disabledButton]}
+                            onPress={() => setFilePickerVisible(true)}
+                            disabled={isProcessingFile || isLoading}
+                        >
+                            {isProcessingFile ? (
+                                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                            ) : (
+                                <Icon name="attach-file" size={24} color={theme.colors.textSecondary} />
+                            )}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]}
+                            onPress={handleSend}
+                            disabled={!inputText.trim() || isLoading}
+                        >
+                            <Icon name="send" size={24} color={inputText.trim() ? theme.colors.primary : theme.colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Shadow Overlay - Animate Opacity */}
+                <Animated.View
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'black',
+                        zIndex: 10,
+                        opacity: slideAnim.interpolate({
+                            inputRange: [0, sidebarWidth],
+                            outputRange: [0, 0.3], // Fade to 30% opacity
+                            extrapolate: 'clamp'
+                        }),
+                    }}
+                    pointerEvents={sidebarVisible ? 'auto' : 'none'}
                 >
-                    <Icon name="send" size={24} color={inputText.trim() ? theme.colors.primary : theme.colors.textSecondary} />
-                </TouchableOpacity>
-            </View>
-        </KeyboardAvoidingView>
+                    <TouchableOpacity
+                        style={{ flex: 1 }}
+                        activeOpacity={1}
+                        onPress={() => setSidebarVisible(false)}
+                    />
+                </Animated.View>
+            </Animated.View>
+
+
+            <CloudFilePickerModal
+                visible={filePickerVisible}
+                onClose={() => setFilePickerVisible(false)}
+                onSelectFile={handleFileSelect}
+            />
+        </KeyboardAvoidingView >
     );
 };
 
@@ -263,10 +388,10 @@ const styles = StyleSheet.create({
         color: theme.colors.textSecondary,
     },
     inputContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
+        flexDirection: 'column',
         paddingHorizontal: 16,
-        paddingVertical: 4,
+        paddingTop: 4,
+        paddingBottom: 4,
         backgroundColor: theme.colors.surface, // White background
         marginTop: 0,
         marginHorizontal: 0, // Full width
@@ -282,17 +407,34 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 5,
     },
+    buttonRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        width: '100%',
+        marginTop: 4,
+    },
     input: {
-        flex: 1,
+        width: '100%',
         backgroundColor: 'transparent',
         paddingHorizontal: 0, // align with container padding
         paddingVertical: 4,
-        minHeight: 56, // Ensure a taller initial height
+        minHeight: 40, // Ensure a taller initial height (approx 2 lines)
         borderRadius: 12,
         maxHeight: 120,
-        marginRight: 8,
+        marginRight: 0,
         color: theme.colors.text,
         fontSize: 16,
+        textAlignVertical: 'top',
+    },
+
+    attachButton: {
+        padding: 8,
+        marginRight: 4,
+        marginLeft: -12,
+    },
+    disabledButton: {
+        opacity: 0.5,
     },
     sendButton: {
         width: 40,

@@ -7,6 +7,7 @@ export interface ICloudProvider {
     headFile(key: string): Promise<{ etag: string; lastModified: string } | null>;
     signIn?(): Promise<void>;
     signOut?(): Promise<void>;
+    createDirectory?(key: string): Promise<void>;
 }
 
 export interface CloudFileItem {
@@ -122,6 +123,13 @@ class CloudService {
     async headFile(key: string): Promise<{ etag: string; lastModified: string } | null> {
         if (!this.provider) throw new Error('Cloud provider not configured');
         return this.provider.headFile(key);
+    }
+
+    async createDirectory(key: string): Promise<void> {
+        if (!this.provider) throw new Error('Cloud provider not configured');
+        if (this.provider.createDirectory) {
+            return this.provider.createDirectory(key);
+        }
     }
 }
 

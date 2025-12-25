@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Alert, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Alert, Animated, Dimensions } from 'react-native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { useAIStore, ChatSession } from '../store/useAIStore';
@@ -8,6 +8,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
+
+import { RenameDialog } from './RenameDialog';
+import { ActionSheetModal, ActionItem } from './ActionSheetModal';
 
 interface AISidebarProps {
     visible: boolean;
@@ -25,51 +28,47 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
         sessions,
         currentSessionId,
         switchSession,
+        updateSessionTitle,
         deleteSession,
     } = useAIStore();
 
+    // UI State for Rename
+    const [renameDialogVisible, setRenameDialogVisible] = React.useState(false);
+    const [sessionToRename, setSessionToRename] = React.useState<{ id: string, name: string } | null>(null);
+
+    // UI State for ActionSheet
+    const [actionSheetVisible, setActionSheetVisible] = React.useState(false);
+    const [selectedSession, setSelectedSession] = React.useState<ChatSession | null>(null);
+
     // 动画相关 - 所有Hooks必须在条件渲染之前声明
-    const translateX = useRef(new Animated.Value(-300)).current;
-    const backdropOpacity = useRef(new Animated.Value(0)).current;
+    // 动画相关 - 所有Hooks必须在条件渲染之前声明
+    const screenWidth = React.useRef(Dimensions.get('window').width).current;
+    const sidebarWidth = screenWidth * 0.8;
+    const translateX = useRef(new Animated.Value(-sidebarWidth)).current;
 
     useEffect(() => {
         if (visible) {
             // 显示动画
-            Animated.parallel([
-                Animated.timing(translateX, {
-                    toValue: 0,
-                    duration: 300,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(backdropOpacity, {
-                    toValue: 1,
-                    duration: 300,
-                    useNativeDriver: true,
-                }),
-            ]).start();
+            Animated.timing(translateX, {
+                toValue: 0,
+                duration: 300,
+                useNativeDriver: true,
+            }).start();
         } else {
             // 隐藏动画
-            Animated.parallel([
-                Animated.timing(translateX, {
-                    toValue: -300,
-                    duration: 300,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(backdropOpacity, {
-                    toValue: 0,
-                    duration: 300,
-                    useNativeDriver: true,
-                }),
-            ]).start(() => {
-                // 动画结束后将位置和透明度重置，确保下次打开时动画正常
-                translateX.setValue(-300);
-                backdropOpacity.setValue(0);
+            Animated.timing(translateX, {
+                toValue: -sidebarWidth,
+                duration: 300,
+                useNativeDriver: true,
+            }).start(() => {
+                // 动画结束后将位置重置
+                translateX.setValue(-sidebarWidth);
             });
         }
     }, [visible]);
 
-    const handleSessionPress = (sessionId: string) => {
-        switchSession(sessionId);
+    const handleSessionPress = async (sessionId: string) => {
+        await switchSession(sessionId);
         onClose();
     };
 
@@ -88,26 +87,59 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
         );
     };
 
+    const handleLongPress = (item: ChatSession) => {
+        setSelectedSession(item);
+        setActionSheetVisible(true);
+    };
+
+    const getActionSheetActions = (): ActionItem[] => {
+        if (!selectedSession) return [];
+        return [
+            {
+                label: t('common.edit'), // Changed from common.rename to common.edit to ensure text exists
+                icon: 'edit',
+                onPress: () => {
+                    setSessionToRename({ id: selectedSession.id, name: selectedSession.title });
+                    setRenameDialogVisible(true);
+                },
+            },
+            {
+                label: t('common.delete'),
+                icon: 'delete',
+                destructive: true,
+                onPress: () => handleDelete(selectedSession.id),
+            },
+        ];
+    };
+
+    const handleRenameConfirm = async (newName: string) => {
+        if (sessionToRename) {
+            updateSessionTitle(sessionToRename.id, newName);
+        }
+    };
+
     const renderItem = ({ item }: { item: ChatSession }) => {
         const isActive = item.id === currentSessionId;
         return (
             <TouchableOpacity
                 style={[styles.sessionItem, isActive && styles.activeSessionItem]}
                 onPress={() => handleSessionPress(item.id)}
+                onLongPress={() => handleLongPress(item)}
+                delayLongPress={500}
             >
                 <Icon
                     name="chat-bubble-outline"
                     size={20}
                     color={isActive ? theme.colors.primary : theme.colors.textSecondary}
                 />
+
+                {item.isPlaceholder && (
+                    <Icon name="cloud-download" size={16} color={theme.colors.primary} style={{ marginRight: 4 }} />
+                )}
+
                 <Text style={[styles.sessionTitle, isActive && styles.activeSessionTitle]} numberOfLines={1}>
                     {item.title || t('ai.untitled')}
                 </Text>
-                {isActive && (
-                    <TouchableOpacity onPress={() => handleDelete(item.id)} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                        <Icon name="delete-outline" size={20} color={theme.colors.error} />
-                    </TouchableOpacity>
-                )}
             </TouchableOpacity>
         );
     };
@@ -115,13 +147,10 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
     // 始终渲染组件，但通过动画控制可见性
     // 并在不可见时设置pointerEvents='none'防止点击
     return (
-        <Animated.View style={[
-            styles.overlay,
-            {
-                opacity: backdropOpacity,
-                pointerEvents: visible ? 'auto' : 'none'
-            }
-        ]}>
+        <View
+            style={styles.overlay}
+            pointerEvents="box-none"
+        >
             <Animated.View style={[
                 styles.container,
                 {
@@ -137,6 +166,8 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
                     </TouchableOpacity>
                 </View>
 
+
+
                 <FlatList
                     data={sessions}
                     renderItem={renderItem}
@@ -149,21 +180,29 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
                     }
                 />
 
-                <View style={styles.footer}>
-                    <TouchableOpacity
-                        style={styles.footerItem}
-                        onPress={() => {
-                            onClose();
-                            navigation.navigate('AIConfig');
-                        }}
-                    >
-                        <Icon name="settings" size={20} color={theme.colors.text} />
-                        <Text style={styles.footerText}>{t('ai.settingsTitle')}</Text>
-                    </TouchableOpacity>
-                </View>
             </Animated.View>
-            <TouchableOpacity style={styles.backdrop} onPress={onClose} activeOpacity={1} />
-        </Animated.View>
+
+
+            <RenameDialog
+                visible={renameDialogVisible}
+                currentName={sessionToRename?.name || ''}
+                onConfirm={handleRenameConfirm}
+                onCancel={() => {
+                    setRenameDialogVisible(false);
+                    setSessionToRename(null);
+                }}
+            />
+
+            <ActionSheetModal
+                visible={actionSheetVisible}
+                title={selectedSession?.title || t('ai.untitled')}
+                actions={getActionSheetActions()}
+                onCancel={() => {
+                    setActionSheetVisible(false);
+                    setSelectedSession(null);
+                }}
+            />
+        </View>
     );
 };
 
