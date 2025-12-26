@@ -10,6 +10,8 @@ import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
 // Imports for cloud service initialization
 import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
+// Import AI store to sync sessions on app start
+import { useAIStore } from './src/store/useAIStore';
 
 import { theme } from './src/utils/theme';
 import { useShareStore } from './src/store/useShareStore';
@@ -42,8 +44,7 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
       await cloudService.initProvider();
     };
 
-    // Explicitly call the async function without await (useEffect cannot be async)
-    // The initialization will complete in the background
+    // Initialize cloud service only, load AI sessions when history page opens
     initializeCloud();
   }, [cosConfig, webDavConfig, cloudProvider, hasHydrated]);
 

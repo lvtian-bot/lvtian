@@ -2,6 +2,8 @@ import { fsService } from './FileSystemService';
 import { cloudService } from './CloudService';
 import { syncService } from './SyncService';
 import { ChatSession } from '../store/useAIStore';
+import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { normalizePath } from '../utils/pathUtils';
 
 const AI_CHAT_DIR = 'ai-chats';
 
@@ -11,7 +13,7 @@ export class AIChatStorageService {
      * Get the expected relative file path for a session (Constructed)
      */
     private static getConstructedFilePath(sessionId: string, title?: string): string {
-        // Sanitize title for filename
+        // Sanitize title for filename: replace unsafe chars but keep non-ASCII (中文等)
         const safeTitle = (title || 'Untitled').replace(/[\s\\/:*?"<>|]/g, '_');
         return `${AI_CHAT_DIR}/${sessionId}_${safeTitle}.json`;
     }
@@ -27,8 +29,9 @@ export class AIChatStorageService {
             // Look for file starting with ID
             const file = files.find(f => f.name.startsWith(sessionId + '_') || f.name === sessionId + '.json');
             if (file) {
-                // Encode filename to ensure valid URI (handling spaces etc.)
-                return `${AI_CHAT_DIR}/${encodeURIComponent(file.name)}`;
+                // Keep filename as-is - already matches what we downloaded
+                // We stopped double-encoding in downloadSession, so no need to decode
+                return `${AI_CHAT_DIR}/${file.name}`;
             }
         } catch (e) {
             console.warn('[AIChatStorage] Find file failed:', e);
@@ -54,15 +57,32 @@ export class AIChatStorageService {
         try {
             await this.ensureDirectory();
 
-            // To be safe and simple: Find existing -> Overwrite. 
+            // To be safe and simple: Find existing -> Overwrite.
             // If not found -> Create new with Title.
 
             let filePath = await this.findSessionFilePath(session.id);
             if (!filePath) {
                 filePath = this.getConstructedFilePath(session.id, session.title);
+            } else {
+                // 安全检查：确保目录中只有一个该SessionID的文件
+                const files = await fsService.listFiles(AI_CHAT_DIR);
+                const duplicateFiles = files.filter(f =>
+                    f.name.startsWith(session.id + '_') || f.name === session.id + '.json'
+                );
+
+                // 删除重复文件，只保留找到的第一个
+                duplicateFiles.forEach(async (dupe, index) => {
+                    if (index > 0) {
+                        const dupePath = `${AI_CHAT_DIR}/${dupe.name}`;
+                        console.log(`[AIChatStorage] Removing duplicate session file: ${dupePath}`);
+                        await fsService.deleteFile(dupePath);
+                    }
+                });
             }
 
-            const content = JSON.stringify(session, null, 2);
+            // 不在JSON内容中保存标题，标题将从文件名解析
+            const { title, ...sessionWithoutTitle } = session;
+            const content = JSON.stringify(sessionWithoutTitle, null, 2);
 
             // Write to local file
             await fsService.writeFile(filePath, content);
@@ -94,8 +114,29 @@ export class AIChatStorageService {
             }
 
             const content = await fsService.readFile(filePath);
-            const session = JSON.parse(content) as ChatSession;
-            return session;
+            let sessionWithoutTitle = JSON.parse(content) as Omit<ChatSession, 'title'>;
+
+            // 从文件名解析标题
+            const fileName = filePath.split('/').pop() || '';
+            const fileNameWithoutExt = fileName.replace('.json', '');
+            // 找到sessionId后面的第一个下划线位置 (sessionId格式: YYYYMMDDHHmmss，共14个字符)
+            const sessionIdEndIndex = fileNameWithoutExt.indexOf('_', 14); // YYYYMMDD_HHmmss完整长度为15，从第15个字符后开始找下划线
+
+            if (sessionIdEndIndex !== -1) {
+                let title = fileNameWithoutExt.substring(sessionIdEndIndex + 1);
+                // 将下划线替换为空格
+                title = title.replace(/_/g, ' ');
+
+                // 重建完整的session对象
+                const session: ChatSession = {
+                    ...sessionWithoutTitle,
+                    title: title || 'Untitled'
+                };
+
+                return session;
+            }
+
+            return null;
         } catch (error) {
             console.error(`[AIChatStorage] Failed to load session ${sessionId}:`, error);
             return null;
@@ -106,22 +147,41 @@ export class AIChatStorageService {
      * Delete a session file locally and on cloud
      * @param sessionId The session ID
      */
-    static async deleteSession(sessionId: string): Promise<void> {
+    /**
+     * Delete a session file locally and on cloud (Cloud-First)
+     * @param sessionId The session ID
+     * @param title The session title (to construct cloud path without searching)
+     */
+    static async deleteSession(sessionId: string, title?: string): Promise<void> {
         try {
-            const filePath = await this.findSessionFilePath(sessionId);
-            if (!filePath) return;
+            // 1. Construct Cloud Key (O(1)) and Delete Cloud First
+            if (cloudService.isConfigured() && title) {
+                const cloudKey = this.getConstructedFilePath(sessionId, title);
+                try {
+                    console.log(`[AIChatStorage] Deleting cloud session: ${cloudKey}`);
+                    await cloudService.deleteFile(cloudKey);
+                } catch (err: any) {
+                    // Ignore 404 (already deleted)
+                    if (err?.message?.includes('404')) {
+                        console.log(`[AIChatStorage] Cloud file ${cloudKey} already missing (404)`);
+                    } else {
+                        console.warn(`[AIChatStorage] Cloud delete failed for ${cloudKey}:`, err);
+                    }
+                }
+            }
 
-            // Delete local
-            if (await fsService.exists(filePath)) {
+            // 2. Delete Local (Best Effort)
+            // Try to find file first (handle legacy names), fallback to constructed
+            let filePath = await this.findSessionFilePath(sessionId);
+            if (!filePath && title) {
+                filePath = this.getConstructedFilePath(sessionId, title);
+            }
+
+            if (filePath && await fsService.exists(filePath)) {
                 await fsService.deleteFile(filePath);
                 console.log(`[AIChatStorage] Deleted local session file ${filePath}`);
             }
 
-            // Delete remote
-            if (cloudService.isConfigured()) {
-                cloudService.deleteFile(filePath)
-                    .catch(err => console.warn(`[AIChatStorage] Remote delete failed for ${sessionId}:`, err));
-            }
         } catch (error) {
             console.error(`[AIChatStorage] Failed to delete session ${sessionId}:`, error);
             throw error;
@@ -131,28 +191,75 @@ export class AIChatStorageService {
     /**
      * Rename a session (Move file + Sync)
      */
-    static async renameSession(sessionId: string, newTitle: string): Promise<void> {
+    /**
+     * Rename a session (Cloud-First: Upload New -> Delete Old)
+     */
+    static async renameSession(sessionId: string, newTitle: string, oldTitle?: string): Promise<void> {
         try {
             const oldPath = await this.findSessionFilePath(sessionId);
-            if (!oldPath) {
-                console.warn('[AIChatStorage] Cannot rename, file not found');
+            const newPath = this.getConstructedFilePath(sessionId, newTitle);
+
+            // 1. Local exists: Rename Local -> Sync (legacy flow optimized)
+            if (oldPath && await fsService.exists(oldPath)) {
+                if (oldPath !== newPath) {
+                    console.log(`[AIChatStorage] Renaming local ${oldPath} -> ${newPath}`);
+                    await fsService.moveFile(oldPath, newPath);
+
+                    // Upload new file immediately
+                    await syncService.uploadFile(newPath);
+
+                    // Delete old cloud file
+                    if (cloudService.isConfigured() && oldTitle) {
+                        // Use constructed old path for deletion to ensure we hit the right key
+                        // even if local file name was slightly off (though findSessionFilePath usually matches)
+                        const cloudOldKey = this.getConstructedFilePath(sessionId, oldTitle);
+                        // Prevent deleting the *new* file if keys happen to be same (unlikely here)
+                        if (cloudOldKey !== newPath) {
+                            await cloudService.deleteFile(cloudOldKey).catch(e => console.warn('Old cloud file delete failed', e));
+                        }
+                    } else if (cloudService.isConfigured() && oldPath) {
+                        // Fallback to oldPath if title not provided
+                        await cloudService.deleteFile(oldPath).catch(e => console.warn('Old cloud file delete failed', e));
+                    }
+                }
                 return;
             }
 
-            const newPath = this.getConstructedFilePath(sessionId, newTitle);
-            if (oldPath === newPath) return;
+            // 2. Local missing (Placeholder): Cloud Loopback (Download -> Upload New -> Delete Old)
+            if (cloudService.isConfigured() && oldTitle) {
+                const cloudOldKey = this.getConstructedFilePath(sessionId, oldTitle);
 
-            console.log(`[AIChatStorage] Renaming ${oldPath} -> ${newPath}`);
+                if (cloudOldKey === newPath) return; // Name didn't change effectively
 
-            // 1. Move Local
-            await fsService.moveFile(oldPath, newPath);
+                console.log(`[AIChatStorage] Renaming Cloud-Only ${cloudOldKey} -> ${newPath}`);
 
-            // 2. Upload New
-            await syncService.uploadFile(newPath);
+                try {
+                    // A. Download Old Content directly to memory (bypass file system for speed if pos? CloudService returns string)
+                    // CloudService.getCloudFileContent returns string
+                    const content = await cloudService.getCloudFileContent(cloudOldKey);
 
-            // 3. Delete Old Cloud
-            if (cloudService.isConfigured()) {
-                await cloudService.deleteFile(oldPath);
+                    if (content) {
+                        let sessionData = JSON.parse(content);
+                        // Do NOT update title in JSON (we don't store title in JSON anymore) - but good to be safe
+                        // sessionData.title = newTitle; 
+
+                        // B. Write to Local New Path (to make it available locally + uploadable)
+                        // Actually, we can just write local file and let syncService upload it?
+                        // Or upload directly?
+                        // Writing locally is better so the user sees the content immediately if they click it.
+                        await fsService.writeFile(newPath, JSON.stringify(sessionData, null, 2));
+
+                        // C. Upload New
+                        await syncService.uploadFile(newPath);
+
+                        // D. Delete Old
+                        await cloudService.deleteFile(cloudOldKey);
+                        console.log(`[AIChatStorage] Cloud rename complete.`);
+                    }
+                } catch (e) {
+                    console.error('[AIChatStorage] Cloud-only rename failed:', e);
+                    // If 404, maybe file is already gone or named differently?
+                }
             }
 
         } catch (error) {
@@ -173,10 +280,27 @@ export class AIChatStorageService {
             for (const file of files) {
                 if (file.name.endsWith('.json')) {
                     try {
-                        const content = await fsService.readFile(`${AI_CHAT_DIR}/${encodeURIComponent(file.name)}`);
-                        const session = JSON.parse(content) as ChatSession;
-                        if (session.id && Array.isArray(session.messages)) {
-                            sessions.push(session);
+                        const content = await fsService.readFile(`${AI_CHAT_DIR}/${file.name}`);
+                        let session = JSON.parse(content) as Omit<ChatSession, 'title'>;
+
+                        // 从文件名解析标题
+                        const fileNameWithoutExt = file.name.replace('.json', '');
+                        // 找到sessionId后面的第一个下划线位置 (sessionId格式: YYYYMMDDHHmmss，共14个字符)
+                        const sessionIdEndIndex = fileNameWithoutExt.indexOf('_', 14); // YYYYMMDD_HHmmss完整长度为15，从第15个字符后开始找下划线
+                        if (sessionIdEndIndex !== -1) {
+                            let title = fileNameWithoutExt.substring(sessionIdEndIndex + 1);
+                            // 将下划线替换为空格
+                            title = title.replace(/_/g, ' ');
+
+                            // 重建完整的session对象
+                            const fullSession: ChatSession = {
+                                ...session,
+                                title: title || 'Untitled'
+                            };
+
+                            if (fullSession.id && Array.isArray(fullSession.messages)) {
+                                sessions.push(fullSession);
+                            }
                         }
                     } catch (e) {
                         console.warn(`[AIChatStorage] Failed to parse ${file.name}`, e);
@@ -209,7 +333,8 @@ export class AIChatStorageService {
                 if (!cloudFile.key.endsWith('.json')) continue;
 
                 const filename = cloudFile.key.split('/').pop() || '';
-                const simpleName = filename.replace('.json', '');
+                const decodedFilename = decodeURIComponent(filename);
+                const simpleName = decodedFilename.replace('.json', '');
 
                 // Parse ID and Title
                 let id = simpleName;
@@ -243,12 +368,35 @@ export class AIChatStorageService {
                 }
             }
 
-            // Identify Local Only -> Upload using SyncService
+            // Identify Local Only Sessions
             for (const session of localSessions) {
                 if (!cloudIds.has(session.id)) {
-                    console.log(`[AIChatStorage] Uploading local-only session ${session.id}`);
-                    const filePath = this.getConstructedFilePath(session.id, session.title);
-                    await syncService.uploadFile(filePath);
+                    let filePath = await this.findSessionFilePath(session.id);
+                    if (!filePath) {
+                        filePath = this.getConstructedFilePath(session.id, session.title);
+                    }
+
+                    // Normalize path to ensure metadata key match (handling leading slashes etc)
+                    filePath = normalizePath(filePath);
+
+                    // Check if this file has ever been synced to cloud (has syncedHash)
+                    const metadata = useFileMetadataStore.getState().getMetadata(filePath);
+
+                    if (metadata?.syncedHash) {
+                        // Check if file is not in uploading or failed state
+                        if (metadata.uploadState !== 'uploading' && metadata.uploadState !== 'failed' && metadata.uploadState !== 'conflict-failed') {
+                            // File was once synced to cloud but now missing on cloud - delete local copy
+                            console.log(`[AIChatStorage] Deleting locally retained session ${session.id} that was deleted from cloud`);
+                            await this.deleteSession(session.id); // This will delete local file and try to delete cloud (though already gone)
+                        } else {
+                            // File is in uploading/failed state - skip deletion
+                            console.log(`[AIChatStorage] Skipping deletion of session ${session.id} with upload state: ${metadata.uploadState}`);
+                        }
+                    } else {
+                        // File is new and never synced - upload it
+                        console.log(`[AIChatStorage] Uploading local-only session ${session.id}`);
+                        await syncService.uploadFile(filePath);
+                    }
                 }
             }
 
@@ -270,6 +418,7 @@ export class AIChatStorageService {
     /**
      * Download specific session content
      */
+
     static async downloadSession(sessionId: string): Promise<ChatSession | null> {
         let relativePath = await this.findSessionFilePath(sessionId);
 
@@ -278,8 +427,8 @@ export class AIChatStorageService {
                 const files = await cloudService.listFiles(AI_CHAT_DIR + '/');
                 const target = files.find(f => f.key.includes(sessionId));
                 if (target) {
-                    // Cloud key might have spaces, encode full relative path (but preserve slashes)
-                    relativePath = target.key.split('/').map(encodeURIComponent).join('/');
+                    // Decode keys and NORMALIZE to remove potential leading slashes from WebDAV
+                    relativePath = normalizePath(decodeURIComponent(target.key));
                 }
             } catch (e) {
                 console.warn('[AIChatStorage] Failed to resolve cloud path for download', e);
@@ -287,7 +436,10 @@ export class AIChatStorageService {
         }
 
         if (relativePath) {
+            // Ensure consistency
+            relativePath = normalizePath(relativePath);
             const success = await syncService.performDownload(relativePath);
+            // ...
             if (success) {
                 return await this.loadSession(sessionId);
             }
@@ -300,7 +452,11 @@ export class AIChatStorageService {
      */
     static async syncCurrentSession(sessionId: string): Promise<ChatSession | null> {
         const relativePath = await this.findSessionFilePath(sessionId);
-        if (!relativePath) return null;
+        if (!relativePath || !await fsService.exists(relativePath)) {
+            // 会话文件不存在（还未发送消息），直接返回
+            console.log(`[AIChatStorage] Session file ${relativePath} not found, skipping sync`);
+            return null;
+        }
 
         const status = await syncService.syncFile(relativePath);
 

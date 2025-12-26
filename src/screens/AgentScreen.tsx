@@ -53,22 +53,15 @@ export const AgentScreen = () => {
         config,
         addMessage,
         setLoading,
-        syncFromLocalFiles,
-        syncWithCloud
+        switchSession, // Add switchSession
     } = useAIStore();
 
     // Derived state
     const currentSession = sessions.find(s => s.id === currentSessionId);
     const messages = currentSession?.messages || [];
 
-    // Auto-create session if none exists
-    useEffect(() => {
-        // 1. Sync Session List (Metadata) on mount
-        useAIStore.getState().syncWithCloud();
-
-        // 2. Load latest Local Files
-        useAIStore.getState().syncFromLocalFiles();
-    }, []);
+    // 代理页默认空对话，不做任何自动同步操作
+    // 懒创建：只有用户发送第一条消息时才创建新会话
 
     useEffect(() => {
         // 3. Sync Current Session specifically (Content)
@@ -131,7 +124,7 @@ export const AgentScreen = () => {
     };
 
     const handleNewChat = () => {
-        createSession();
+        switchSession(null); // Lazy creation: just clear current session
         setInputText('');
     };
 
@@ -390,14 +383,14 @@ const styles = StyleSheet.create({
     inputContainer: {
         flexDirection: 'column',
         paddingHorizontal: 16,
-        paddingTop: 4,
+        paddingTop: 12,
         paddingBottom: 4,
         backgroundColor: theme.colors.surface, // White background
         marginTop: 0,
         marginHorizontal: 0, // Full width
         marginBottom: 0, // Touch bottom
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
@@ -417,9 +410,9 @@ const styles = StyleSheet.create({
     input: {
         width: '100%',
         backgroundColor: 'transparent',
-        paddingHorizontal: 0, // align with container padding
+        paddingHorizontal: 2, // align with container padding
         paddingVertical: 4,
-        minHeight: 40, // Ensure a taller initial height (approx 2 lines)
+        minHeight: 40,
         borderRadius: 12,
         maxHeight: 120,
         marginRight: 0,

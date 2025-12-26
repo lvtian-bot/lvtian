@@ -1,11 +1,11 @@
 // 更新主设置页面：仿微信设计 + 独立卡片优化
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList, Pressable, BackHandler } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList, Pressable } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
@@ -22,22 +22,9 @@ export const SettingsScreen = () => {
         webDavConfig,
         cloudProvider,
         markdownTheme,
-        setMarkdownTheme,
-        hasHydrated // Keep for consistent destructing if needed, or remove if unused. It is unused now, so removing.
+        setMarkdownTheme
     } = useSettingsStore();
 
-    useFocusEffect(
-        React.useCallback(() => {
-            const onBackPress = () => {
-                BackHandler.exitApp();
-                return true;
-            };
-
-            const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-
-            return () => subscription.remove();
-        }, [])
-    );
 
     // Markdown主题选择模态框
     const [themeModalVisible, setThemeModalVisible] = useState(false);

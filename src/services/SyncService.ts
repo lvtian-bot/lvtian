@@ -425,13 +425,23 @@ class SyncService {
             if (error.code === 'PreconditionFailed') {
                 console.warn('SyncService Upload prevented (Optimistic Lock):', error.message);
                 setUploadState(filePath, 'conflict-failed');
-
-                // Broadcast conflict status for real-time UI feedback
+                // ... emit conflict ...
                 DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, {
                     status: 'conflict',
                     conflicts: [filePath],
                     uploadErrors: []
                 });
+            } else if (error.message && (error.message.includes('ENOENT') || error.message.includes('No such file') || error.message.includes('FileNotFound'))) {
+                // Race Condition Handler: File was deleted before upload could start
+                console.log('[SyncService] Upload skipped: File deleted locally (ENOENT):', filePath);
+                // Treat as "success" or just clean up? 
+                // We should clean up metadata upload state
+                // Since file is gone, metadata should ideally be gone too, but if not:
+                setUploadState(filePath, null); // Clear uploading state
+                this.autoRetryCache.delete(filePath);
+
+                // Do NOT emit error
+                return false;
             } else {
                 console.error('SyncService Upload failed:', error);
                 setUploadState(filePath, 'failed');

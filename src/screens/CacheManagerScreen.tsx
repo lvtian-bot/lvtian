@@ -25,8 +25,8 @@ export const CacheManagerScreen = () => {
     const { getMetadata, removeMetadata } = useFileMetadataStore();
     const {
         flashNoteConfig,
-        showFlashNotesInCache,
-        setShowFlashNotesInCache,
+        // showFlashNotesInCache,
+        // setShowFlashNotesInCache,
     } = useSettingsStore();
 
     const isFlashNoteFile = useCallback((filePath: string): boolean => {
@@ -132,13 +132,22 @@ export const CacheManagerScreen = () => {
             });
 
             let finalFiles = processedFiles;
-            if (!showFlashNotesInCache) {
-                finalFiles = processedFiles.filter(file => !isFlashNoteFile(file.relativePath));
-            }
+
+            // Filter: Exclude Flash Notes and AI Chats
+            finalFiles = processedFiles.filter(file => {
+                // 1. Exclude AI Chats
+                if (file.relativePath.startsWith('ai-chats/')) return false;
+
+                // 2. Exclude Flash Notes
+                if (isFlashNoteFile(file.relativePath)) return false;
+
+                return true;
+            });
+
             setFiles(finalFiles);
 
             // const total = processedFiles.reduce((acc, file) => acc + file.size, 0);
-            const safe = processedFiles.filter(f => f.isSafeToDelete).reduce((acc, file) => acc + file.size, 0);
+            const safe = finalFiles.filter(f => f.isSafeToDelete).reduce((acc, file) => acc + file.size, 0);
             // setTotalSize(total);
             setSafeToDeleteSize(safe);
 
@@ -148,7 +157,7 @@ export const CacheManagerScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [t, getMetadata, isFlashNoteFile, showFlashNotesInCache]);
+    }, [t, getMetadata, isFlashNoteFile]);
 
     useEffect(() => {
         loadFiles();
@@ -273,16 +282,6 @@ export const CacheManagerScreen = () => {
                         <Text style={styles.statsValue}>{formatSize(safeToDeleteSize)}</Text>
                     </View>
 
-                    <View style={styles.settingRow}>
-                        <Text style={styles.settingLabel}>{t('cache.showFlashNotes')}</Text>
-                        <Switch
-                            trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
-                            thumbColor={theme.colors.white}
-                            ios_backgroundColor={theme.colors.border}
-                            onValueChange={setShowFlashNotesInCache}
-                            value={showFlashNotesInCache}
-                        />
-                    </View>
                 </View>
 
                 <TouchableOpacity
@@ -316,57 +315,50 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: theme.colors.background,
     },
+    // header style matching fileItem
     header: {
-        padding: theme.spacing.sm, // m -> sm (8)
+        marginHorizontal: theme.spacing.sm, // Align with list content padding
+        marginTop: theme.spacing.sm,
+        marginBottom: theme.spacing.s, // Align with fileItem margin
+        padding: theme.spacing.m,
         backgroundColor: theme.colors.surface,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.border,
+        borderRadius: 8, // Match fileItem radius
     },
     topRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
+        justifyContent: 'center',
         alignItems: 'center',
         marginBottom: theme.spacing.m,
     },
     statsInfo: {
-        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'baseline',
+        justifyContent: 'center',
     },
     statsLabel: {
-        fontSize: 12,
+        fontSize: 16, // SLIGHTLY LARGER
         color: theme.colors.textSecondary,
-        marginBottom: 2,
     },
     statsValue: {
-        fontSize: 24,
+        fontSize: 32, // LARGER
         fontWeight: 'bold',
         color: theme.colors.primary,
+        marginLeft: 8,
     },
-    statsSub: {
-        fontSize: 12,
-        color: theme.colors.success,
-    },
-    settingRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    settingLabel: {
-        fontSize: 12,
-        color: theme.colors.textSecondary,
-        marginRight: 8,
-    },
+    // Removed statsSub, settingRow, settingLabel as they are unused/removed
     clearButton: {
         backgroundColor: theme.colors.primary,
-        paddingVertical: 10,
+        paddingVertical: 12, // Taller button
         borderRadius: 8,
         alignItems: 'center',
+        width: '100%', // Full width inside card
     },
     clearButtonDisabled: {
         backgroundColor: theme.colors.border,
     },
     clearButtonText: {
         color: theme.colors.white,
-        fontSize: 14,
-        fontWeight: 'bold',
+        fontSize: 16,
+        fontWeight: '600',
     },
     listContent: {
         paddingHorizontal: theme.spacing.sm, // m -> sm (8)

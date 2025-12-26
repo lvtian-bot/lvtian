@@ -60,8 +60,8 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const inputRef = useRef<TextInput>(null);
     const isDraftLoaded = useRef(false); // Ref to track if draft check is done to avoid overwriting with initialContent
 
-    const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5;
-    const MAX_HEIGHT = screenHeight * MAX_INPUT_HEIGHT_RATIO;
+    const MIN_HEIGHT = (mode === 'todo' ? 4 : MIN_INPUT_HEIGHT_LINES) * TEXT_INPUT_FONT_SIZE * 1.5;
+    const MAX_HEIGHT = screenHeight * (mode === 'todo' ? 0.35 : MAX_INPUT_HEIGHT_RATIO);
 
     // Load draft when modal becomes visible
     useEffect(() => {
@@ -388,20 +388,20 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 12,
         borderTopRightRadius: 12,
         overflow: 'hidden',
-        paddingBottom: theme.spacing.xl, // Increased padding for button area
+        paddingBottom: theme.spacing.xl * 1.5, // Increased padding for button area
     },
     input: {
         fontSize: TEXT_INPUT_FONT_SIZE,
         color: theme.colors.text,
         padding: theme.spacing.l,
         paddingTop: theme.spacing.l,
-        paddingBottom: theme.spacing.xl, // Reduced from xl * 2 (64) to xxl (48)
+        paddingBottom: theme.spacing.xl * 1.5, // Reduced from xl * 2 (64) to xxl (48)
         backgroundColor: 'transparent', // 确保不覆盖圆角
     },
     actionContainer: {
         position: 'absolute',
         right: theme.spacing.l,
-        bottom: theme.spacing.m, // Increased from xs for more clearance
+        bottom: theme.spacing.m * 1.5, // Increased from xs for more clearance
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
@@ -415,6 +415,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         padding: theme.spacing.s,
+        paddingLeft: -4,
         marginRight: theme.spacing.s,
     },
     priorityButtonText: {
@@ -424,6 +425,7 @@ const styles = StyleSheet.create({
     },
     toolbarButton: {
         padding: theme.spacing.s,
+        paddingLeft: 0,
         marginRight: theme.spacing.s,
     },
     sendButton: {

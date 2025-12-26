@@ -10,7 +10,7 @@ const safeGenerateId = () => Math.random().toString(36).substring(2, 15) + Math.
 const generateSessionId = () => {
     const now = new Date();
     const pad = (n: number) => n.toString().padStart(2, '0');
-    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 };
 
 export interface ChatMessage {
@@ -47,10 +47,9 @@ interface AIState {
 
     // Actions
     createSession: () => string; // Returns new session ID
-    switchSession: (sessionId: string) => Promise<void>;
-    deleteSession: (sessionId: string) => void;
-
-    updateSessionTitle: (sessionId: string, title: string) => void;
+    switchSession: (sessionId: string | null) => Promise<void>;
+    deleteSession: (sessionId: string) => Promise<void>;
+    updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
     renameSession?: (sessionId: string, newTitle: string) => Promise<void>; // Optional if not used by UI directly
 
 
@@ -72,9 +71,9 @@ export const useAIStore = create<AIState>()(
     persist(
         (set, get) => ({
             config: {
-                baseUrl: 'https://api.openai.com/v1',
+                baseUrl: '',
                 apiKey: '',
-                model: 'gpt-3.5-turbo',
+                model: '',
             },
             sessions: [],
             currentSessionId: null,
@@ -102,6 +101,10 @@ export const useAIStore = create<AIState>()(
             },
 
             switchSession: async (sessionId) => {
+                if (!sessionId) {
+                    set({ currentSessionId: null });
+                    return;
+                }
                 const session = get().sessions.find(s => s.id === sessionId);
                 if (session?.isPlaceholder) {
                     // Need download
@@ -132,17 +135,26 @@ export const useAIStore = create<AIState>()(
                 }
             },
 
-            deleteSession: (sessionId) => {
+            deleteSession: async (sessionId) => {
+                const sessionToDelete = get().sessions.find(s => s.id === sessionId);
+                if (!sessionToDelete) return; // Already deleted?
+
+                // 1. Call Cloud Service First (Pessimistic)
+                try {
+                    await AIChatStorageService.deleteSession(sessionId, sessionToDelete.title);
+                } catch (error) {
+                    console.error('[useAIStore] Delete failed at service layer:', error);
+                    // Do not update state if failed
+                    throw error;
+                }
+
+                // 2. Update State on Success
                 set((state) => {
                     const newSessions = state.sessions.filter(s => s.id !== sessionId);
-                    // If we deleted the current session, switch to the first one available, or null
                     let newCurrentId = state.currentSessionId;
                     if (state.currentSessionId === sessionId) {
                         newCurrentId = newSessions.length > 0 ? newSessions[0].id : null;
                     }
-
-                    // Side Effect: Delete file
-                    AIChatStorageService.deleteSession(sessionId);
 
                     return {
                         sessions: newSessions,
@@ -151,15 +163,23 @@ export const useAIStore = create<AIState>()(
                 });
             },
 
-            updateSessionTitle: (sessionId, title) => {
+            updateSessionTitle: async (sessionId, title) => {
+                const oldSession = get().sessions.find(s => s.id === sessionId);
+                if (!oldSession) return;
+
+                // 1. Call Cloud Service First (Pessimistic)
+                try {
+                    await AIChatStorageService.renameSession(sessionId, title, oldSession.title);
+                } catch (error) {
+                    console.error('[useAIStore] Rename failed at service layer:', error);
+                    throw error;
+                }
+
+                // 2. Update State on Success
                 set((state) => {
                     const updatedSessions = state.sessions.map(s =>
                         s.id === sessionId ? { ...s, title } : s
                     );
-
-                    // Side Effect: Rename file
-                    AIChatStorageService.renameSession(sessionId, title);
-
                     return { sessions: updatedSessions };
                 });
             },
@@ -227,11 +247,20 @@ export const useAIStore = create<AIState>()(
             syncFromLocalFiles: async () => {
                 const localSessions = await AIChatStorageService.listLocalSessions();
                 set((state) => {
-                    // Merge strategy: 
-                    // 1. Create a map of existing sessions
-                    const sessionMap = new Map(state.sessions.map(s => [s.id, s]));
+                    // 1. Create a set of local session IDs for quick lookup
+                    const localSessionIds = new Set(localSessions.map(s => s.id));
 
-                    // 2. Update/Add from files
+                    // 2. Filter out sessions that are NOT placeholders AND NOT in local files
+                    // (i.e. if it was a local file but now gone, remove it from state)
+                    const validSessions = state.sessions.filter(s => {
+                        if (s.isPlaceholder) return true; // Keep placeholders
+                        return localSessionIds.has(s.id); // Keep only if file exists
+                    });
+
+                    // 3. Create map from valid retained sessions
+                    const sessionMap = new Map(validSessions.map(s => [s.id, s]));
+
+                    // 4. Update/Add from new local files (Merge)
                     localSessions.forEach(fileSession => {
                         const existing = sessionMap.get(fileSession.id);
                         if (!existing || fileSession.updatedAt > existing.updatedAt) {
@@ -249,9 +278,10 @@ export const useAIStore = create<AIState>()(
 
             syncWithCloud: async () => {
                 const { setLoading, sessions } = get();
-                // 1. Sync List (Upload missing locals, get cloud placeholders)
+                // 1. Sync List (Upload missing locals, get cloud placeholders, delete locally retained sessions)
                 const newPlaceholders = await AIChatStorageService.syncSessionList(sessions);
 
+                // 2. Update store with new placeholders (if any)
                 if (newPlaceholders.length > 0) {
                     set((state) => {
                         const sessionMap = new Map(state.sessions.map(s => [s.id, s]));
@@ -262,15 +292,16 @@ export const useAIStore = create<AIState>()(
                         return { sessions: merged };
                     });
                 }
+
+                // 3. Reload all sessions from local files to remove deleted ones
+                await get().syncFromLocalFiles();
             }
         }),
         {
-            name: 'mdnote-ai-storage-v2', // Changed name to avoid conflict with v1
+            name: 'mdnote-ai-config-v1',
             storage: createJSONStorage(() => AsyncStorage),
             partialize: (state) => ({
-                config: state.config,
-                sessions: state.sessions,
-                currentSessionId: state.currentSessionId
+                config: state.config // 仅持久化config数据，不持久化会话
             }),
         }
     )

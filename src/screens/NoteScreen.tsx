@@ -162,18 +162,25 @@ export const NoteScreen = ({ route, navigation }: Props) => {
     }, [loadFiles]);
 
     // Header Options
-    const headerRight = useCallback(() => (
+    const headerLeft = useCallback(() => (
         <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
-            <Icon name="note-add" size={24} color={theme.colors.primary} />
+            <Icon name="note-add" size={20} color={theme.colors.textSecondary} />
         </TouchableOpacity>
     ), []);
+
+    const headerRight = useCallback(() => (
+        <TouchableOpacity onPress={() => rootNavigation.navigate('Settings')} style={styles.headerButton}>
+            <Icon name="settings" size={20} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
+    ), [rootNavigation]);
 
     useEffect(() => {
         navigation.setOptions({
             title: prefix ? prefix.split('/').filter(Boolean).pop() : t('tabs.browser'),
+            headerLeft: headerLeft,
             headerRight: headerRight,
         });
-    }, [navigation, prefix, t, headerRight]);
+    }, [navigation, prefix, t, headerLeft, headerRight]);
 
     // Create File Logic
     const handleCreateFile = async (filename: string) => {

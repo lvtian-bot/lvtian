@@ -70,7 +70,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onLon
 const styles = StyleSheet.create({
     container: {
         flexDirection: 'row',
-        padding: theme.spacing.m,
+        padding: 12, // 将m(16)改为s(8)
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
         backgroundColor: theme.colors.surface,

@@ -30,6 +30,8 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
         switchSession,
         updateSessionTitle,
         deleteSession,
+        syncWithCloud,
+        syncFromLocalFiles
     } = useAIStore();
 
     // UI State for Rename
@@ -54,6 +56,14 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
                 duration: 300,
                 useNativeDriver: true,
             }).start();
+
+            // 当侧边栏可见时，同步历史对话列表
+            const syncHistory = async () => {
+                await syncWithCloud();
+                await syncFromLocalFiles();
+            };
+
+            syncHistory();
         } else {
             // 隐藏动画
             Animated.timing(translateX, {
@@ -65,7 +75,7 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
                 translateX.setValue(-sidebarWidth);
             });
         }
-    }, [visible]);
+    }, [visible, syncWithCloud, syncFromLocalFiles]);
 
     const handleSessionPress = async (sessionId: string) => {
         await switchSession(sessionId);
@@ -81,7 +91,13 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
                 {
                     text: t('common.delete'),
                     style: 'destructive',
-                    onPress: () => deleteSession(sessionId)
+                    onPress: async () => {
+                        try {
+                            await deleteSession(sessionId);
+                        } catch (error: any) {
+                            Alert.alert(t('common.error'), t('ai.deleteFailed') || 'Delete failed: ' + error.message);
+                        }
+                    }
                 }
             ]
         );
@@ -114,7 +130,15 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
 
     const handleRenameConfirm = async (newName: string) => {
         if (sessionToRename) {
-            updateSessionTitle(sessionToRename.id, newName);
+            try {
+                await updateSessionTitle(sessionToRename.id, newName);
+            } catch (error: any) {
+                Alert.alert(t('common.error'), t('ai.renameFailed') || 'Rename failed: ' + error.message);
+                // Keep dialog open? The dialog likely closes on confirm. 
+                // We might need to handle dialog visibility if we want it to stay open on error, 
+                // but RenameDialog prop usually closes it.
+                // Assuming standard behavior for now.
+            }
         }
     };
 

@@ -9,7 +9,7 @@ import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
 import { AgentScreen } from '../screens/AgentScreen';
 import { NoteNavigator } from './NoteNavigator';
-import { SettingsScreen } from '../screens/SettingsScreen';
+import { SettingsScreen as _SettingsScreen } from '../screens/SettingsScreen';
 import { MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
@@ -18,7 +18,6 @@ import { theme } from '../utils/theme';
 // This is necessary because MaterialTopTabs does not provide a built-in header.
 const FlashStack = createNativeStackNavigator();
 const TodoStack = createNativeStackNavigator();
-const SettingsStack = createNativeStackNavigator();
 
 const FlashStackScreen = () => {
     const { t } = useTranslation();
@@ -58,24 +57,6 @@ const TodoStackScreen = () => {
     );
 };
 
-const SettingsStackScreen = () => {
-    const { t } = useTranslation();
-    return (
-        <SettingsStack.Navigator
-            screenOptions={{
-                headerTitleAlign: 'center',
-                headerShadowVisible: false,
-                headerStyle: { backgroundColor: theme.colors.background },
-            }}
-        >
-            <SettingsStack.Screen
-                name="SettingsScreen"
-                component={SettingsScreen}
-                options={{ title: t('tabs.settings') }}
-            />
-        </SettingsStack.Navigator>
-    );
-};
 
 const Tab = createMaterialTopTabNavigator<MainTabParamList>();
 
@@ -97,9 +78,6 @@ const NoteIcon = ({ color }: { color: string }) => (
     <Icon name="folder" color={color} size={24} />
 );
 
-const SettingsIcon = ({ color }: { color: string }) => (
-    <Icon name="settings" color={color} size={24} />
-);
 
 export const TabNavigator = () => {
     const { t } = useTranslation();
@@ -153,6 +131,14 @@ export const TabNavigator = () => {
                 }}
             />
             <Tab.Screen
+                name="Note"
+                component={NoteNavigator}
+                options={{
+                    title: t('tabs.browser'),
+                    tabBarIcon: NoteIcon,
+                }}
+            />
+            <Tab.Screen
                 name="Agent"
                 component={AgentScreen}
                 options={{
@@ -167,22 +153,6 @@ export const TabNavigator = () => {
                         paddingTop: 0,
                         shadowOpacity: 0, // 移除iOS的阴影
                     },
-                }}
-            />
-            <Tab.Screen
-                name="Note"
-                component={NoteNavigator}
-                options={{
-                    title: t('tabs.browser'),
-                    tabBarIcon: NoteIcon,
-                }}
-            />
-            <Tab.Screen
-                name="Settings"
-                component={SettingsStackScreen}
-                options={{
-                    title: t('tabs.settings'),
-                    tabBarIcon: SettingsIcon,
                 }}
             />
         </Tab.Navigator>

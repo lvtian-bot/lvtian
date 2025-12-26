@@ -1,103 +1,99 @@
 # AI Chat Synchronization Logic (AI对话同步机制)
 
-本文档详细说明了 MDNote 中 AI 对话功能的同步策略、存储结构及核心业务逻辑。该模块旨在实现多端高效同步，同时保持应用启动速度和流量节约。
+本文档详细说明了 MDNote 中 AI 对话功能的同步策略、存储结构及核心业务逻辑。该模块已重构为 **"云端优先 (Cloud-First)"** 架构，以确保多端数据的一致性，彻底解决“僵尸文件”、“无法删除未下载文件”等问题。
 
 ## 1. 核心架构 (Core Architecture)
 
-AI 对话同步采用 **"懒加载 (Lazy Loading)"** + **"直写同步 (Write-Through)"** 策略。
+AI 对话同步采用 **"云端主导 (Cloud-First)"** + **"懒加载 (Lazy Loading)"** 策略。所有的结构性变更（删除、重命名）优先在云端生效，再反馈到本地。
 
-*   **本地存储**: `mdnote_docs/ai-chats/`
-*   **云端存储**: `ai-chats/` (在 WebDAV/COS 根目录下)
+*   **存储位置**:
+    *   本地: `mdnote_docs/ai-chats/`
+    *   云端: `ai-chats/` (在 WebDAV/COS 根目录下)
 *   **文件格式**: JSON (`ChatSession` 序列化)
-*   **核心服务**: 
-    *   `AIChatStorageService`: 负责业务逻辑封装 (列表管理、重命名、查找)。
-    *   `SyncService`: 复用核心同步模块，负责底层上传、下载、队列管理及哈希比对。
+*   **操作模式**: 
+    *   **内容同步**: 懒加载 + 双向同步 (SyncService)。
+    *   **结构变更 (Delete/Rename)**: **悲观 UI 更新 (Pessimistic UI)**，即 `Wait for Cloud -> Update UI`。
+
+### 1.1 核心服务与组件
+*   **`AIChatStorageService`**: 业务逻辑核心。实现了 O(1) 的云端文件定位与操作。
+*   **`useAIStore`**: 状态管理。负责调用 Service 并根据返回结果更新 UI（仅在成功时更新）。
+*   **`CloudService`**: 底层云存储接口 (COS/WebDAV)。
+
+### 1.2 核心同步流程
+```mermaid
+graph TD
+    A[用户操作 (Delete/Rename)] --> B[AgentScreen/Sidebar]
+    B --> C{调用 Service}
+    C -->|Construct Key| D[Cloud Operation]
+    D -->|Success| E[Update Local State]
+    E --> F[Update UI]
+    D -->|Fail| G[Alert Error & Keep UI Unchanged]
+```
 
 ## 2. 文件命名规范 (Filename Convention)
 
-为了支持在不下载文件内容的情况下展示标题，我们采用了包含元数据的文件名格式：
+采用包含元数据的文件名格式，支持不下载内容即展示标题：
 
 ```text
 {SessionID}_{Title}.json
 ```
 
-*   **SessionID**: 时间戳格式 `YYYYMMDD_HHmmss` (例如 `20251226_123001`)。
-*   **Title**: 用户定义的会话标题 (经过清洗，特殊字符和空格被替换为 `_`)。
-*   **示例**: `20251226_123001_My_Trip_Plan.json`
+*   **SessionID**: 例如 `20251226_123001` (时间戳 ID)。
+*   **Title**: 用户标题 (特殊字符被替换为 `_`)。
+*   **算法**: `getConstructedFilePath(id, title)` 可在 O(1) 时间内推导出云端 Key。
 
-> **注意**: 旧版本或未命名的文件可能仅为 `{SessionID}.json`。系统会自动兼容，解析时若无标题部分则默认为 "Untitled"。
+## 3. 关键业务逻辑 (Business Logic)
 
-## 3. 同步策略 (Sync Strategy)
+### 3.1 删除 (Delete) - Cloud First & O(1)
+**解决痛点**: 解决了“只在云端的文件（未下载）无法删除”的问题。
 
-### 3.1 列表同步 (List Sync / Metadata Sync)
-**触发时机**: App 启动 (`AgentScreen` 挂载) 或 手动刷新。
+*   **旧逻辑**: 找本地文件 -> 删本地 -> 删云端。 (若本地无文件，操作中止，导致云端删不掉)。
+*   **新逻辑**:
+    1.  **构造路径**: 根据 Store 中的 `id` 和 `title` 直接推导出云端路径 `ai-chats/{id}_{title}.json`。
+    2.  **云端删除**: 直接调用 `cloudService.deleteFile(key)`。即使文件不存在 (404) 也视为成功。
+    3.  **本地清理**: 云端成功后，再尝试清理本地文件（如果存在）。
+    4.  **UI 更新**: 只有步骤 2 成功，UI 才会移除条目。
 
-1.  **列出云端文件**: 获取 `ai-chats/` 目录下的所有文件元数据 (Key, LastModified)。
-2.  **构建占位符 (Placeholders)**: 
-    *   遍历云端文件列表。
-    *   如果本地不存在该 ID 的文件，则在内存中创建一个 **Placeholder Session**。
-    *   **标题解析**: 直接从文件名中提取标题，无需下载文件内容。
-    *   `isPlaceholder: true` 标记该会话尚未加载详情。
-3.  **上传本地独有文件**: 若发现本地有文件但云端没有 (Local Only)，则触发上传。
+### 3.2 重命名 (Rename) - Atomic Loopback
+**解决痛点**: 解决了“未下载的文件无法重命名”的问题。
 
-### 3.2 按需加载 (On-Demand Download)
-**触发时机**: 用户点击某个 Placeholder 会话。
+*   **场景 A: 本地已下载 (Local Exists)**
+    1.  本地重命名 (`moveFile`)。
+    2.  上传新文件 (`uploadFile`)。
+    3.  删除云端旧文件。
 
-1.  用户点击列表项 -> `switchSession(id)`。
-2.  检测到 `isPlaceholder: true`。
-3.  调用 `AIChatStorageService.downloadSession(id)`。
-    *   尝试在云端列表中查找包含该 ID 的文件 (以应对文件名可能的变更)。
-    *   调用 `SyncService.performDownload` 下载完整 JSON。
-4.  下载完成后，解析 JSON，更新 Store 中的会话详情，移除 `isPlaceholder` 标记。
+*   **场景 B: 本地未下载 (Placeholder / Cloud Only)**
+    1.  **构造路径**: 推导 `oldKey` 和 `newKey`。
+    2.  **内存回环**: 
+        *   `Download(oldKey)` -> 内存 Memory。
+        *   内存中更新数据（如需）或直接写入新路径。
+        *   `Upload(newKey)`。
+    3.  **清理**: `Delete(oldKey)`。
+    *   **结果**: 用户感觉不到文件是否在本地，操作体验一致。
 
-### 3.3 当前会话同步 (Active Session Sync)
-**触发时机**: 切换到某个会话时。
+### 3.3 列表同步 (List Sync)
+*   **懒加载**: 仅下载元数据 (Key, Size, Time)。
+*   **占位符 (Placeholder)**: 对于云端存在但本地没有的文件，生成 `isPlaceholder: true` 的对象。
+*   **点击加载**: 用户点击 Placeholder 时，触发 `downloadSession(id)` 获取完整内容。
 
-*   调用 `syncCurrentSession(id)`。
-*   利用 `SyncService.syncFile` 进行标准的哈希/时间戳比对。
-    *   若云端更新 -> 自动下载覆盖。
-    *   若本地更新 -> 自动上传。
+## 4. 悲观 UI 更新 (Pessimistic UI Updates)
 
-## 4. 增删改查逻辑 (CRUD Operations)
+为了保证多端一致性，防止“假成功”，所有结构性操作采用悲观模式：
 
-### 4.1 新建会话 (Create)
-1.  生成 ID (`YYYYMMDD_HHmmss`)。
-2.  保存到本地文件 (`saveSession`)。
-    *   文件名: `{ID}_{Title}.json`。
-    *   如果文件不存在，则创建；若存在，则覆盖。
-3.  触发后台上传 (`SyncService.uploadFile`)。
+*   **操作发起**: 用户点击删除/重命名。
+*   **界面反馈**: 
+    *   **Loading**: 界面可能会有短暂去抖动或 Loading 态。
+    *   **Error**: 若网络超时或鉴权失败，弹出 Alert，**列表回滚/保持原样**。
+*   **数据一致**: 确保了用户看到的列表永远是云端真实状态的映射。
 
-### 4.2 重命名 (Rename)
-**核心逻辑**: 文件名即标题，重命名本质是文件移动。
+## 5. 常见问题 (Troubleshooting)
 
-1.  **用户操作**: 长按列表项 -> 选择 "Rename"。
-2.  **服务层处理** (`renameSession`):
-    *   **查找**: 获取旧文件路径 (例如 `..._Old_Name.json`)。
-    *   **移动**: 使用 `fsService.moveFile` 将本地文件重命名为 `..._New_Name.json`。
-    *   **上传**: 将新文件上传到云端。
-    *   **清理**: 删除云端的旧文件 (`cloudService.deleteFile`)。
-3.  **路径编码**: 在处理文件名时，会对路径进行 URI 编码 (`encodeURIComponent`)，以防止空格或特殊字符导致 Android 下的 `FileSystem` 崩溃。
+*   **Q: 离线时删除了文件怎么办？**
+    *   A: 当前架构下，离线删除会提示失败（因为无法连接云端确认）。这是为了防止“僵尸文件复活”的设计权衡。建议用户在线时整理文件。
+    *   *(未来规划: 引入 Tombstone 墓碑机制支持离线删除)*
 
-### 4.3 删除 (Delete)
-1.  **用户操作**: 长按列表项 -> 选择 "Delete"。
-2.  **服务层处理** (`deleteSession`):
-    *   删除本地文件。
-    *   调用云服务删除云端对应文件。
+*   **Q: 重命名时断网了会怎样？**
+    *   A: 系统会抛出错误，UI 保持旧名称。云端可能残留新文件（如果上传成功但删除旧文件失败），下次同步时会被视为两个文件（去重逻辑会处理或显示为副本）。
 
-## 5. 关键代码路径 (Key Code Paths)
-
-*   `src/services/AIChatStorageService.ts`: 
-    *   `syncSessionList`: 列表同步核心。
-    *   `renameSession`: 重命名原子操作。
-    *   `getConstructedFilePath`: 文件名生成与清洗。
-*   `src/store/useAIStore.ts`: 
-    *   `sessions`: 存储会话列表 (含 Placeholders)。
-    *   `switchSession`: 处理懒加载逻辑。
-*   `src/components/AISidebar.tsx`: 
-    *   侧边栏 UI，包含长按菜单 (Rename/Delete) 及重命名弹窗。
-
-## 6. 常见问题 (Troubleshooting)
-
-*   **文件名包含空格**: 已通过正则清洗 (`replace(/[\s...]/g, '_')`) 和 URI 编码解决。
-*   **重命名失败**: 若云端删除失败，可能会导致云端存在两个同 ID 但不同标题的文件。系统读取时会以最新的为准，或显示重复项 (取决于列表解析逻辑，目前逻辑按 ID 去重)。
-*   **404 错误**: 首次同步时云端目录可能不存在，`AIChatStorageService` 会自动处理 404 并尝试创建目录。
+*   **Q: 为什么删除反应比以前慢了？**
+    *   A: 因为必须等待服务器返回 `200 OK` 确认。这是为了数据安全和一致性付出的必要代价。

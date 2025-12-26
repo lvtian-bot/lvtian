@@ -20,6 +20,7 @@ export type RootStackParamList = {
     FlashNoteConfig: undefined; // 新增：闪念笔记设置二级页面
     CacheManager: undefined; // 新增：缓存管理页面
     AIConfig: undefined; // 新增：AI 配置页面
+    Settings: undefined; // 新增：设置页面
 };
 
 

@@ -66,6 +66,7 @@ export const TodoScreen = () => {
 
     // Animation State
     const [completingItems, setCompletingItems] = useState<Set<string>>(new Set());
+    const [uncompletingItems, setUncompletingItems] = useState<Set<string>>(new Set());
 
     // Sync Status Header
     const headerRight = useCallback(() => (
@@ -146,12 +147,27 @@ export const TodoScreen = () => {
                 }
             }, 350);
         } else {
-            try {
-                await flashNoteService.updateTodoStatus(item.noteId, item.rawLine, 'todo', item.filePath);
-                refreshLoadedData();
-            } catch {
-                Alert.alert(t('common.error'), t('todo.updateStatusFailed'));
-            }
+            setUncompletingItems(prev => new Set(prev).add(itemKey));
+            setTimeout(async () => {
+                try {
+                    await flashNoteService.updateTodoStatus(item.noteId, item.rawLine, 'todo', item.filePath);
+                    refreshLoadedData();
+                    setTimeout(() => {
+                        setUncompletingItems(prev => {
+                            const next = new Set(prev);
+                            next.delete(itemKey);
+                            return next;
+                        });
+                    }, 100);
+                } catch {
+                    Alert.alert(t('common.error'), t('todo.updateStatusFailed'));
+                    setUncompletingItems(prev => {
+                        const next = new Set(prev);
+                        next.delete(itemKey);
+                        return next;
+                    });
+                }
+            }, 350);
         }
     };
 
@@ -224,6 +240,7 @@ export const TodoScreen = () => {
     const renderItem = ({ item }: { item: TodoItem }) => {
         const itemKey = `${item.noteId}-${item.rawLine}`;
         const isCompleting = completingItems.has(itemKey);
+        const isUncompleting = uncompletingItems.has(itemKey);
 
         let iconName = 'check-box-outline-blank';
         let iconColor = theme.colors.textSecondary;
@@ -231,12 +248,11 @@ export const TodoScreen = () => {
         let textColor = theme.colors.text;
         let fontSize = theme.typography.body.fontSize;
 
-        if (isCompleting || item.status === 'done') {
+        if ((isCompleting || item.status === 'done') && !isUncompleting) {
             iconName = 'check-box';
-            iconColor = theme.colors.success || '#4CAF50';
+            iconColor = theme.colors.primary || '#60A5FA';
             textDecorationLine = 'line-through';
             textColor = theme.colors.textSecondary;
-            fontSize = 14;
         } else if (item.status === 'in-progress') {
             iconName = 'hourglass-empty';
             iconColor = theme.colors.primary;
@@ -245,7 +261,6 @@ export const TodoScreen = () => {
             iconColor = theme.colors.textSecondary;
             textDecorationLine = 'line-through';
             textColor = theme.colors.textSecondary;
-            fontSize = 14;
         }
 
         const priorityInfo = getPriorityDisplay(item.priority);

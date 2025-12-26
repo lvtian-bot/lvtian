@@ -7,6 +7,7 @@ import { CloudRepoConfigScreen } from '../screens/CloudRepoConfigScreen'; // 新
 import { FlashNoteConfigScreen } from '../screens/FlashNoteConfigScreen'; // 新增
 import { CacheManagerScreen } from '../screens/CacheManagerScreen'; // 新增
 import { AIConfigScreen } from '../screens/AIConfigScreen'; // 新增
+import { SettingsScreen } from '../screens/SettingsScreen'; // 新增
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next'; // 新增
 
@@ -54,6 +55,15 @@ export const AppNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('settings.cacheManager')
+                }}
+            />
+            {/* 新增：设置页面 */}
+            <Stack.Screen
+                name="Settings"
+                component={SettingsScreen}
+                options={{
+                    headerShown: true,
+                    title: t('tabs.settings')
                 }}
             />
         </Stack.Navigator>

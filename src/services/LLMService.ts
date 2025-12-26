@@ -89,18 +89,26 @@ export class LLMService {
                 }),
             });
 
-            if (!response.ok) return 'New Chat';
+            if (!response.ok) {
+            // If API fails, use first 10 words of user input as title
+            return content.split(' ').slice(0, 10).join(' ');
+        }
 
             const data: ChatCompletionResponse = await response.json();
             if (data.choices && data.choices.length > 0) {
                 let title = data.choices[0].message.content.trim();
                 // Remove wrapping quotes if any
                 title = title.replace(/^["']|["']$/g, '');
+                // Fallback to user input excerpt if title is empty or "New Chat"
+                if (!title || title === 'New Chat') {
+                    return content.split(' ').slice(0, 10).join(' ');
+                }
                 return title;
             }
         } catch (error) {
             console.warn('[LLMService] Title summarization failed:', error);
+            // If API fails, use first 10 words of user input as title
+            return content.split(' ').slice(0, 10).join(' ');
         }
-        return 'New Chat';
     }
 }
