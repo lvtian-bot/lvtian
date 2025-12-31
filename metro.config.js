@@ -4,6 +4,6 @@ const { getDefaultConfig } = require('expo/metro-config');
 const config = getDefaultConfig(__dirname);
 
 // Add 'html' to asset extensions so expo-asset can load .html files
-config.resolver.assetExts.push('html');
+// config.resolver.assetExts.push('html');
 
 module.exports = config;

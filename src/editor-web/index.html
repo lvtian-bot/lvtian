@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: transparent;
+        }
+
+        #editor {
+            height: 100%;
+            width: 100%;
+        }
+
+        .cm-editor {
+            height: 100%;
+        }
+
+        .cm-scroller {
+            overflow: auto !important;
+            padding: 12px;
+            -webkit-overflow-scrolling: touch;
+            display: flex !important;
+            flex-direction: column !important;
+            scrollbar-width: none;
+            /* Firefox */
+        }
+
+        .cm-scroller::-webkit-scrollbar {
+            display: none;
+            /* Chrome, Safari */
+        }
+
+        /* 确保 CodeMirror 内容区域不占满整个高度 */
+        .cm-content {
+            flex: none !important;
+            min-height: 400px !important;
+            padding-bottom: 300px !important;
+            /* Extra padding at bottom for easy scrolling on mobile */
+        }
+
+        /* Basic Markdown Styling */
+        .cm-content {
+            font-family: sans-serif;
+            font-size: 16px;
+            line-height: 24px;
+            color: #1F2933;
+            padding: 0;
+        }
+
+        .cm-content:focus,
+        .cm-editor:focus,
+        .cm-scroller:focus,
+        .cm-focused,
+        *:focus,
+        *:focus-visible {
+            outline: none !important;
+            border: none !important;
+            box-shadow: none !important;
+            -webkit-tap-highlight-color: transparent;
+            -webkit-focus-ring-color: transparent;
+        }
+
+        /* MDNote Specific Highlight Styles (from original entry.js) */
+        .cm-header-1 {
+            font-size: 1.6em;
+            font-weight: bold;
+            margin-bottom: 0.5em;
+            display: block;
+        }
+
+        .cm-header-2 {
+            font-size: 1.4em;
+            font-weight: bold;
+            margin-bottom: 0.5em;
+            display: block;
+        }
+
+        .cm-header-3 {
+            font-size: 1.25em;
+            font-weight: bold;
+            margin-bottom: 0.5em;
+            display: block;
+        }
+
+        .cm-header-4 {
+            font-size: 1.15em;
+            font-weight: bold;
+        }
+
+        .cm-header-5 {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+
+        .cm-header-6 {
+            font-size: 1.0em;
+            font-weight: bold;
+        }
+
+        .cm-strong {
+            font-weight: bold;
+        }
+
+        .cm-em {
+            font-style: italic;
+        }
+
+        .cm-code {
+            font-family: monospace;
+            background-color: rgba(0, 0, 0, 0.05);
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+
+        .cm-link {
+            text-decoration: underline;
+            color: #0366d6;
+        }
+
+        /* FrontMatter Styles */
+        .cm-frontmatter-line {
+            color: #6a737d;
+            font-family: monospace;
+            font-size: 0.9em;
+            background-color: #f6f8fa;
+        }
+
+        .cm-frontmatter-delimiter {
+            color: #d73a49;
+            font-weight: bold;
+        }
+
+        /* Dark Mode overrides will be handled by CM theme, but we can set base overrides here if needed */
+        @media (prefers-color-scheme: dark) {
+            /* Handled dynamically by bridge */
+        }
+    </style>
+</head>
+
+<body>
+    <div id="editor"></div>
+    <script type="module" src="./index.ts"></script>
+</body>
+
+</html>

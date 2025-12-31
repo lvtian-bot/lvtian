@@ -325,7 +325,7 @@ export class WebDavProvider implements ICloudProvider {
             // CosProvider listFiles: returns files and explicit folders (size 0).
             // Let's include them.
 
-            const etag = gettagMatch ? gettagMatch[1].replace(/"/g, '') : '';
+            const etag = gettagMatch ? gettagMatch[1] : '';
             const lastModified = getlastmodifiedMatch ? getlastmodifiedMatch[1] : new Date().toISOString(); // Default for folders
             const size = getcontentlengthMatch ? parseInt(getcontentlengthMatch[1], 10) : 0;
 

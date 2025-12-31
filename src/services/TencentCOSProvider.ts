@@ -79,7 +79,17 @@ export class TencentCOSProvider implements ICloudProvider {
         };
 
         if (expectedEtag) {
-            headers['If-Match'] = `"${expectedEtag}"`;
+            let etag = expectedEtag;
+            // Legacy Compatibility: Check if we have a legacy stripped hash (32 hex chars without quotes)
+            // COS *requires* quotes for If-Match. If legacy data is stripped, we must re-quote it.
+            const isLegacyStripped = !etag.startsWith('"') && /^[a-fA-F0-9]{32}$/.test(etag);
+
+            if (isLegacyStripped) {
+                etag = `"${etag}"`;
+                // console.log(`[TencentCOS] Legacy stripped hash detected, adding quotes for If-Match: ${etag}`);
+            }
+
+            headers['If-Match'] = etag;
         }
 
         try {
@@ -192,7 +202,7 @@ export class TencentCOSProvider implements ICloudProvider {
             });
 
             return {
-                etag: (response.headers.get('ETag') || '').replace(/"/g, ''),
+                etag: (response.headers.get('ETag') || ''),
                 lastModified: response.headers.get('Last-Modified') || '',
             };
         } catch (error: any) {
@@ -227,7 +237,7 @@ export class TencentCOSProvider implements ICloudProvider {
                         key: key,
                         size: sizeMatch ? parseInt(sizeMatch[1], 10) : 0,
                         lastModified: lastModifiedMatch ? lastModifiedMatch[1] : '',
-                        etag: etagMatch ? etagMatch[1].replace(/"/g, '') : '',
+                        etag: etagMatch ? etagMatch[1] : '',
                         isDirectory: false
                     });
                 }

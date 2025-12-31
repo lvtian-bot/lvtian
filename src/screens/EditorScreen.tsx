@@ -6,8 +6,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Asset } from 'expo-asset';
-import { File } from 'expo-file-system/next';
+// import { Asset } from 'expo-asset'; // Removed
+// import { File } from 'expo-file-system/next'; // Removed
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
@@ -102,25 +102,21 @@ export const EditorScreen = () => {
         loadFile();
     }, [loadFile]);
 
-    // Load editor HTML asset
+    // Load editor HTML from generated TS file (Vite build output)
     useEffect(() => {
-        const loadEditorHtml = async () => {
+        const loadEditor = async () => {
+            // In the new build system, editorHtml is a string constant import. 
+            // We use require to avoid top-level import issues if the file doesn't exist yet (though it should after build).
             try {
-                const asset = Asset.fromModule(require('../../assets/editor.html'));
-                await asset.downloadAsync();
-                if (asset.localUri) {
-                    const file = new File(asset.localUri);
-                    const html = await file.text();
-                    setEditorHtml(html);
-                } else {
-                    console.error('[EditorScreen] Failed to get localUri for editor.html');
-                }
-            } catch (error) {
-                console.error('[EditorScreen] Failed to load editor HTML:', error);
+                const { editorHtml: htmlContent } = require('../editor-web/editorHtml');
+                setEditorHtml(htmlContent);
+            } catch (e) {
+                console.error('Failed to load editorHtml.ts. Did you run npm run build:editor?', e);
+                Alert.alert(t('common.error'), 'Editor build missing. Please run build:editor.');
             }
         };
-        loadEditorHtml();
-    }, []);
+        loadEditor();
+    }, [t]);
 
     // Debounced Auto-save to Cache
     useEffect(() => {
@@ -235,23 +231,38 @@ export const EditorScreen = () => {
     const onWebViewMessage = (event: any) => {
         try {
             const data = JSON.parse(event.nativeEvent.data);
-            if (data.type === 'autoSave') {
-                handleAutoSave(data.content);
-            } else if (data.type === 'manualSave') {
-                handleManualSave(data.content);
+            if (data.type === 'ON_CHANGE') {
+                handleAutoSave(data.payload);
+            } else if (data.type === 'CONTENT_RESULT') {
+                handleManualSave(data.payload);
+            } else if (data.type === 'ON_READY') {
+                // Editor is ready, send initial content
+                if (webViewRef.current) {
+                    const payload = {
+                        type: 'INITIAL_LOAD_DATA',
+                        payload: {
+                            content: content,
+                            placeholder: t('editor.placeholder'),
+                            autoFocus: false, // Let user tap to focus
+                            theme: 'light' // TODO: wire up dark mode based on system scheme
+                        }
+                    };
+                    webViewRef.current.postMessage(JSON.stringify(payload));
+                }
             } else if (data.type === 'log') {
-                console.log('[WebView Log]', data.content);
-            } else if (data.type === 'error') {
-                console.error('[WebView Error]', data.content);
+                console.log('[WebView Log]', data.payload);
+            } else if (data.type === 'ERROR') {
+                console.error('[WebView Error]', data.payload);
             }
         } catch {
-            // 兼容旧格式（纯字符串），当做手动保存处理
-            handleManualSave(event.nativeEvent.data);
+            // Compatible with legacy strings if any (shouldn't happen with new build)
+            console.warn('Received non-JSON message from WebView');
         }
     };
 
     const requestSaveFromWebView = () => {
-        webViewRef.current?.injectJavaScript('window.getContent(); true;');
+        // Send JSON request
+        webViewRef.current?.postMessage(JSON.stringify({ type: 'GET_CONTENT' }));
     };
 
     if (loading || !editorHtml) {
@@ -293,13 +304,8 @@ export const EditorScreen = () => {
                 ref={webViewRef}
                 source={{ html: editorHtml, baseUrl: '' }}
                 originWhitelist={['*']}
-                allowFileAccess={true}
-                allowFileAccessFromFileURLs={true}
-                allowUniversalAccessFromFileURLs={true}
                 onMessage={onWebViewMessage}
-                onLoadEnd={() => {
-                    webViewRef.current?.postMessage(content);
-                }}
+                // Removed onLoadEnd as we now wait for ON_READY message from the app
                 style={styles.webview}
             />
         </SafeAreaView>

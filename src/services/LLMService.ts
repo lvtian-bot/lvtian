@@ -17,7 +17,7 @@ export class LLMService {
         config: AIConfig
     ): Promise<string> {
         const { baseUrl, apiKey, model } = config;
-        
+
         // 移除末尾的斜杠（如果存在），确保路径拼接正确
         const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
         const url = `${cleanBaseUrl}/chat/completions`;
@@ -30,7 +30,7 @@ export class LLMService {
 
         try {
             console.log(`[LLMService] Sending request to ${url} with model ${model}`);
-            
+
             const response = await fetch(url, {
                 method: 'POST',
                 headers: {
@@ -51,7 +51,7 @@ export class LLMService {
             }
 
             const data: ChatCompletionResponse = await response.json();
-            
+
             if (data.choices && data.choices.length > 0) {
                 return data.choices[0].message.content;
             } else {
@@ -90,9 +90,9 @@ export class LLMService {
             });
 
             if (!response.ok) {
-            // If API fails, use first 10 words of user input as title
-            return content.split(' ').slice(0, 10).join(' ');
-        }
+                // If API fails, use first 10 words of user input as title
+                return content.split(' ').slice(0, 10).join(' ');
+            }
 
             const data: ChatCompletionResponse = await response.json();
             if (data.choices && data.choices.length > 0) {
@@ -105,6 +105,7 @@ export class LLMService {
                 }
                 return title;
             }
+            return content.split(' ').slice(0, 10).join(' ');
         } catch (error) {
             console.warn('[LLMService] Title summarization failed:', error);
             // If API fails, use first 10 words of user input as title
