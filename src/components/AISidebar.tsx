@@ -1,5 +1,8 @@
 import React, { useEffect, useRef } from 'react';
+
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Alert, Animated, Dimensions } from 'react-native';
+import { Gesture, GestureDetector, Directions } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { useAIStore, ChatSession } from '../store/useAIStore';
@@ -168,6 +171,12 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
         );
     };
 
+    const flingGesture = Gesture.Fling()
+        .direction(Directions.LEFT)
+        .onStart(() => {
+            runOnJS(onClose)();
+        });
+
     // 始终渲染组件，但通过动画控制可见性
     // 并在不可见时设置pointerEvents='none'防止点击
     return (
@@ -175,36 +184,38 @@ export const AISidebar: React.FC<AISidebarProps> = ({ visible, onClose }) => {
             style={styles.overlay}
             pointerEvents="box-none"
         >
-            <Animated.View style={[
-                styles.container,
-                {
-                    paddingTop: insets.top,
-                    paddingBottom: insets.bottom,
-                    transform: [{ translateX }]
-                }
-            ]}>
-                <View style={styles.header}>
-                    <Text style={styles.headerTitle}>{t('ai.history')}</Text>
-                    <TouchableOpacity onPress={onClose}>
-                        <Icon name="close" size={24} color={theme.colors.text} />
-                    </TouchableOpacity>
-                </View>
-
-
-
-                <FlatList
-                    data={sessions}
-                    renderItem={renderItem}
-                    keyExtractor={item => item.id}
-                    contentContainerStyle={styles.listContent}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyText}>{t('ai.noSessions')}</Text>
-                        </View>
+            <GestureDetector gesture={flingGesture}>
+                <Animated.View style={[
+                    styles.container,
+                    {
+                        paddingTop: insets.top,
+                        paddingBottom: insets.bottom,
+                        transform: [{ translateX }]
                     }
-                />
+                ]}>
+                    <View style={styles.header}>
+                        <Text style={styles.headerTitle}>{t('ai.history')}</Text>
+                        <TouchableOpacity onPress={onClose}>
+                            <Icon name="close" size={24} color={theme.colors.text} />
+                        </TouchableOpacity>
+                    </View>
 
-            </Animated.View>
+
+
+                    <FlatList
+                        data={sessions}
+                        renderItem={renderItem}
+                        keyExtractor={item => item.id}
+                        contentContainerStyle={styles.listContent}
+                        ListEmptyComponent={
+                            <View style={styles.emptyContainer}>
+                                <Text style={styles.emptyText}>{t('ai.noSessions')}</Text>
+                            </View>
+                        }
+                    />
+
+                </Animated.View>
+            </GestureDetector>
 
 
             <RenameDialog

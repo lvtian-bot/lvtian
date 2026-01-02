@@ -4,7 +4,8 @@
     "browser": "笔记",
     "todo": "待办",
     "agent": "AI代理",
-    "settings": "设置"
+    "settings": "设置",
+    "me": "我"
   },
   "ai": {
     "title": "智能助手",

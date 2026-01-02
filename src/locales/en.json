@@ -4,7 +4,8 @@
     "browser": "Notes",
     "todo": "Todos",
     "agent": "AI Agent",
-    "settings": "Settings"
+    "settings": "Settings",
+    "me": "Me"
   },
   "ai": {
     "title": "AI Agent",

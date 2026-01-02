@@ -108,20 +108,25 @@ if (keystorePropertiesFile.exists()) {
  */
 const withCustomGradleProperties = (config) => {
     return withGradleProperties(config, (modConfig) => {
-        const key = 'reactNativeArchitectures';
-        const value = 'arm64-v8a';
+        const properties = [
+            { key: 'reactNativeArchitectures', value: 'arm64-v8a' },
+            { key: 'org.gradle.workers.max', value: '6' },
+            { key: 'org.gradle.jvmargs', value: '-Xmx6g -XX:MaxMetaspaceSize=512m' }
+        ];
 
-        // Check if already exists
-        const existing = modConfig.modResults.find(item => item.key === key);
-        if (existing) {
-            existing.value = value;
-        } else {
-            modConfig.modResults.push({
-                type: 'property',
-                key,
-                value,
-            });
-        }
+        properties.forEach(({ key, value }) => {
+            const existing = modConfig.modResults.find(item => item.key === key);
+            if (existing) {
+                existing.value = value;
+            } else {
+                modConfig.modResults.push({
+                    type: 'property',
+                    key,
+                    value,
+                });
+            }
+        });
+
         return modConfig;
     });
 };
@@ -150,11 +155,11 @@ module.exports = {
         ios: {
             supportsTablet: true,
             bundleIdentifier: "com.mdnote",
-            buildNumber: "15"
+            buildNumber: "16"
         },
         android: {
             package: "com.mdnote",
-            versionCode: 15,
+            versionCode: 16,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",

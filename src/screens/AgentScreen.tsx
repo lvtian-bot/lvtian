@@ -1,5 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { View, Text, TextInput, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, BackHandler, Animated, Dimensions } from 'react-native';
+import { Gesture, GestureDetector, Directions } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -202,6 +204,12 @@ export const AgentScreen = () => {
         }).start();
     }, [sidebarVisible]);
 
+    const flingGesture = Gesture.Fling()
+        .direction(Directions.RIGHT)
+        .onStart(() => {
+            runOnJS(setSidebarVisible)(true);
+        });
+
     return (
         <KeyboardAvoidingView
             style={styles.container}
@@ -210,98 +218,100 @@ export const AgentScreen = () => {
         >
             <AISidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
 
-            <Animated.View style={[{ flex: 1 }, { transform: [{ translateX: slideAnim }] }]}>
-                <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) + (Platform.OS === 'android' ? 10 : 0) }]}>
-                    <TouchableOpacity onPress={() => setSidebarVisible(true)} style={styles.headerButton}>
-                        <Icon name="menu" size={24} color={theme.colors.text} />
-                    </TouchableOpacity>
-
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {currentSession?.title || t('ai.title')}
-                    </Text>
-
-                    <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
-                        <Icon name="add" size={24} color={theme.colors.text} />
-                    </TouchableOpacity>
-                </View>
-
-                <FlatList
-                    ref={flatListRef}
-                    data={messages}
-                    renderItem={renderItem}
-                    keyExtractor={item => item.id}
-                    contentContainerStyle={styles.listContent}
-                    onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-                    onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
-                    initialNumToRender={15}
-                    maxToRenderPerBatch={10}
-                    windowSize={5}
-                    removeClippedSubviews={Platform.OS === 'android'}
-                />
-
-                {isLoading && (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="small" color={theme.colors.primary} />
-                        <Text style={styles.loadingText}>{t('ai.thinking')}</Text>
-                    </View>
-                )}
-
-                <View style={styles.inputContainer}>
-                    <TextInput
-                        style={styles.input}
-                        value={inputText}
-                        onChangeText={setInputText}
-                        placeholder={config.apiKey ? t('ai.askPlaceholder') : t('ai.configPlaceholder')}
-                        placeholderTextColor={theme.colors.textSecondary}
-                        multiline
-                    />
-                    <View style={styles.buttonRow}>
-                        <TouchableOpacity
-                            style={[styles.attachButton, isProcessingFile && styles.disabledButton]}
-                            onPress={() => setFilePickerVisible(true)}
-                            disabled={isProcessingFile || isLoading}
-                        >
-                            {isProcessingFile ? (
-                                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                            ) : (
-                                <Icon name="attach-file" size={24} color={theme.colors.textSecondary} />
-                            )}
+            <GestureDetector gesture={flingGesture}>
+                <Animated.View style={[{ flex: 1 }, { transform: [{ translateX: slideAnim }] }]}>
+                    <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) + (Platform.OS === 'android' ? 10 : 0) }]}>
+                        <TouchableOpacity onPress={() => setSidebarVisible(true)} style={styles.headerButton}>
+                            <Icon name="menu" size={24} color={theme.colors.text} />
                         </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]}
-                            onPress={handleSend}
-                            disabled={!inputText.trim() || isLoading}
-                        >
-                            <Icon name="send" size={24} color={inputText.trim() ? theme.colors.primary : theme.colors.textSecondary} />
+
+                        <Text style={styles.headerTitle} numberOfLines={1}>
+                            {currentSession?.title || t('ai.title')}
+                        </Text>
+
+                        <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
+                            <Icon name="add" size={24} color={theme.colors.text} />
                         </TouchableOpacity>
                     </View>
-                </View>
 
-                {/* Shadow Overlay - Animate Opacity */}
-                <Animated.View
-                    style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        backgroundColor: 'black',
-                        zIndex: 10,
-                        opacity: slideAnim.interpolate({
-                            inputRange: [0, sidebarWidth],
-                            outputRange: [0, 0.3], // Fade to 30% opacity
-                            extrapolate: 'clamp'
-                        }),
-                    }}
-                    pointerEvents={sidebarVisible ? 'auto' : 'none'}
-                >
-                    <TouchableOpacity
-                        style={{ flex: 1 }}
-                        activeOpacity={1}
-                        onPress={() => setSidebarVisible(false)}
+                    <FlatList
+                        ref={flatListRef}
+                        data={messages}
+                        renderItem={renderItem}
+                        keyExtractor={item => item.id}
+                        contentContainerStyle={styles.listContent}
+                        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                        onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                        initialNumToRender={15}
+                        maxToRenderPerBatch={10}
+                        windowSize={5}
+                        removeClippedSubviews={Platform.OS === 'android'}
                     />
+
+                    {isLoading && (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="small" color={theme.colors.primary} />
+                            <Text style={styles.loadingText}>{t('ai.thinking')}</Text>
+                        </View>
+                    )}
+
+                    <View style={styles.inputContainer}>
+                        <TextInput
+                            style={styles.input}
+                            value={inputText}
+                            onChangeText={setInputText}
+                            placeholder={config.apiKey ? t('ai.askPlaceholder') : t('ai.configPlaceholder')}
+                            placeholderTextColor={theme.colors.textSecondary}
+                            multiline
+                        />
+                        <View style={styles.buttonRow}>
+                            <TouchableOpacity
+                                style={[styles.attachButton, isProcessingFile && styles.disabledButton]}
+                                onPress={() => setFilePickerVisible(true)}
+                                disabled={isProcessingFile || isLoading}
+                            >
+                                {isProcessingFile ? (
+                                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                ) : (
+                                    <Icon name="attach-file" size={24} color={theme.colors.textSecondary} />
+                                )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]}
+                                onPress={handleSend}
+                                disabled={!inputText.trim() || isLoading}
+                            >
+                                <Icon name="send" size={24} color={inputText.trim() ? theme.colors.primary : theme.colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+
+                    {/* Shadow Overlay - Animate Opacity */}
+                    <Animated.View
+                        style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            backgroundColor: 'black',
+                            zIndex: 10,
+                            opacity: slideAnim.interpolate({
+                                inputRange: [0, sidebarWidth],
+                                outputRange: [0, 0.3], // Fade to 30% opacity
+                                extrapolate: 'clamp'
+                            }),
+                        }}
+                        pointerEvents={sidebarVisible ? 'auto' : 'none'}
+                    >
+                        <TouchableOpacity
+                            style={{ flex: 1 }}
+                            activeOpacity={1}
+                            onPress={() => setSidebarVisible(false)}
+                        />
+                    </Animated.View>
                 </Animated.View>
-            </Animated.View>
+            </GestureDetector>
 
 
             <CloudFilePickerModal

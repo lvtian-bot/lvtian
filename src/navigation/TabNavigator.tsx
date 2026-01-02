@@ -9,15 +9,16 @@ import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
 import { AgentScreen } from '../screens/AgentScreen';
 import { NoteNavigator } from './NoteNavigator';
-import { SettingsScreen as _SettingsScreen } from '../screens/SettingsScreen';
+import { MeScreen } from '../screens/MeScreen';
 import { MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
 
-// 1. Create Stacks for screens that need headers (Flash, Todo, Settings)
+// 1. Create Stacks for screens that need headers (Flash, Todo, Me)
 // This is necessary because MaterialTopTabs does not provide a built-in header.
 const FlashStack = createNativeStackNavigator();
 const TodoStack = createNativeStackNavigator();
+const MeStack = createNativeStackNavigator();
 
 const FlashStackScreen = () => {
     const { t } = useTranslation();
@@ -57,6 +58,25 @@ const TodoStackScreen = () => {
     );
 };
 
+const MeStackScreen = () => {
+    const { t } = useTranslation();
+    return (
+        <MeStack.Navigator
+            screenOptions={{
+                headerTitleAlign: 'center',
+                headerShadowVisible: false,
+                headerStyle: { backgroundColor: theme.colors.background },
+            }}
+        >
+            <MeStack.Screen
+                name="MeScreen"
+                component={MeScreen}
+                options={{ title: t('tabs.me') }}
+            />
+        </MeStack.Navigator>
+    );
+};
+
 
 const Tab = createMaterialTopTabNavigator<MainTabParamList>();
 
@@ -78,6 +98,10 @@ const NoteIcon = ({ color }: { color: string }) => (
     <Icon name="folder" color={color} size={24} />
 );
 
+const MeIcon = ({ color }: { color: string }) => (
+    <Icon name="person" color={color} size={24} />
+);
+
 
 export const TabNavigator = () => {
     const { t } = useTranslation();
@@ -88,7 +112,7 @@ export const TabNavigator = () => {
             tabBarPosition="bottom"
             initialLayout={{ width: 0 }}
             screenOptions={{
-                swipeEnabled: true,
+                swipeEnabled: false, // Disable swipe
                 animationEnabled: false, // Disable animation on click
                 tabBarShowIcon: true,
                 tabBarShowLabel: true,
@@ -131,14 +155,6 @@ export const TabNavigator = () => {
                 }}
             />
             <Tab.Screen
-                name="Note"
-                component={NoteNavigator}
-                options={{
-                    title: t('tabs.browser'),
-                    tabBarIcon: NoteIcon,
-                }}
-            />
-            <Tab.Screen
                 name="Agent"
                 component={AgentScreen}
                 options={{
@@ -149,10 +165,26 @@ export const TabNavigator = () => {
                         backgroundColor: theme.colors.surface,
                         borderTopWidth: 0, // 移除顶部灰色横线
                         elevation: 0, // 移除Android的阴影
-                        paddingBottom: insets.bottom,
+                        paddingBottom: insets.bottom, // Limit to max 16px bottom padding
                         paddingTop: 0,
                         shadowOpacity: 0, // 移除iOS的阴影
                     },
+                }}
+            />
+            <Tab.Screen
+                name="Note"
+                component={NoteNavigator}
+                options={{
+                    title: t('tabs.browser'),
+                    tabBarIcon: NoteIcon,
+                }}
+            />
+            <Tab.Screen
+                name="Me"
+                component={MeStackScreen}
+                options={{
+                    title: t('tabs.me'),
+                    tabBarIcon: MeIcon,
                 }}
             />
         </Tab.Navigator>

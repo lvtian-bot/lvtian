@@ -12,7 +12,7 @@ import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-export const SettingsScreen = () => {
+export const MeScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
