@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, BackHandler } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, BackHandler, Share } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { theme } from '../utils/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -85,9 +85,12 @@ export const FlashScreen = () => {
     // -- Action Handlers --
 
     const handleEditNote = (note: FlashNote) => {
-        setEditingNoteId(note.id);
-        setEditingNoteContent(note.content.trim());
-        setIsModalVisible(true);
+        // Direct jump to Editor for existing notes
+        navigation.navigate('Editor', {
+            filePath: 'flash_note.md', // Dummy path
+            flashNoteId: note.id,
+            initialContent: note.content.trim()
+        });
     };
 
     const handleSaveFlashNote = async (id: string | undefined, content: string) => {
@@ -107,6 +110,21 @@ export const FlashScreen = () => {
 
     const handleCancelFlashNote = () => {
         setIsModalVisible(false);
+        setEditingNoteId(undefined);
+        setEditingNoteContent(undefined);
+    };
+
+    const handleExpandFlashNote = (content: string) => {
+        setIsModalVisible(false);
+        // Navigate to Editor Screen with content mode
+        // Note: filePath is dummy but required by types, flashNoteId triggers the mode
+        navigation.navigate('Editor', {
+            filePath: 'flash_note.md',
+            flashNoteId: editingNoteId || 'new',
+            initialContent: content
+        });
+
+        // Reset local state as we offloaded to Editor
         setEditingNoteId(undefined);
         setEditingNoteContent(undefined);
     };
@@ -150,6 +168,19 @@ export const FlashScreen = () => {
                 },
             },
             {
+                label: t('common.share'),
+                icon: 'share',
+                onPress: async () => {
+                    try {
+                        await Share.share({
+                            message: selectedNote.content,
+                        });
+                    } catch (error) {
+                        Alert.alert(t('common.error'), String(error));
+                    }
+                },
+            },
+            {
                 label: t('common.edit'),
                 icon: 'edit',
                 onPress: () => handleEditNote(selectedNote),
@@ -172,7 +203,7 @@ export const FlashScreen = () => {
                 onLongPress={() => handleNoteLongPress(item)}
             >
                 <Text style={styles.timestamp}>{item.timestamp}</Text>
-                <Text style={styles.content}>{item.content.trim()}</Text>
+                <Text style={styles.content} numberOfLines={5} ellipsizeMode="tail">{item.content.trim()}</Text>
             </TouchableOpacity>
         </View>
     );
@@ -214,6 +245,7 @@ export const FlashScreen = () => {
                 initialContent={editingNoteContent}
                 onSave={handleSaveFlashNote}
                 onCancel={handleCancelFlashNote}
+                onExpand={handleExpandFlashNote}
                 mode="note"
             />
 
@@ -226,7 +258,7 @@ export const FlashScreen = () => {
                     setSelectedNote(null);
                 }}
             />
-        </NoteListContainer>
+        </NoteListContainer >
     );
 };
 

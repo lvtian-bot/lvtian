@@ -28,11 +28,12 @@ interface FlashNoteInputModalProps {
     initialDueAt?: string;
     onSave: (id: string | undefined, content: string) => void;
     onCancel: () => void;
+    onExpand?: (content: string) => void;
     mode?: 'todo' | 'note';
 }
 
 const { height: screenHeight } = Dimensions.get('window');
-const MIN_INPUT_HEIGHT_LINES = 8; // Increased height
+const MIN_INPUT_HEIGHT_LINES = 10; // Increased height
 const MAX_INPUT_HEIGHT_RATIO = 0.5; // Increased max height ratio
 
 const TEXT_INPUT_FONT_SIZE = 16;
@@ -48,6 +49,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     initialDueAt,
     onSave,
     onCancel,
+    onExpand,
     mode = 'todo',
 }) => {
     const { t } = useTranslation();
@@ -60,7 +62,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const inputRef = useRef<TextInput>(null);
     const isDraftLoaded = useRef(false); // Ref to track if draft check is done to avoid overwriting with initialContent
 
-    const MIN_HEIGHT = (mode === 'todo' ? 4 : MIN_INPUT_HEIGHT_LINES) * TEXT_INPUT_FONT_SIZE * 1.5;
+    const MIN_HEIGHT = (mode === 'todo' ? 6 : MIN_INPUT_HEIGHT_LINES) * TEXT_INPUT_FONT_SIZE * 1.5;
     const MAX_HEIGHT = screenHeight * (mode === 'todo' ? 0.35 : MAX_INPUT_HEIGHT_RATIO);
 
     // Load draft when modal becomes visible
@@ -348,6 +350,11 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                                         )}
                                     </>
                                 )}
+                                {mode === 'note' && onExpand && (
+                                    <TouchableOpacity onPress={() => onExpand(inputText)} style={styles.toolbarButton}>
+                                        <Icon name="fullscreen" size={24} color={theme.colors.textSecondary} />
+                                    </TouchableOpacity>
+                                )}
                             </View>
                             <TouchableOpacity onPress={handleSaveWithTags} style={styles.sendButton}>
                                 <Icon name="send" size={24} color={theme.colors.primary} />
@@ -388,14 +395,14 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 12,
         borderTopRightRadius: 12,
         overflow: 'hidden',
-        paddingBottom: theme.spacing.xl * 1.5, // Increased padding for button area
+        paddingBottom: theme.spacing.xl, // Reduced padding for button area
     },
     input: {
         fontSize: TEXT_INPUT_FONT_SIZE,
         color: theme.colors.text,
         padding: theme.spacing.l,
         paddingTop: theme.spacing.l,
-        paddingBottom: theme.spacing.xl * 1.5, // Reduced from xl * 2 (64) to xxl (48)
+        paddingBottom: theme.spacing.xl, // Consistently reduced padding
         backgroundColor: 'transparent', // 确保不覆盖圆角
     },
     actionContainer: {

@@ -91,12 +91,16 @@
     "noteNotFound": "Note not found. The file may have been modified externally. Your edit will be appended as a new note.",
     "saveError": "Failed to save flash note",
     "emptyNoteError": "Note content cannot be empty!",
-    "deleteError": "Failed to delete flash note"
+    "deleteError": "Failed to delete flash note",
+    "noteUpdated": "Note updated"
   },
   "editor": {
     "loadFileFailed": "Failed to load file",
     "uploadFailedTitle": "Upload Failed",
-    "uploadFailedMessage": "File saved locally but cloud upload failed. You can sync later."
+    "uploadFailedMessage": "File saved locally but cloud upload failed. You can sync later.",
+    "saveFailed": "Failed to save: ",
+    "buildMissing": "Editor build missing. Please run build:editor.",
+    "placeholder": "Start writing..."
   },
   "common": {
     "back": "Back",
@@ -116,8 +120,11 @@
     "saveChangesPrompt": "Do you want to save changes?",
     "dontSave": "Don't Save",
     "close": "Close",
+    "share": "Share",
+    "shareNotAvailable": "Share is not available on this device",
     "copy": "Copy",
-    "loadMore": "Load More"
+    "loadMore": "Load More",
+    "success": "Success"
   },
   "settings": {
     "save": "Save",

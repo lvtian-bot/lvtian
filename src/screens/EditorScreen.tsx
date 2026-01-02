@@ -14,6 +14,7 @@ import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { theme } from '../utils/theme';
 import { normalizePath } from '../utils/pathUtils';
 import { syncService } from '../services/SyncService';
+import { flashNoteService } from '../services/FlashNoteService';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -28,7 +29,7 @@ export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
-    const { filePath: rawFilePath } = route.params;
+    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent } = route.params; // Get flash params
     const filePath = normalizePath(rawFilePath);
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
@@ -40,19 +41,27 @@ export const EditorScreen = () => {
 
     const { markFileAsModified } = useFileMetadataStore();
 
-    const DRAFT_KEY = `editor_draft_${filePath}`;
+    const isFlashMode = !!flashNoteId;
+    const DRAFT_KEY = isFlashMode ? `editor_draft_flash_${flashNoteId}` : `editor_draft_${filePath}`;
 
     const loadFile = useCallback(async () => {
         try {
-            console.log('[EditorScreen] Loading file:', filePath);
-            const exists = await fsService.exists(filePath);
+            console.log('[EditorScreen] Loading...', isFlashMode ? `FlashNote: ${flashNoteId}` : `File: ${filePath}`);
+
             let fileContent = '';
 
-            if (exists) {
-                fileContent = await fsService.readFile(filePath);
+            if (isFlashMode) {
+                // Flash Note Mode: Use passed content directly
+                fileContent = paramInitialContent || '';
+            } else {
+                // File Mode: Read from FS
+                const exists = await fsService.exists(filePath);
+                if (exists) {
+                    fileContent = await fsService.readFile(filePath);
+                }
             }
 
-            // Check for draft
+            // Check for draft (Both modes support drafts)
             const draftContent = await AsyncStorage.getItem(DRAFT_KEY);
 
             if (draftContent && draftContent !== fileContent) {
@@ -74,7 +83,7 @@ export const EditorScreen = () => {
                             text: t('common.restore'),
                             onPress: () => {
                                 setContent(draftContent);
-                                initialContentRef.current = fileContent; // Initial is still file content
+                                initialContentRef.current = fileContent; // Initial is still origin content
                                 setIsDirty(true); // Draft implies dirty
                                 isDraftLoaded.current = true;
                             },
@@ -88,7 +97,7 @@ export const EditorScreen = () => {
             }
 
         } catch (error) {
-            console.error('[EditorScreen] Error loading file:', error);
+            console.error('[EditorScreen] Error loading content:', error);
             Alert.alert(t('editor.loadFileFailed'), JSON.stringify(error));
             setContent('');
             initialContentRef.current = '';
@@ -96,7 +105,7 @@ export const EditorScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [filePath, DRAFT_KEY, t]);
+    }, [filePath, DRAFT_KEY, t, isFlashMode, flashNoteId, paramInitialContent]);
 
     useEffect(() => {
         loadFile();
@@ -112,7 +121,7 @@ export const EditorScreen = () => {
                 setEditorHtml(htmlContent);
             } catch (e) {
                 console.error('Failed to load editorHtml.ts. Did you run npm run build:editor?', e);
-                Alert.alert(t('common.error'), 'Editor build missing. Please run build:editor.');
+                Alert.alert(t('common.error'), t('editor.buildMissing'));
             }
         };
         loadEditor();
@@ -124,6 +133,7 @@ export const EditorScreen = () => {
 
         const saveDraft = async () => {
             try {
+                // Only save draft if dirty
                 if (isDirty) {
                     await AsyncStorage.setItem(DRAFT_KEY, content);
                 }
@@ -145,34 +155,41 @@ export const EditorScreen = () => {
 
     const handleManualSave = useCallback(async (contentToSave: string) => {
         try {
-            // 手动保存：写本地 + 触发云同步 + 返回预览页
-            await fsService.writeFile(filePath, contentToSave);
-            markFileAsModified(filePath);
+            if (isFlashMode && flashNoteId) {
+                // --- Flash Note Save Logic ---
+                await flashNoteService.updateNote(flashNoteId, contentToSave);
+                Alert.alert(t('common.success'), t('timeline.noteUpdated')); // Feedback for user
+            } else {
+                // --- Standard File Save Logic ---
+                // 手动保存：写本地 + 触发云同步
+                await fsService.writeFile(filePath, contentToSave);
+                markFileAsModified(filePath);
 
-            // Clear draft
+                // Upload to cloud if configured (wait for upload to complete before navigating back)
+                // syncService.uploadFile handles cloud configuration check internally
+                const success = await syncService.uploadFile(filePath, { withLock: true });
+                if (!success) {
+                    const metadata = useFileMetadataStore.getState().getMetadata(filePath);
+                    if (metadata?.uploadState === 'conflict-failed' || metadata?.uploadState === 'failed') {
+                        Alert.alert(t('editor.uploadFailedTitle'), t('editor.uploadFailedMessage'));
+                    }
+                }
+            }
+
+            // Common Post-Save Cleanup
             await AsyncStorage.removeItem(DRAFT_KEY);
             setIsDirty(false);
             setContent(contentToSave);
             initialContentRef.current = contentToSave;
 
-            // Upload to cloud if configured (wait for upload to complete before navigating back)
-            // syncService.uploadFile handles cloud configuration check internally
-            const success = await syncService.uploadFile(filePath, { withLock: true });
-            if (!success) {
-                // 如果失败，已经在 syncService 内部处理了状态设置和事件发送
-                // 但我们可能想给用户一个 Alert
-                const metadata = useFileMetadataStore.getState().getMetadata(filePath);
-                if (metadata?.uploadState === 'conflict-failed' || metadata?.uploadState === 'failed') {
-                    Alert.alert(t('editor.uploadFailedTitle'), t('editor.uploadFailedMessage'));
-                }
-            }
-
-            // 返回预览页
+            // Navigate back
             navigation.goBack();
-        } catch {
-            Alert.alert('Error', 'Failed to save file');
+
+        } catch (error) {
+            console.error('Save failed:', error);
+            Alert.alert(t('common.error'), t('editor.saveFailed') + String(error));
         }
-    }, [filePath, markFileAsModified, DRAFT_KEY, navigation]);
+    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, t]);
 
     const handleBackPress = useCallback(() => {
         if (isDirty) {
@@ -224,8 +241,11 @@ export const EditorScreen = () => {
     useEffect(() => {
         navigation.setOptions({
             headerLeft,
+            headerTitle: isFlashMode
+                ? (t('timeline.editTitle') || 'Edit Note') // Fallback translation
+                : undefined // Default behavior (usually route param title, but we customize it below in container)
         });
-    }, [navigation, headerLeft]);
+    }, [navigation, headerLeft, isFlashMode, t]);
 
 
     const onWebViewMessage = (event: any) => {
@@ -285,7 +305,7 @@ export const EditorScreen = () => {
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
                     <Text style={styles.title} numberOfLines={2}>
-                        {filePath.split('/').pop()}
+                        {isFlashMode ? (t('timeline.editTitle') || 'Edit Note') : filePath.split('/').pop()}
                     </Text>
                 </View>
                 <TouchableOpacity

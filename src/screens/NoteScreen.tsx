@@ -31,6 +31,10 @@ import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { DeviceEventEmitter } from 'react-native';
 import { useFileListStore } from '../store/useFileListStore';
 import { syncService } from '../services/SyncService';
+import * as Sharing from 'expo-sharing';
+import { Paths } from 'expo-file-system';
+// @ts-ignore - Import legacy API for stability
+import { copyAsync } from 'expo-file-system/legacy';
 
 type Props = NativeStackScreenProps<NoteStackParamList, 'NoteList'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -378,6 +382,85 @@ export const NoteScreen = ({ route, navigation }: Props) => {
     const getFileActions = (): ActionItem[] => {
         if (!selectedFile) return [];
         return [
+            {
+                label: t('common.share'),
+                icon: 'share',
+                onPress: async () => {
+                    const fileToShare = selectedFile; // Capture current selection
+                    setShowActionSheet(false);
+                    if (!fileToShare) return;
+
+                    try {
+                        const isAvailable = await Sharing.isAvailableAsync();
+                        if (!isAvailable) {
+                            Alert.alert(t('common.error'), t('common.shareNotAvailable') || 'Sharing is not available on this device');
+                            return;
+                        }
+
+                        let localPath = fileToShare.path;
+                        const exists = await fsService.exists(localPath);
+
+                        if (!exists) {
+                            setStatus('loading');
+                            const success = await syncService.performDownload(localPath);
+                            setStatus('success'); // Restore UI
+                            if (!success) {
+                                Alert.alert(t('common.error'), t('browser.error.downloadFailed') || 'Download failed');
+                                return;
+                            }
+                        }
+
+                        // Ensure we use the proper local URI schema
+                        if (!localPath.startsWith('file://')) {
+                            localPath = 'file://' + localPath;
+                        }
+
+                        // Fix: Use legacy copyAsync for maximum compatibility with Android URIs
+                        if (Paths.cache) {
+                            // CRITICAL FIX: fileToShare.path is a cloud key (relative), not a local path.
+                            // We must get the actual local filesystem path using fsService.
+                            const absoluteLocalPath = fsService.getAbsolutePath(fileToShare.path);
+
+                            // Ensure valid URI for copyAsync
+                            let srcUri = absoluteLocalPath;
+                            // Re-attach scheme if missing (legacy API expects URI)
+                            if (!srcUri.startsWith('file://')) {
+                                if (!srcUri.startsWith('/')) srcUri = '/' + srcUri;
+                                srcUri = 'file://' + srcUri;
+                            }
+
+                            // Ensure encoded (legacy API handles URIs)
+                            // Note: localPath from FileSystemService is already encoded usually.
+                            // But let's facilitate spaces just in case.
+                            // If it contains spaces but no %20, encode it.
+                            if (srcUri.indexOf(' ') >= 0) {
+                                srcUri = encodeURI(srcUri);
+                            }
+
+                            const fileName = fileToShare.name;
+                            const cacheUri = Paths.cache.uri.endsWith('/') ? Paths.cache.uri : Paths.cache.uri + '/';
+                            const tempUri = `${cacheUri}share_${Date.now()}_${fileName}`;
+
+                            await copyAsync({
+                                from: srcUri,
+                                to: tempUri
+                            });
+
+                            await Sharing.shareAsync(tempUri);
+                        } else {
+                            // Fallback
+                            let uri = localPath;
+                            if (!uri.startsWith('file://')) uri = 'file://' + uri;
+                            await Sharing.shareAsync(uri);
+                        }
+                    } catch (error) {
+                        console.error('Share error:', error);
+                        Alert.alert(t('common.error'), String(error));
+                    } finally {
+                        setSelectedFile(null);
+                    }
+                },
+            },
             {
                 label: t('common.rename'),
                 icon: 'edit',

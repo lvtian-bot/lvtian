@@ -42,12 +42,21 @@ class FileSystemService {
      * @throws Error if path is invalid or attempts to escape root directory
      */
     private sanitizePath(userPath: string): string {
-        // Strip file:// prefix from rootPath for comparison
-        // Note: rootDir.uri usually starts with file://
-        const rootDirUri = this.rootDir.uri.replace(/^file:\/+/, '/');
+        // Get decoded root path for comparison
+        let rootDirUri = this.rootDir.uri.replace(/^file:\/+/, '/');
+        try {
+            rootDirUri = decodeURI(rootDirUri);
+        } catch (e) {
+            console.warn('[FileSystemService] Failed to decode root URI:', e);
+        }
 
-        // Normalize userPath: strip file:// prefix
+        // Normalize userPath: strip file:// prefix and decode
         let pathToCheck = userPath.replace(/^file:\/+/, '/');
+        try {
+            pathToCheck = decodeURI(pathToCheck);
+        } catch (e) {
+            // If decoding fails, continue with original string (might not be encoded)
+        }
 
         // Check if userPath already contains the root path (is absolute)
         let fullPath = '';
@@ -77,7 +86,8 @@ class FileSystemService {
             fullPath = 'file://' + fullPath;
         }
 
-        return fullPath;
+        // Final encoding to ensure special characters (spaces, chinese, etc.) are valid in URI
+        return encodeURI(fullPath);
     }
 
     /**

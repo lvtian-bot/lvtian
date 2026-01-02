@@ -97,12 +97,16 @@
     "noteNotFound": "未找到笔记。可能文件已被外部修改。您的编辑将作为新笔记追加。",
     "saveError": "保存闪念笔记失败",
     "emptyNoteError": "笔记内容不能为空！",
-    "deleteError": "删除闪念笔记失败"
+    "deleteError": "删除闪念笔记失败",
+    "noteUpdated": "笔记已更新"
   },
   "editor": {
     "loadFileFailed": "加载文件失败",
     "uploadFailedTitle": "上传失败",
-    "uploadFailedMessage": "文件已保存到本地，但云上传失败。您可以稍后重新同步。"
+    "uploadFailedMessage": "文件已保存到本地，但云上传失败。您可以稍后重新同步。",
+    "saveFailed": "保存失败: ",
+    "buildMissing": "编辑器构建缺失，请运行 build:editor。",
+    "placeholder": "开始写作..."
   },
   "common": {
     "back": "返回",
@@ -125,6 +129,8 @@
     "saveChangesPrompt": "是否保存更改？",
     "dontSave": "暂不保存",
     "close": "关闭",
+    "share": "分享",
+    "shareNotAvailable": "此设备暂不支持分享",
     "copy": "复制",
     "loadMore": "加载更多",
     "rename": "重命名",
