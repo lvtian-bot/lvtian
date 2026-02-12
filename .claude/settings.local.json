@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(curl:*)",
+      "Bash(gh auth:*)",
+      "Bash(test:*)",
+      "Bash(find:*)",
+      "WebSearch",
+      "Bash(npx eslint:*)",
+      "Bash(gh release create:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "outputStyle": "Explanatory"
+}

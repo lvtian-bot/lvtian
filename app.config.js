@@ -110,7 +110,7 @@ const withCustomGradleProperties = (config) => {
     return withGradleProperties(config, (modConfig) => {
         const properties = [
             { key: 'reactNativeArchitectures', value: 'arm64-v8a' },
-            { key: 'org.gradle.workers.max', value: '6' },
+
             { key: 'org.gradle.jvmargs', value: '-Xmx6g -XX:MaxMetaspaceSize=512m' }
         ];
 
