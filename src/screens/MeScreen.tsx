@@ -81,19 +81,6 @@ export const MeScreen = () => {
                 <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
             </TouchableOpacity>
 
-            {/* AI Settings - Independent Small Card */}
-            <TouchableOpacity
-                style={styles.smallCard}
-                onPress={() => navigation.navigate('AIConfig')}
-                activeOpacity={0.8}
-            >
-                <View style={styles.smallCardLeft}>
-                    <Icon name="robot-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
-                    <Text style={styles.smallCardTitle}>{t('settings.aiConfig')}</Text>
-                </View>
-                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-
             {/* Markdown主题设置 - 独立小卡片 */}
             <TouchableOpacity
                 style={styles.smallCard}

@@ -14,7 +14,6 @@
 *   **云优先 & 本地加速**：支持腾讯云对象存储 (COS) 和 WebDAV 协议。采用策略模式设计，确保云服务可扩展。使用本地缓存策略加速读取。
 *   **闪念笔记 (Flash Note)**：支持快速捕捉想法，通过 `FlashNoteService` 管理，具备即时同步和冲突检测功能。
 *   **智能待办 (Smart Todo)**：基于 Markdown 的轻量级任务管理，支持滑动日历选择与状态同步。
-*   **AI 助手 (AI Agent)**：集成大模型对话能力，辅助整理笔记与信息检索。
 
 ## 技术栈 (Tech Stack)
 
@@ -40,6 +39,7 @@
 | `src/store/useFileMetadataStore.ts` | ETag/LastModified 存储 | 冲突检测、同步状态 |
 | `src/store/useSyncStore.ts` | 上传队列管理 | Write-Through 机制 |
 | `src/components/StatusBannerContainer.tsx` | 统一状态横幅 | UI 状态展示逻辑 |
+| `src/services/ShadowFileService.ts` | 影子文件（冲突检测基准副本，存于 `.shadows/`） | 冲突检测、三路合并相关问题 |
 
 ### 1. 核心代码 (`src/`)
 *   **`services/` (业务中枢)**：所有核心逻辑下沉于此。
@@ -115,5 +115,5 @@
 | `docs/editor-implementation-guide.md` | CodeMirror 编辑器集成细节 | 修改编辑器相关功能 |
 | `docs/architecture-deep-dive.md` | 完整架构蓝图、数据流、Store 设计 | 理解整体架构、扩展新功能 |
 | `docs/business-logic-details.md` | 三路合并、乐观锁、闪念格式等核心逻辑 | 处理同步、冲突、格式问题 |
-| `docs/coding-examples.md` | 云服务扩展、拖拽排序、AI对话等代码示例 | 需要参考具体实现时 |
+| `docs/coding-examples.md` | 云服务扩展、拖拽排序等代码示例 | 需要参考具体实现时 |
 | `docs/troubleshooting-guide.md` | 同步、构建、性能等问题排查 | 遇到错误或异常行为时 |

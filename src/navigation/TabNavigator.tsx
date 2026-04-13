@@ -7,7 +7,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
-import { AgentScreen } from '../screens/AgentScreen';
 import { NoteNavigator } from './NoteNavigator';
 import { MeScreen } from '../screens/MeScreen';
 import { MainTabParamList } from '../types/navigation';
@@ -90,10 +89,6 @@ const TodoIcon = ({ color }: { color: string }) => (
     <Icon name="task-alt" color={color} size={24} />
 );
 
-const AgentIcon = ({ color }: { color: string }) => (
-    <Icon name="auto-awesome" color={color} size={24} />
-);
-
 const NoteIcon = ({ color }: { color: string }) => (
     <Icon name="folder" color={color} size={24} />
 );
@@ -152,23 +147,6 @@ export const TabNavigator = () => {
                 options={{
                     title: t('tabs.todo'),
                     tabBarIcon: TodoIcon,
-                }}
-            />
-            <Tab.Screen
-                name="Agent"
-                component={AgentScreen}
-                options={{
-                    title: t('tabs.agent'),
-                    tabBarIcon: AgentIcon,
-                    // 仅为Agent tab移除标签栏阴影和顶部灰色横线
-                    tabBarStyle: {
-                        backgroundColor: theme.colors.surface,
-                        borderTopWidth: 0, // 移除顶部灰色横线
-                        elevation: 0, // 移除Android的阴影
-                        paddingBottom: insets.bottom, // Limit to max 16px bottom padding
-                        paddingTop: 0,
-                        shadowOpacity: 0, // 移除iOS的阴影
-                    },
                 }}
             />
             <Tab.Screen

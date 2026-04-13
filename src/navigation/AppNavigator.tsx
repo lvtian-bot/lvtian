@@ -6,7 +6,6 @@ import { EditorScreen } from '../screens/EditorScreen';
 import { CloudRepoConfigScreen } from '../screens/CloudRepoConfigScreen'; // 新增
 import { FlashNoteConfigScreen } from '../screens/FlashNoteConfigScreen'; // 新增
 import { CacheManagerScreen } from '../screens/CacheManagerScreen'; // 新增
-import { AIConfigScreen } from '../screens/AIConfigScreen'; // 新增
 import { MeScreen } from '../screens/MeScreen'; // 新增
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next'; // 新增
@@ -28,15 +27,6 @@ export const AppNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('settings.cloudRepoConfig')
-                }}
-            />
-            {/* 新增：AI 配置页面 */}
-            <Stack.Screen
-                name="AIConfig"
-                component={AIConfigScreen}
-                options={{
-                    headerShown: true,
-                    title: t('ai.settingsTitle')
                 }}
             />
             {/* 新增：闪念笔记设置二级页面 */}
