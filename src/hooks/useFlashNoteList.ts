@@ -6,7 +6,7 @@ import { cloudService, CLOUD_INIT_COMPLETED_EVENT, UPLOAD_COMPLETED_EVENT } from
 import { SyncStatus, ConflictType } from '../services/SyncService';
 
 
-interface UseFlashNoteListOptions<T> {
+interface UseFlashNoteListOptions<T extends { id: string }> {
     /**
      * Function to parse content from a file into a list of items of type T
      */
@@ -25,7 +25,7 @@ interface UseFlashNoteListOptions<T> {
     sorter?: (a: T, b: T) => number;
 }
 
-export function useFlashNoteList<T>({
+export function useFlashNoteList<T extends { id: string }>({
     parser,
     // enableAutoCheck = true, // Not used anymore
     initialLoadCount = 4,
@@ -168,6 +168,27 @@ export function useFlashNoteList<T>({
         }
     };
 
+    // Optimistic UI helpers: mutate in-memory list without touching disk
+    const removeLocalById = useCallback((id: string) => {
+        setData(prev => prev.filter(item => item.id !== id));
+    }, []);
+
+    const prependLocal = useCallback((item: T) => {
+        setData(prev => {
+            const combined = [item, ...prev];
+            if (sorter) combined.sort(sorter);
+            return combined;
+        });
+    }, [sorter]);
+
+    const updateLocalById = useCallback((id: string, replacement: T) => {
+        setData(prev => {
+            const next = prev.map(item => (item.id === id ? replacement : item));
+            if (sorter) next.sort(sorter);
+            return next;
+        });
+    }, [sorter]);
+
     // 3. Refresh loaded data (without changing pagination depth)
     const refreshLoadedData = useCallback(async () => {
         if (loadedFilePaths.length === 0) return;
@@ -245,6 +266,10 @@ export function useFlashNoteList<T>({
         handleLoadMore,
         handleRefresh, // Now uses the new manual refresh logic
         refreshLoadedData,
+        // Optimistic UI helpers
+        removeLocalById,
+        prependLocal,
+        updateLocalById,
         // Sync state
         syncStatus,
         conflictType,

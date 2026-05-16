@@ -157,7 +157,11 @@ export const EditorScreen = () => {
         try {
             if (isFlashMode && flashNoteId) {
                 // --- Flash Note Save Logic ---
-                await flashNoteService.updateNote(flashNoteId, contentToSave);
+                if (flashNoteId === 'new') {
+                    await flashNoteService.addNote(contentToSave);
+                } else {
+                    await flashNoteService.updateNote(flashNoteId, contentToSave);
+                }
                 Alert.alert(t('common.success'), t('timeline.noteUpdated')); // Feedback for user
             } else {
                 // --- Standard File Save Logic ---

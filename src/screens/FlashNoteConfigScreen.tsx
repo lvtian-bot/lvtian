@@ -26,7 +26,6 @@ export const FlashNoteConfigScreen = () => {
     const [flashNoteSuffix, setFlashNoteSuffix] = useState(flashNoteConfig.suffix);
 
     // 历史归档配置
-    const [historyPattern, setHistoryPattern] = useState(flashNoteConfig.historyPattern || 'none');
     const [historyFolderPath, setHistoryFolderPath] = useState(flashNoteConfig.historyFolderPath || '');
 
     // 统一保存状态
@@ -89,7 +88,6 @@ export const FlashNoteConfigScreen = () => {
 
             setFlashNoteConfig({
                 ...flashNoteConfig,
-                historyPattern,
                 historyFolderPath: normalizedHistoryPath
             });
 
@@ -191,30 +189,6 @@ export const FlashNoteConfigScreen = () => {
                 {/* Section 3: History & Archive */}
                 <SectionHeader title={t('flashNoteConfigScreen.historyArchive')} />
                 <View style={styles.card}>
-                    <Text style={styles.label}>{t('flashNoteConfigScreen.historyFileRecognitionMode')}</Text>
-                    <Text style={styles.description}>{t('flashNoteConfigScreen.historyFileRecognitionDesc')}</Text>
-
-                    <View style={styles.radioContainer}>
-                        {[
-                            { label: t('flashNoteConfigScreen.noHistory'), value: 'none' },
-                            { label: t('flashNoteConfigScreen.dashYYYYMM'), value: 'dash-yyyymm' },
-                            { label: t('flashNoteConfigScreen.underscoreYYYYMM'), value: 'underscore-yyyymm' },
-                            { label: t('flashNoteConfigScreen.dashYYYY'), value: 'dash-yyyy' },
-                            { label: t('flashNoteConfigScreen.chineseYYYYMM'), value: 'chinese-yyyymm' },
-                        ].map((option) => (
-                            <TouchableOpacity
-                                key={option.value}
-                                style={styles.radioButton}
-                                onPress={() => setHistoryPattern(option.value as any)}
-                            >
-                                <View style={[styles.radioCircle, historyPattern === option.value && styles.radioCircleActive]} />
-                                <Text style={styles.radioLabel}>{option.label}</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-
-                    <View style={styles.divider} />
-
                     <Text style={styles.label}>{t('settings.historyFolderPath')}</Text>
                     <Text style={styles.description}>{t('settings.historyFolderPathDesc')}</Text>
                     <TextInput
@@ -335,35 +309,6 @@ const styles = StyleSheet.create({
     chipTextActive: {
         color: theme.colors.white,
         fontWeight: '500',
-    },
-    radioContainer: {
-        marginTop: theme.spacing.s,
-    },
-    radioButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    radioCircle: {
-        width: 20,
-        height: 20,
-        borderRadius: 10,
-        borderWidth: 2,
-        borderColor: theme.colors.textSecondary,
-        marginRight: 10,
-    },
-    radioCircleActive: {
-        borderColor: theme.colors.primary,
-        backgroundColor: theme.colors.primary,
-    },
-    radioLabel: {
-        fontSize: 15,
-        color: theme.colors.text,
-    },
-    divider: {
-        height: 1,
-        backgroundColor: theme.colors.border,
-        marginVertical: theme.spacing.m,
     },
     saveButton: {
         backgroundColor: theme.colors.primary,

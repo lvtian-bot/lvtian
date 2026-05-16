@@ -2,9 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
-import { Switch } from 'react-native';
-import { useSettingsStore } from '../store/useSettingsStore';
-import { normalizePath } from '../utils/pathUtils';
 import { theme } from '../utils/theme';
 import { fsService, FileItem } from '../services/FileSystemService';
 import { useFileMetadataStore, LOCAL_MODIFIED_HASH } from '../store/useFileMetadataStore';
@@ -23,54 +20,6 @@ export const CacheManagerScreen = () => {
     const [safeToDeleteSize, setSafeToDeleteSize] = useState(0);
 
     const { getMetadata, removeMetadata } = useFileMetadataStore();
-    const {
-        flashNoteConfig,
-        // showFlashNotesInCache,
-        // setShowFlashNotesInCache,
-    } = useSettingsStore();
-
-    const isFlashNoteFile = useCallback((filePath: string): boolean => {
-        if (!flashNoteConfig || !flashNoteConfig.filename) return false;
-
-        const { path, filename, historyPattern, historyFolderPath } = flashNoteConfig;
-
-        const mainFlashNotePath = path ? `${path}/${filename}` : filename;
-        const normalizedMainFlashNotePath = normalizePath(mainFlashNotePath);
-
-        if (normalizePath(filePath) === normalizedMainFlashNotePath) {
-            return true;
-        }
-
-        if (historyPattern && historyPattern !== 'none') {
-            const namePart = filename.replace(/\.md$/i, '');
-            let regex: RegExp | null = null;
-
-            if (historyPattern === 'dash-yyyymm') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
-            } else if (historyPattern === 'underscore-yyyymm') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
-            } else if (historyPattern === 'dash-yyyy') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
-            } else if (historyPattern === 'chinese-yyyymm') {
-                const escapedName = namePart.replace(/[.*+?^${}()|[\\]/g, '\\$&');
-                regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
-            }
-
-            if (regex) {
-                const fileLocalName = filePath.split('/').pop() || '';
-                if (regex.test(fileLocalName)) {
-                    const scanDirPath = historyFolderPath || path || '';
-                    if (normalizePath(filePath).startsWith(normalizePath(scanDirPath))) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }, [flashNoteConfig]);
 
     const loadFiles = useCallback(async () => {
         setLoading(true);
@@ -131,23 +80,10 @@ export const CacheManagerScreen = () => {
                 return b.size - a.size;
             });
 
-            let finalFiles = processedFiles;
-
-            // Filter: Exclude Flash Notes and AI Chats
-            finalFiles = processedFiles.filter(file => {
-                // 1. Exclude AI Chats
-                if (file.relativePath.startsWith('ai-chats/')) return false;
-
-                // 2. Exclude Flash Notes
-                if (isFlashNoteFile(file.relativePath)) return false;
-
-                return true;
-            });
-
-            setFiles(finalFiles);
+            setFiles(processedFiles);
 
             // const total = processedFiles.reduce((acc, file) => acc + file.size, 0);
-            const safe = finalFiles.filter(f => f.isSafeToDelete).reduce((acc, file) => acc + file.size, 0);
+            const safe = processedFiles.filter(f => f.isSafeToDelete).reduce((acc, file) => acc + file.size, 0);
             // setTotalSize(total);
             setSafeToDeleteSize(safe);
 
@@ -157,7 +93,7 @@ export const CacheManagerScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [t, getMetadata, isFlashNoteFile]);
+    }, [t, getMetadata]);
 
     useEffect(() => {
         loadFiles();

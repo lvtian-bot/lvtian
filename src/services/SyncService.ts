@@ -226,11 +226,11 @@ class SyncService {
                     if (exists) {
                         if (!localMetadata) {
                             console.log(`[BatchSync] ${path}: New local file detected (No Metadata) -> Uploading`);
-                            await this.performUpload(path, options);
+                            await this.uploadFile(path, options);
                             results.synced++;
                         } else {
                             console.log(`[BatchSync] ${path}: Local exists but missing on cloud -> Re-uploading`);
-                            await this.performUpload(path, options);
+                            await this.uploadFile(path, options);
                             results.synced++;
                         }
                     } else {
@@ -266,7 +266,7 @@ class SyncService {
             if (cloudHash === syncedHash && localHash !== syncedHash) {
                 tasks.push(async () => {
                     console.log(`[BatchSync] ${path}: Local update detected -> Uploading`);
-                    await this.performUpload(path, options);
+                    await this.uploadFile(path, options);
                     results.synced++;
                 });
                 continue;
@@ -340,7 +340,7 @@ class SyncService {
             }
             if (check.conflictType === 'localNewer') {
                 console.log(`[SyncService] Auto-uploading ${filePath}`);
-                const success = await this.performUpload(filePath, options);
+                const success = await this.uploadFile(filePath, options);
                 return success ? 'synced' : 'conflict';
             }
             // 双向冲突 -> 无法自动同步
@@ -354,10 +354,6 @@ class SyncService {
         return check.status;
     }
 
-    async performUpload(filePath: string, options: UploadOptions = {}): Promise<boolean> {
-        return this.uploadFile(filePath, options);
-    }
-
     /**
      * 统一的上传文件方法
      * 包含状态设置、乐观锁处理、云端上传、元数据更新和事件通知
@@ -367,6 +363,12 @@ class SyncService {
 
         if (!cloudService.isConfigured()) {
             console.log('[SyncService] Cloud not configured, skipping upload');
+            return false;
+        }
+
+        const netState = await NetInfo.fetch();
+        if (netState.isConnected === false) {
+            console.log('[SyncService] Offline, skipping upload:', filePath);
             return false;
         }
 
@@ -490,7 +492,7 @@ class SyncService {
         if (strategy === 'useCloud') {
             await this.performDownload(filePath, { useShadow: true });
         } else if (strategy === 'useLocal') {
-            await this.performUpload(filePath);
+            await this.uploadFile(filePath);
         } else if (strategy === 'saveCopy') {
             const normalizedPath = normalizePath(filePath);
             const fileName = normalizedPath.split('/').pop() || '';
@@ -502,7 +504,7 @@ class SyncService {
             try {
                 await fsService.moveFile(normalizedPath, backupPath);
                 // 尝试后台上传副本
-                this.performUpload(backupPath);
+                this.uploadFile(backupPath);
             } catch (e) {
                 console.error('Failed to create backup copy:', e);
                 throw e;
@@ -556,15 +558,9 @@ class SyncService {
 
             console.log(`[SyncService] Smart Merge Success! Writing merged content and uploading.`);
 
-            // 5. Write Merged Content to Local
-            // We must also update Metadata to avoid immediate re-conflict detection?
-            // Actually, performUpload will handle metadata / shadow updates.
-
             await fsService.writeFile(filePath, result.mergedContent);
 
-            // 6. Upload Merged Content
-            // useShadow: true ensures we update the shadow to this new merged state
-            const uploadSuccess = await this.performUpload(filePath, { ...options, useShadow: true });
+            const uploadSuccess = await this.uploadFile(filePath, { ...options, useShadow: true });
 
             return uploadSuccess;
 

@@ -32,6 +32,9 @@ export const FlashScreen = () => {
         handleLoadMore,
         handleRefresh,
         refreshLoadedData,
+        removeLocalById,
+        prependLocal,
+        updateLocalById,
         syncStatus,
         conflictType,
         isSyncing,
@@ -94,17 +97,19 @@ export const FlashScreen = () => {
     };
 
     const handleSaveFlashNote = async (id: string | undefined, content: string) => {
+        setIsModalVisible(false);
         try {
             if (id) {
-                await flashNoteService.updateNote(id, content);
+                const updated = await flashNoteService.updateNote(id, content);
+                updateLocalById(id, updated);
             } else {
-                await flashNoteService.addNote(content);
+                const created = await flashNoteService.addNote(content);
+                if (created) prependLocal(created);
             }
-            refreshLoadedData();
-            setIsModalVisible(false);
         } catch (error) {
             console.error('Failed to save flash note', error);
             Alert.alert(t('common.error'), t('timeline.saveError'));
+            refreshLoadedData();
         }
     };
 
@@ -138,12 +143,13 @@ export const FlashScreen = () => {
                 {
                     text: t('common.confirm'),
                     onPress: async () => {
+                        removeLocalById(noteToDelete.id);
                         try {
                             await flashNoteService.deleteNote(noteToDelete.id);
-                            refreshLoadedData();
                         } catch (error) {
                             console.error('Failed to delete flash note:', error);
                             Alert.alert(t('common.error'), t('timeline.deleteError'));
+                            refreshLoadedData();
                         }
                     },
                 },

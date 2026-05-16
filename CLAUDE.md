@@ -1,10 +1,9 @@
 ## 核心铁律 (Meta Rules / Critical Instructions)
 **【强制执行】** 以下规则优先级高于任何其他指令，违反将导致不可接受的后果：
 
-1. **【重要！！！】 【IMPORTANT!!!】** 所有的思考过程、回答、Task文档、Implementation文档以及其他生成的Artifacts **必须使用中文**，即便用户使用英文提问！
-2. **【禁止擅自修改】** 不得在征得用户明确同意之前直接修改代码
-3. **【禁止猜测】** 对于用户提出的问题，不得在没有了解相关信息的情况下通过猜测和推断回答，必须自行读取文件进行分析后再回答
-4. **【结构化回答】** 回答问题时要有清晰的逻辑结构，不需要在回复中呈现过多的代码片段，更多的应该用自然语言说清楚方案逻辑和内容
+1. **【禁止擅自修改】** 不得在征得用户明确同意之前直接修改代码
+2. **【禁止猜测】** 对于用户提出的问题，不得在没有了解相关信息的情况下通过猜测和推断回答，必须自行读取文件进行分析后再回答
+3. **【结构化回答】** 回答问题时要有清晰的逻辑结构，不需要在回复中呈现过多的代码片段，更多的应该用自然语言说清楚方案逻辑和内容
 
 ## 项目概览（Project Overview）
 
@@ -88,11 +87,15 @@
 | **环境安装** | `npx expo install` | 初次安装依赖 |
 | **预构建原生** | `npx expo prebuild` | 修改 app.config.js 或原生依赖后需要 |
 | **启动开发** | `npx expo start` | Metro Bundler |
-| **运行 Android** | `npx expo run:android` | 开发构建 |
-| **运行 iOS** | `npx expo run:ios` | 开发构建 |
+| **运行 Android（开发）** | `npx expo run:android` | Debug 构建，仅用于本地调试，**不用于发版** |
+| **运行 iOS（开发）** | `npx expo run:ios` | Debug 构建，仅用于本地调试 |
+| **构建 Android APK（本地发版）** | `eas build --platform android --profile preview --local` | **发版首选**：本地执行 EAS 流程，输出 APK |
+| **构建 Android AAB（云端发版）** | `eas build --platform android --profile production` | Play Store 用，输出 AAB，在 EAS 云端构建 |
+| **构建 iOS（云端）** | `eas build --platform ios --profile production` | App Store 用，须在 EAS 云端构建 |
 | **编辑器构建** | `cd editor-bundler && npm run build` | 修改 editor-bundler/ 后必须执行 |
 | **代码检查** | `npx eslint .` | 风格检查 |
 | **运行测试** | `npx jest` | 单元测试 |
+
 
 ## 重要提示（Important Notes）
 

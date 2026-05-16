@@ -155,11 +155,11 @@ module.exports = {
         ios: {
             supportsTablet: true,
             bundleIdentifier: "com.mdnote",
-            buildNumber: "17"
+            buildNumber: "18"
         },
         android: {
             package: "com.mdnote",
-            versionCode: 17,
+            versionCode: 18,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",
@@ -182,6 +182,9 @@ module.exports = {
             ],
             "expo-font",
             "expo-asset",
+            "expo-image",
+            "expo-secure-store",
+            "expo-sharing",
             // Referencing plugins defined above
             withDisablePredictiveBack,
             withCustomBuildGradle,

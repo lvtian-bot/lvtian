@@ -60,6 +60,9 @@ export class TodoParser {
             return ''; // Remove the date string from content
         }).trim();
 
+        // Strip HTML tags and their inner content (e.g. <span class="gtid" hidden>VWVj...</span>)
+        content = content.replace(/<[^>]+>[^<]*<\/[^>]+>/g, '').replace(/<[^>]*>/g, '');
+
         // Clean up extra spaces
         content = content.replace(/\s+/g, ' ').trim();
 

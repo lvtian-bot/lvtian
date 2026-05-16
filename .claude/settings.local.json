@@ -11,7 +11,10 @@
       "Bash(gh release create:*)",
       "Bash(npx tsc:*)",
       "Bash(ls:*)",
-      "Bash(npm outdated *)"
+      "Bash(npm outdated *)",
+      "Bash(npx expo *)",
+      "Bash(npm install *)",
+      "Bash(npx expo-doctor *)"
     ],
     "deny": [],
     "ask": []

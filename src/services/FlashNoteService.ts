@@ -51,82 +51,26 @@ class FlashNoteService {
         const fullMainPath = dirPath ? `${dirPath}/${mainFilename}` : mainFilename;
         const normalizedMainPath = normalizePath(fullMainPath);
 
-        const historyPattern = flashNoteConfig.historyPattern || 'none';
+        const historyFolderPath = flashNoteConfig.historyFolderPath;
 
-        if (historyPattern === 'none') {
-            return [normalizedMainPath];
-        }
-
-        const namePart = mainFilename.replace(/\.md$/i, '');
-        let regex: RegExp | null = null;
-
-        if (historyPattern === 'dash-yyyymm') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
-        } else if (historyPattern === 'underscore-yyyymm') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
-        } else if (historyPattern === 'dash-yyyy') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
-        } else if (historyPattern === 'chinese-yyyymm') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Match -YYYY年M月 or -YYYY年MM月
-            regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
-        }
-
-        if (!regex) {
+        if (!historyFolderPath || !(await fsService.exists(historyFolderPath))) {
             return [normalizedMainPath];
         }
 
         try {
-            const scanDirPath = flashNoteConfig.historyFolderPath || dirPath; // Use historyFolderPath if set, else main path
-
-            // Check if directory exists before listing
-            if (!scanDirPath || !(await fsService.exists(scanDirPath))) {
-                return [normalizedMainPath];
-            }
-
-            const files = await fsService.listFiles(scanDirPath);
+            const files = await fsService.listFiles(historyFolderPath);
             const historyFiles: string[] = [];
 
             files.forEach(file => {
                 if (file.isDirectory) return;
-                // Important: If mainFilename is found in history folder, it means it's a copy
-                // We should still treat it as a history file if it matches pattern.
-                // The main path itself is always returned first, so we don't need to filter it out here
-                // unless we want to avoid duplicate entries if main file itself matches history pattern
-                // Let's filter if it's the exact main file path to avoid duplicates if main is in history folder
-                if (normalizePath(scanDirPath ? `${scanDirPath}/${file.name}` : file.name) === normalizedMainPath) return;
-
-                const match = file.name.match(regex!);
-                if (match) {
-                    const relativePath = scanDirPath ? `${scanDirPath}/${file.name}` : file.name;
-                    historyFiles.push(normalizePath(relativePath));
-                }
+                if (!/\.md$/i.test(file.name)) return;
+                const filePath = normalizePath(`${historyFolderPath}/${file.name}`);
+                if (filePath === normalizedMainPath) return; // main file is handled separately
+                historyFiles.push(filePath);
             });
 
-            // Custom sort for Chinese date format to ensure correct order (e.g., 10月 > 2月)
-            if (historyPattern === 'chinese-yyyymm') {
-                historyFiles.sort((a, b) => {
-                    const getYearMonth = (path: string) => {
-                        const filename = path.split('/').pop() || '';
-                        const match = filename.match(regex!);
-                        if (match) {
-                            const year = parseInt(match[1], 10);
-                            const month = parseInt(match[2], 10);
-                            return year * 100 + month;
-                        }
-                        return 0;
-                    };
-                    return getYearMonth(b) - getYearMonth(a); // Descending order
-                });
-            } else {
-                historyFiles.sort((a, b) => b.localeCompare(a));
-            }
-
+            historyFiles.sort((a, b) => b.localeCompare(a));
             return [normalizedMainPath, ...historyFiles];
-
         } catch (e) {
             console.error('Failed to scan history files', e);
             return [normalizedMainPath];
@@ -141,6 +85,19 @@ class FlashNoteService {
                 await fsService.createDirectory(dirPath);
             }
         }
+    }
+
+    private async saveAndSync(filePath: string, content: string): Promise<void> {
+        await this.ensureDirectoryExists(filePath);
+        await fsService.writeFile(filePath, content);
+        useFileMetadataStore.getState().markFileAsModified(filePath);
+        this.lastSyncTime = Date.now(); // suppress redundant syncAll on focus after write
+
+        syncService.uploadFile(filePath, { useShadow: true, withLock: true }).catch(error => {
+            console.error(`[FlashNoteService] Upload failed for ${filePath}:`, error);
+        });
+
+        DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
     }
 
     private getFormattedTimestamp(): string {
@@ -206,9 +163,9 @@ class FlashNoteService {
         return todos;
     }
 
-    async addNote(content: string): Promise<void> {
+    async addNote(content: string): Promise<FlashNote | null> {
         const trimmedInput = content.trim();
-        if (!trimmedInput) return;
+        if (!trimmedInput) return null;
 
         const filePath = this.getFlashNotePath();
         let currentContent = '';
@@ -228,24 +185,19 @@ class FlashNoteService {
 
         const newContent = currentContent + newEntry;
 
-        // Ensure directory exists before writing
-        await this.ensureDirectoryExists(filePath);
-        await fsService.writeFile(filePath, newContent);
-        useFileMetadataStore.getState().markFileAsModified(filePath);
+        await this.saveAndSync(filePath, newContent);
 
-        // Upload to cloud if configured (async, don't wait)
-        syncService.uploadFile(filePath, { useShadow: true, withLock: true }).catch(error => {
-            console.error('FlashNoteService addNote upload failed:', error);
-        });
-
-        DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+        return {
+            id: timestamp,
+            timestamp,
+            content: `${trimmedInput}${suffix}`,
+            filePath,
+        };
     }
 
-    async updateNote(id: string, newText: string): Promise<void> {
+    async updateNote(id: string, newText: string): Promise<FlashNote> {
         const filePath = this.getFlashNotePath();
         const currentContent = await fsService.readFile(filePath);
-        const { flashNoteConfig } = useSettingsStore.getState();
-        const suffix = flashNoteConfig.suffix || '';
 
         const noteBlocks = currentContent.split(/(?=^##\s)/m).filter(b => b.trim());
         let noteFound = false;
@@ -259,17 +211,13 @@ class FlashNoteService {
         });
 
         if (noteFound) {
-            const newContent = newBlocks.join('');
-            await this.ensureDirectoryExists(filePath);
-            await fsService.writeFile(filePath, newContent);
-            useFileMetadataStore.getState().markFileAsModified(filePath);
-
-            // Upload to cloud if configured (async, don't wait)
-            syncService.uploadFile(filePath, { useShadow: true, withLock: true }).catch(error => {
-                console.error('FlashNoteService updateNote upload failed:', error);
-            });
-
-            DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+            await this.saveAndSync(filePath, newBlocks.join(''));
+            return {
+                id,
+                timestamp: id,
+                content: newText.trim(),
+                filePath,
+            };
         } else {
             throw new Error('Note not found');
         }
@@ -325,17 +273,7 @@ class FlashNoteService {
         });
 
         if (noteFound) {
-            const newContent = newBlocks.join('');
-            await this.ensureDirectoryExists(targetPath);
-            await fsService.writeFile(targetPath, newContent);
-            useFileMetadataStore.getState().markFileAsModified(targetPath);
-
-            // Upload to cloud logic
-            syncService.uploadFile(targetPath, { useShadow: true, withLock: true }).catch(error => {
-                console.error('FlashNoteService updateTodoStatus upload failed:', error);
-            });
-
-            DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+            await this.saveAndSync(targetPath, newBlocks.join(''));
         }
     }
 
@@ -400,16 +338,7 @@ class FlashNoteService {
         });
 
         if (noteFound) {
-            const newContent = newBlocks.join('');
-            await this.ensureDirectoryExists(targetPath);
-            await fsService.writeFile(targetPath, newContent);
-            useFileMetadataStore.getState().markFileAsModified(targetPath);
-
-            syncService.uploadFile(targetPath, { useShadow: true, withLock: true }).catch(error => {
-                console.error('FlashNoteService updateTodoContent upload failed:', error);
-            });
-
-            DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+            await this.saveAndSync(targetPath, newBlocks.join(''));
         }
     }
 
@@ -438,17 +367,7 @@ class FlashNoteService {
             }
         });
 
-        const newContent = newLines.join('\n');
-        await this.ensureDirectoryExists(filePath);
-        await fsService.writeFile(filePath, newContent);
-        useFileMetadataStore.getState().markFileAsModified(filePath);
-
-        // Upload to cloud if configured
-        syncService.uploadFile(filePath, { useShadow: true, withLock: true }).catch(error => {
-            console.error('Upload failed:', error);
-        });
-
-        DeviceEventEmitter.emit(FLASH_NOTES_UPDATED_EVENT);
+        await this.saveAndSync(filePath, newLines.join('\n'));
     }
 
     /**
@@ -492,9 +411,7 @@ class FlashNoteService {
 
     async syncAll(): Promise<void> {
         const { flashNoteConfig } = useSettingsStore.getState();
-        const mainFilename = flashNoteConfig.filename;
-        const dirPath = flashNoteConfig.path || '';
-        const scanDirPath = flashNoteConfig.historyFolderPath || dirPath;
+        const scanDirPath = flashNoteConfig.historyFolderPath || '';
 
         const emitStatus = (payload: BatchSyncStatusPayload) => {
             DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, payload);
@@ -502,7 +419,6 @@ class FlashNoteService {
 
         if (this._isSyncing) {
             console.log('[FlashNoteService] syncAll skipped: Sync already in progress');
-            // Optionally emit current status if needed, but usually better to stay silent
             return;
         }
 
@@ -517,9 +433,6 @@ class FlashNoteService {
         // Broadcast checking status
         emitStatus({ status: 'checking', conflicts: [], uploadErrors: [] });
 
-        // Normalize main path
-        const mainPath = normalizePath(dirPath ? `${dirPath}/${mainFilename}` : mainFilename);
-
         // 1. Stage 1: Environment Checks
         const netState = await NetInfo.fetch();
         if (!netState.isConnected) {
@@ -530,44 +443,14 @@ class FlashNoteService {
         }
 
         if (!cloudService.isConfigured()) {
-            emitStatus({ status: 'not-configured', conflicts: [], uploadErrors: [] }); // or error
+            emitStatus({ status: 'not-configured', conflicts: [], uploadErrors: [] });
             this._isSyncing = false;
             return;
         }
 
-        // 2. Prepare Local File List (Main + History)
-        // We reuse logic from getSortedFilePaths but specific for sync scanning
-        // Construct Regex
-        const namePart = mainFilename.replace(/\.md$/i, '');
-        let regex: RegExp | null = null;
-        const pattern = flashNoteConfig.historyPattern || 'none';
-
-        if (pattern === 'dash-yyyymm') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            regex = new RegExp(`^${escapedName}-(\\d{6})\\.md$`, 'i');
-        } else if (pattern === 'underscore-yyyymm') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            regex = new RegExp(`^${escapedName}_(\\d{6})\\.md$`, 'i');
-        } else if (pattern === 'dash-yyyy') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            regex = new RegExp(`^${escapedName}-(\\d{4})\\.md$`, 'i');
-        } else if (pattern === 'chinese-yyyymm') {
-            const escapedName = namePart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            regex = new RegExp(`^${escapedName}-(\\d{4})年(\\d{1,2})月\\.md$`, 'i');
-        }
-
-        const localFiles: string[] = [mainPath];
-        if (pattern !== 'none' && regex && scanDirPath && (await fsService.exists(scanDirPath))) {
-            const files = await fsService.listFiles(scanDirPath);
-            files.forEach(f => {
-                if (!f.isDirectory && regex!.test(f.name)) {
-                    const relativePath = scanDirPath ? `${scanDirPath}/${f.name}` : f.name;
-                    // Avoid duplicate if mainPath is in scanDir
-                    const normalized = normalizePath(relativePath);
-                    if (normalized !== mainPath) localFiles.push(normalized);
-                }
-            });
-        }
+        // 2. Prepare Local File List (Main + all .md files in historyFolderPath)
+        const localFiles = await this.getSortedFilePaths();
+        const mainPath = localFiles[0];
 
         try {
             // 3. Stage 2: Retry Local Failures
@@ -575,20 +458,20 @@ class FlashNoteService {
             const { uploadErrors: retryErrors, conflicts: retryConflicts } = await this.retryLocalFailures(localFiles);
 
             // 4. Stage 3: Full Sync & Conflict Detection
-            // Fetch Cloud Files
+            // Fetch Cloud Files — only list history prefix when historyFolderPath is configured
             let prefix = scanDirPath;
             if (prefix && !prefix.endsWith('/')) prefix += '/';
 
-            console.log(`[FlashNoteService] Starting Full Sync. Cloud Prefix: ${prefix}`);
+            console.log(`[FlashNoteService] Starting Full Sync. Cloud Prefix: ${prefix || '(none)'}`);
 
             const [cloudList, mainFileMeta] = await Promise.all([
-                cloudService.listFiles(prefix).catch(e => {
-                    console.warn('[FlashNoteService] Failed to list prefix:', e);
-                    return [] as import('./CloudService').CloudFileItem[];
-                }),
-                cloudService.headFile(mainPath).catch(e => {
-                    return null;
-                })
+                prefix
+                    ? cloudService.listFiles(prefix).catch(e => {
+                        console.warn('[FlashNoteService] Failed to list prefix:', e);
+                        return [] as import('./CloudService').CloudFileItem[];
+                    })
+                    : Promise.resolve([] as import('./CloudService').CloudFileItem[]),
+                cloudService.headFile(mainPath).catch(() => null)
             ]);
 
             const cloudFiles = [...cloudList];
@@ -605,14 +488,12 @@ class FlashNoteService {
                 }
             }
 
-            // Filter function
+            // Filter function: main file or any .md in historyFolderPath
+            const normalizedScanDir = scanDirPath ? normalizePath(scanDirPath) : '';
             const fileFilter = (key: string) => {
                 const normalizedKey = normalizePath(key);
                 if (normalizedKey === mainPath) return true;
-                if (pattern !== 'none' && regex) {
-                    const filename = normalizedKey.split('/').pop() || '';
-                    return regex.test(filename);
-                }
+                if (normalizedScanDir && normalizedKey.startsWith(normalizedScanDir + '/') && normalizedKey.endsWith('.md')) return true;
                 return false;
             };
 
