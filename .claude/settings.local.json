@@ -10,7 +10,8 @@
       "Bash(npx eslint:*)",
       "Bash(gh release create:*)",
       "Bash(npx tsc:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(npm outdated *)"
     ],
     "deny": [],
     "ask": []
