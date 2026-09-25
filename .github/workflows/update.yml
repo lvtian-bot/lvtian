@@ -33,7 +33,7 @@ jobs:
 
       - name: 安装项目依赖与 EAS CLI
         run: |
-          npm ci
+          npm install
           npm install -g eas-cli
 
       - name: 构建嵌入式 Web 资源 (CodeMirror & Preview)
