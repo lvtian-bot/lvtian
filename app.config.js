@@ -155,16 +155,22 @@ module.exports = {
         ios: {
             supportsTablet: true,
             bundleIdentifier: "com.mdnote",
-            buildNumber: "18"
+            buildNumber: "19"
         },
         android: {
             package: "com.mdnote",
-            versionCode: 18,
+            versionCode: 19,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",
                 backgroundColor: "#FFFFFF"
             }
+        },
+        updates: {
+            url: "https://u.expo.dev/71e44e22-3174-44f1-8fbf-b84c2295dfd8"
+        },
+        runtimeVersion: {
+            policy: "appVersion"
         },
         extra: {
             eas: {

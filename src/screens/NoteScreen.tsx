@@ -166,25 +166,18 @@ export const NoteScreen = ({ route, navigation }: Props) => {
     }, [loadFiles]);
 
     // Header Options
-    const headerLeft = useCallback(() => (
+    const headerRight = useCallback(() => (
         <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
             <Icon name="note-add" size={20} color={theme.colors.textSecondary} />
         </TouchableOpacity>
     ), []);
 
-    const headerRight = useCallback(() => (
-        <TouchableOpacity onPress={() => rootNavigation.navigate('Settings')} style={styles.headerButton}>
-            <Icon name="settings" size={20} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
-    ), [rootNavigation]);
-
     useEffect(() => {
         navigation.setOptions({
             title: prefix ? prefix.split('/').filter(Boolean).pop() : t('tabs.browser'),
-            headerLeft: headerLeft,
             headerRight: headerRight,
         });
-    }, [navigation, prefix, t, headerLeft, headerRight]);
+    }, [navigation, prefix, t, headerRight]);
 
     // Create File Logic
     const handleCreateFile = async (filename: string) => {
@@ -492,7 +485,7 @@ export const NoteScreen = ({ route, navigation }: Props) => {
 
     const renderContent = () => {
         if (status === 'unconfigured') {
-            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => rootNavigation.navigate('MainTabs', { screen: 'Settings' })} />;
+            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => rootNavigation.navigate('MainTabs', { screen: 'Me' })} />;
         }
 
         if (status === 'loading' && files.length === 0) {

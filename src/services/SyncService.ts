@@ -1,4 +1,4 @@
-import NetInfo from "@react-native-community/netinfo";
+import * as Network from 'expo-network';
 import { DeviceEventEmitter } from 'react-native';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from './CloudService';
 import { fsService } from './FileSystemService';
@@ -42,7 +42,7 @@ class SyncService {
         const localMetadata = getMetadata(filePath);
 
         // 1. 检查网络状态 (优先于配置检查，离线时应直接显示本地内容)
-        const netState = await NetInfo.fetch();
+        const netState = await Network.getNetworkStateAsync();
         if (netState.isConnected === false) {
             return { status: 'offline', conflictType: null };
         }
@@ -366,7 +366,7 @@ class SyncService {
             return false;
         }
 
-        const netState = await NetInfo.fetch();
+        const netState = await Network.getNetworkStateAsync();
         if (netState.isConnected === false) {
             console.log('[SyncService] Offline, skipping upload:', filePath);
             return false;

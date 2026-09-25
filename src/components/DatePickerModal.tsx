@@ -169,7 +169,7 @@ const styles = StyleSheet.create({
         // zIndex is not strictly needed if order is correct, but helpful
     },
     backdrop: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         backgroundColor: 'rgba(0,0,0,0.5)',
     },
     contentContainer: {

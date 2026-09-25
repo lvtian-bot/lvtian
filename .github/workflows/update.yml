@@ -1,0 +1,47 @@
+name: EAS Update (热更新发布)
+
+# 仅修改 JS/TS/静态资源时触发此流水线，无需重新编译 APK。
+# 在 GitHub 仓库页面 Actions -> EAS Update (热更新发布) -> Run workflow 手动触发。
+on:
+  workflow_dispatch:
+    inputs:
+      branch_or_channel:
+        description: "发布渠道 (Channel)"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - "production"
+          - "preview"
+      message:
+        description: "更新说明 (Commit or Update Message)"
+        required: true
+        default: "热更新修复与功能优化"
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装项目依赖与 EAS CLI
+        run: |
+          npm ci
+          npm install -g eas-cli
+
+      - name: 构建嵌入式 Web 资源 (CodeMirror & Preview)
+        run: |
+          npm run build:web
+
+      - name: 推送热更新至 Expo 服务器
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas update --channel ${{ github.event.inputs.branch_or_channel }} --message "${{ github.event.inputs.message }}" --non-interactive

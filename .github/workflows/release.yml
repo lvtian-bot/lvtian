@@ -1,0 +1,87 @@
+name: Release
+
+# 推送 v* tag 触发正式发布构建；也可在 Actions 页手动触发（产物仅存 workflow artifact，便于调试）
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: 读取版本号并校验 tag 一致
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "PKG_VERSION=$PKG_VERSION" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$PKG_VERSION" != "$TAG_VERSION" ]]; then
+              echo "::error::tag $GITHUB_REF_NAME 与 package.json 版本 $PKG_VERSION 不一致，拒绝发布"
+              exit 1
+            fi
+          fi
+
+      - name: 还原 .env 与签名文件
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PROPERTIES: ${{ secrets.KEYSTORE_PROPERTIES }}
+        run: |
+          printf '%s' "$ENV_FILE" | tr -d '\r' > .env
+          mkdir -p keystore
+          echo "$KEYSTORE_BASE64" | base64 -d > keystore/simplejournal.keystore
+          printf '%s' "$KEYSTORE_PROPERTIES" | tr -d '\r' > keystore/keystore.properties
+
+      - name: 安装依赖与 eas-cli
+        run: |
+          npm ci
+          npm install -g eas-cli
+
+      - name: 构建嵌入式 Web 资源 (CodeMirror & Preview)
+        run: |
+          npm run build:web
+
+      - name: 压低构建内存（CI runner 仅 7GB，覆盖项目 6g 堆防止失联）
+        run: |
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=512m
+          kotlin.daemon.jvmargs=-Xmx2g
+          EOF
+
+      - name: 构建正式版 APK（production 频道）
+        env:
+          EXPO_UPDATES_CHANNEL: production
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas build --platform android --profile production --local --non-interactive --output "${{ github.workspace }}/MDNote-${PKG_VERSION}.apk"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MDNote-${{ env.PKG_VERSION }}
+          path: MDNote-*.apk
+          if-no-files-found: error
+
+      - name: 创建 GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "MDNote-${PKG_VERSION}.apk" --title "$GITHUB_REF_NAME" --generate-notes

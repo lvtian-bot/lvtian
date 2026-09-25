@@ -10,8 +10,6 @@ import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
 // Imports for cloud service initialization
 import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
-// Import AI store to sync sessions on app start
-import { useAIStore } from './src/store/useAIStore';
 
 import { theme } from './src/utils/theme';
 import { useShareStore } from './src/store/useShareStore';
@@ -29,10 +27,6 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
   const [globalShareContent, setGlobalShareContent] = React.useState<string>('');
   // Logic to initialize cloud service based on settings
   const { cosConfig, webDavConfig, cloudProvider, hasHydrated } = useSettingsStore();
-
-  if (!hasHydrated) {
-    return null;
-  }
 
   useEffect(() => {
     const initializeCloud = async () => {
@@ -89,6 +83,10 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
       subscription.remove();
     };
   }, [handleSharedContent]);
+
+  if (!hasHydrated) {
+    return null;
+  }
 
   return (
     <GestureHandlerRootView style={styles.container}>

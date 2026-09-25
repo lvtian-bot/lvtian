@@ -7,7 +7,7 @@ import { normalizePath } from '../utils/pathUtils';
 import { syncService } from './SyncService';
 import { TodoItem, TodoStatus } from '../types/todo';
 import { TodoParser } from '../utils/TodoParser';
-import NetInfo from "@react-native-community/netinfo";
+import * as Network from 'expo-network';
 import {
     FLASH_NOTES_UPDATED_EVENT,
     SHARE_RECEIVED_EVENT,
@@ -434,7 +434,7 @@ class FlashNoteService {
         emitStatus({ status: 'checking', conflicts: [], uploadErrors: [] });
 
         // 1. Stage 1: Environment Checks
-        const netState = await NetInfo.fetch();
+        const netState = await Network.getNetworkStateAsync();
         if (!netState.isConnected) {
             console.log('[FlashNoteService] Offline, skipping sync.');
             emitStatus({ status: 'offline', conflicts: [], uploadErrors: [] });

@@ -1,21 +1,19 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, ScrollView, DeviceEventEmitter, Image } from 'react-native';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, DeviceEventEmitter, Linking } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
-import Markdown, { RenderRules } from 'react-native-markdown-display';
-import { Image as ExpoImage } from 'expo-image';
+import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
-import { markdownThemes } from '../utils/markdownThemes';
 import { useCloudSync } from '../hooks/useCloudSync';
-import { StatusBanner } from '../components/StatusBanner';
 import { StatusBannerContainer } from '../components/StatusBannerContainer';
+import { previewHtml } from '../preview-web/previewHtml';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -25,21 +23,22 @@ export const PreviewScreen = () => {
     const navigation = useNavigation<NavigationProp>();
     const { t } = useTranslation();
     const { filePath } = route.params;
-    // Removed unused getMetadata
     const { markdownTheme } = useSettingsStore();
     const fileMetadata = useFileMetadataStore(state => state.metadata[filePath]);
     const insets = useSafeAreaInsets();
 
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
+    const [isWebViewReady, setIsWebViewReady] = useState(false);
+    const webViewRef = useRef<WebView>(null);
 
-    // Use the new hook
+    // Use the cloud sync hook
     const { syncStatus, conflictType, isSyncing, checkSync, performAutoSync, resolveConflict } = useCloudSync(filePath);
 
-    // Helper to determine if we should show the conflict banner (only for bidirectional or failure)
+    // Helper to determine if we should show the conflict banner
     const shouldShowConflictBanner = syncStatus === 'conflict' && (
         conflictType === 'bidirectional' ||
-        !conflictType || // Fallback
+        !conflictType ||
         fileMetadata?.uploadState === 'conflict-failed'
     );
 
@@ -48,19 +47,116 @@ export const PreviewScreen = () => {
         syncStatus === 'checking' ||
         (syncStatus === 'conflict' && (conflictType === 'cloudNewer' || conflictType === 'localNewer'));
 
+    // Resolve markdown local image references and download missing ones from cloud
+    const resolveMarkdownImages = useCallback(async (rawText: string): Promise<string> => {
+        if (!rawText) return '';
+        const imgRegex = /!\[(.*?)\]\((\S+?)(?:\s+["'].*?["'])?\)/g;
+        const matches: { full: string; alt: string; src: string }[] = [];
+        let match;
+        while ((match = imgRegex.exec(rawText)) !== null) {
+            matches.push({ full: match[0], alt: match[1], src: match[2] });
+        }
+        if (matches.length === 0) return rawText;
+
+        let result = rawText;
+        for (const item of matches) {
+            const { full, src } = item;
+            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
+                continue;
+            }
+
+            try {
+                let absolutePath = '';
+                if (src.startsWith('file://')) {
+                    absolutePath = src;
+                } else if (src.startsWith('/')) {
+                    absolutePath = 'file://' + src;
+                } else {
+                    const currentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+                    const parts = (currentDir + '/' + src).split('/');
+                    const stack: string[] = [];
+                    for (const part of parts) {
+                        if (part === '..') {
+                            stack.pop();
+                        } else if (part !== '.' && part !== '') {
+                            stack.push(part);
+                        }
+                    }
+                    absolutePath = (parts[0] === '' ? '/' : '') + stack.join('/');
+                    if (!absolutePath.startsWith('file://')) {
+                        absolutePath = 'file://' + absolutePath;
+                    }
+                }
+
+                const exists = await fsService.exists(absolutePath);
+                if (!exists && cloudService.isConfigured()) {
+                    const rootPath = fsService.getRootPath();
+                    const normalizedRoot = rootPath.replace('file://', '');
+                    const normalizedAbs = absolutePath.replace('file://', '');
+                    if (normalizedAbs.startsWith(normalizedRoot)) {
+                        const key = normalizedAbs.substring(normalizedRoot.length + 1);
+                        try {
+                            await cloudService.downloadFile(key, absolutePath);
+                        } catch (e) {
+                            console.warn('Failed to download image:', key, e);
+                        }
+                    }
+                }
+
+                const newImg = full.replace(src, absolutePath);
+                result = result.replace(full, newImg);
+            } catch (err) {
+                console.error('Error resolving image:', src, err);
+            }
+        }
+        return result;
+    }, [filePath]);
+
+    const sendContentToWebView = useCallback(async (rawText: string) => {
+        if (!webViewRef.current) return;
+        const resolved = await resolveMarkdownImages(rawText);
+        webViewRef.current.postMessage(JSON.stringify({
+            type: 'SET_CONTENT',
+            payload: {
+                content: resolved,
+                theme: markdownTheme,
+            },
+        }));
+    }, [resolveMarkdownImages, markdownTheme]);
+
     const loadFile = useCallback(async () => {
         try {
             const exists = await fsService.exists(filePath);
             if (exists) {
                 const fileContent = await fsService.readFile(filePath);
                 setContent(fileContent);
+                if (isWebViewReady) {
+                    await sendContentToWebView(fileContent);
+                }
             }
         } catch (_) {
-            Alert.alert('Error', 'Failed to load file');
+            Alert.alert(t('common.error'), t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' }));
         } finally {
             setLoading(false);
         }
-    }, [filePath]);
+    }, [filePath, isWebViewReady, sendContentToWebView, t]);
+
+    // Push content when WebView is ready
+    useEffect(() => {
+        if (isWebViewReady && content) {
+            sendContentToWebView(content);
+        }
+    }, [isWebViewReady, content, sendContentToWebView]);
+
+    // Push theme change when user switches theme
+    useEffect(() => {
+        if (isWebViewReady) {
+            webViewRef.current?.postMessage(JSON.stringify({
+                type: 'SET_THEME',
+                payload: markdownTheme,
+            }));
+        }
+    }, [markdownTheme, isWebViewReady]);
 
     const handleOverwriteLocal = async () => {
         await resolveConflict('useCloud');
@@ -74,32 +170,14 @@ export const PreviewScreen = () => {
     const handleSaveCopy = async () => {
         try {
             await resolveConflict('saveCopy');
-            // The file content is reloaded via loadFile, but the path hasn't changed.
-            // However, resolveConflict('saveCopy') renames the OLD file to backup and DOWNLOADS the new one to filePath.
-            // So we are still viewing the same filePath, but content is now cloud content.
-            // The backup is somewhere else. 
-            // The original logic navigated to newPath, but that was because it moved current file to backup
-            // and seemingly expected user to view the backup? 
-            // Wait, original logic: moveFile(current, backup) -> upload(backup) -> navigate(backup).
-            // This means user continues viewing the LOCAL version (which is now backup).
-
-            // SyncService logic: moveFile(current, backup) -> upload(backup) -> download(cloud, current).
-            // This means 'current' (filePath) now has Cloud content. 'backup' has Local content.
-
-            // If we want to mimic original behavior strictly (keep viewing local content), we should navigate to backup.
-            // BUT, usually 'Resolve Conflict -> Save Copy' means "I want to keep my changes safe, but accept cloud version as main".
-            // So staying on filePath (which is now Cloud version) seems more correct for a "Sync" resolution.
-            // And the backup is safe.
-
-            // Let's stick to SyncService logic: View the now-synced file.
             await loadFile();
-            Alert.alert(t('common.success'), 'Local changes saved to copy. Now viewing cloud version.');
+            Alert.alert(t('common.success'), t('sync.savedCopy', { defaultValue: 'Local changes saved to copy. Now viewing cloud version.' }));
         } catch (_) {
-            Alert.alert('Error', 'Failed to save copy');
+            Alert.alert(t('common.error'), t('sync.saveCopyFailed', { defaultValue: 'Failed to save copy' }));
         }
     };
 
-    // Listen for upload completion to reload content if needed (e.g. if we just downloaded)
+    // Listen for upload completion to reload content if needed
     useEffect(() => {
         const subscription = DeviceEventEmitter.addListener(UPLOAD_COMPLETED_EVENT, (data: { filePath: string; success?: boolean }) => {
             if (data.filePath === filePath && data.success) {
@@ -116,36 +194,37 @@ export const PreviewScreen = () => {
         }, [loadFile, performAutoSync])
     );
 
-    const renderImageRule = useCallback((node: any, children: any, parent: any, styles: any) => {
-        const { src, alt } = node.attributes;
-
-        // Check if it's a web URL
-        if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
-            return (
-                <AutoImage
-                    key={node.key}
-                    source={{ uri: src }}
-                    style={styles.image}
-                    accessibilityLabel={alt}
-                />
-            );
+    const handleLinkClick = async (url: string) => {
+        try {
+            const supported = await Linking.canOpenURL(url);
+            if (supported) {
+                await Linking.openURL(url);
+            } else {
+                Alert.alert(t('common.error'), url);
+            }
+        } catch (e) {
+            console.warn('Failed to open link:', url, e);
         }
+    };
 
-        // Otherwise, treat as local/repo file
-        return (
-            <RepoImage
-                key={node.key}
-                src={src}
-                alt={alt}
-                style={styles.image}
-                currentFilePath={filePath}
-            />
-        );
-    }, [filePath]);
-
-    const rules = useMemo<RenderRules>(() => ({
-        image: renderImageRule,
-    }), [renderImageRule]);
+    const onWebViewMessage = (event: { nativeEvent: { data: string } }) => {
+        try {
+            const data = JSON.parse(event.nativeEvent.data);
+            if (data.type === 'ON_READY') {
+                setIsWebViewReady(true);
+            } else if (data.type === 'LINK_CLICK') {
+                handleLinkClick(data.payload);
+            } else if (data.type === 'COPY_CODE') {
+                console.log('[PreviewScreen] Code copied');
+            } else if (data.type === 'LOG') {
+                console.log('[Preview WebView Log]', data.payload);
+            } else if (data.type === 'ERROR') {
+                console.error('[Preview WebView Error]', data.payload);
+            }
+        } catch {
+            console.warn('Received non-JSON message from preview WebView');
+        }
+    };
 
     return (
         <View style={[styles.container, { paddingBottom: insets.bottom }]}>
@@ -188,27 +267,17 @@ export const PreviewScreen = () => {
                         onResolveSaveCopy={handleSaveCopy}
                     />
 
-                    <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
-                        <Markdown
-                            style={markdownThemes[markdownTheme] || markdownThemes.default}
-                            rules={rules}
-                        >
-                            {(() => {
-                                if (!content) return '# 空文件\n\n点击编辑按钮开始编写';
-                                const frontMatterRegex = /^(?:---\s*[\r\n]+)([\s\S]*?)(?:[\r\n]+---\s*[\r\n]+|$)/;
-                                const match = content.match(frontMatterRegex);
-
-                                if (match) {
-                                    const metadataContent = match[1].trim();
-                                    const afterFrontMatterContent = content.substring(match[0].length);
-                                    const processedMetadata = `\`\`\`yaml\n${metadataContent}\n\`\`\`\n`;
-                                    return processedMetadata + afterFrontMatterContent;
-                                }
-
-                                return content;
-                            })()}
-                        </Markdown>
-                    </ScrollView>
+                    <WebView
+                        ref={webViewRef}
+                        source={{ html: previewHtml, baseUrl: fsService.getRootPath() }}
+                        originWhitelist={['*']}
+                        allowFileAccess={true}
+                        allowFileAccessFromFileURLs={true}
+                        allowUniversalAccessFromFileURLs={true}
+                        allowingReadAccessToURL={fsService.getRootPath()}
+                        onMessage={onWebViewMessage}
+                        style={styles.webview}
+                    />
                 </>
             )}
         </View>
@@ -259,180 +328,8 @@ const styles = StyleSheet.create({
     syncIcon: {
         fontSize: 16,
     },
-    content: {
+    webview: {
         flex: 1,
-    },
-
-    contentContainer: {
-        paddingHorizontal: 16,
-        paddingTop: 16,
-        paddingBottom: theme.spacing.l,
-    },
-    image: {
-        width: '100%',
-        height: 200,
-        resizeMode: 'contain',
-        marginVertical: theme.spacing.s,
-    },
-    fullWidth: {
-        width: '100%',
-    },
-    defaultHeight: {
-        height: 200,
-    },
-    center: {
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    loadingBg: {
-        backgroundColor: theme.colors.surface,
-    },
-    errorBg: {
-        backgroundColor: '#f0f0f0',
-    },
-    errorText: {
-        color: '#999',
-        fontSize: 12,
+        backgroundColor: 'transparent',
     },
 });
-
-const AutoImage = ({ source, style, accessibilityLabel }: any) => {
-    const [ratio, setRatio] = useState<number | undefined>(undefined);
-
-    useEffect(() => {
-        if (source?.uri) {
-            Image.getSize(source.uri, (width, height) => {
-                if (width > 0 && height > 0) {
-                    setRatio(width / height);
-                }
-            }, () => { });
-        }
-    }, [source?.uri]);
-
-    return (
-        <ExpoImage
-            source={source}
-            style={[
-                style,
-                styles.fullWidth,
-                ratio ? { aspectRatio: ratio } : styles.defaultHeight
-            ]}
-            contentFit="contain"
-            accessibilityLabel={accessibilityLabel}
-        />
-    );
-};
-
-const RepoImage = ({ src, alt, style, currentFilePath }: { src: string, alt?: string, style: any, currentFilePath: string }) => {
-    const { t } = useTranslation();
-    const [localUri, setLocalUri] = useState<string | null>(null);
-    const [loadingImage, setLoadingImage] = useState(true);
-    const [error, setError] = useState(false);
-
-    useEffect(() => {
-        let mounted = true;
-
-        const checkAndDownload = async () => {
-            try {
-                setLoadingImage(true);
-                setError(false);
-
-                // 1. Resolve absolute path
-                let absolutePath = '';
-                if (src.startsWith('/') || src.startsWith('file://')) {
-                    absolutePath = src;
-                } else {
-                    const currentDir = currentFilePath.substring(0, currentFilePath.lastIndexOf('/'));
-                    const parts = (currentDir + '/' + src).split('/');
-                    const stack: string[] = [];
-                    for (const part of parts) {
-                        if (part === '..') {
-                            stack.pop();
-                        } else if (part !== '.' && part !== '') {
-                            stack.push(part);
-                        }
-                    }
-                    absolutePath = (parts[0] === '' ? '/' : '') + stack.join('/');
-                    if (!absolutePath.startsWith('file://') && absolutePath.startsWith('/')) {
-                        absolutePath = 'file://' + absolutePath;
-                    }
-                }
-
-                // 2. Check existence
-                const exists = await fsService.exists(absolutePath);
-
-                if (exists) {
-                    if (mounted) {
-                        setLocalUri(absolutePath);
-                        setLoadingImage(false);
-                    }
-                    return;
-                }
-
-                // 3. If missing, try download
-                const rootPath = fsService.getRootPath();
-                const normalizedRoot = rootPath.replace('file://', '');
-                const normalizedAbs = absolutePath.replace('file://', '');
-
-                if (normalizedAbs.startsWith(normalizedRoot)) {
-                    const key = normalizedAbs.substring(normalizedRoot.length + 1);
-                    if (cloudService.isConfigured()) {
-                        try {
-                            await cloudService.downloadFile(key, absolutePath);
-                            if (mounted) {
-                                setLocalUri(absolutePath);
-                                setLoadingImage(false);
-                            }
-                        } catch (e) {
-                            console.warn('Failed to download image:', key, e);
-                            interface ErrorWithCode { code?: string }
-                            if ((e as ErrorWithCode)?.code === 'NoSuchKey' || (e as any)?.statusCode === 404) {
-                                if (mounted) setError(true);
-                            }
-                            if (mounted) setLoadingImage(false);
-                        }
-                    } else {
-                        if (mounted) setLoadingImage(false);
-                    }
-                } else {
-                    if (mounted) setLoadingImage(false);
-                }
-
-            } catch (e) {
-                console.error('Image resolution error', e);
-                if (mounted) {
-                    setError(true);
-                    setLoadingImage(false);
-                }
-            }
-        };
-
-        checkAndDownload();
-
-        return () => { mounted = false; };
-    }, [src, currentFilePath]);
-
-    if (loadingImage) {
-        return (
-            <View style={[styles.image, styles.center, styles.loadingBg]}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-            </View>
-        );
-    }
-
-    if (error || !localUri) {
-        return (
-            <View style={[styles.image, styles.center, styles.errorBg]}>
-                <Text style={styles.errorText}>{t('common.error')}: {alt || t('browser.imageNotFound') || 'Image not found'}</Text>
-            </View>
-        );
-    }
-
-    return (
-        <AutoImage
-            source={{ uri: localUri }}
-            style={style}
-            accessibilityLabel={alt}
-        />
-    );
-};
