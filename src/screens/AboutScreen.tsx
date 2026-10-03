@@ -25,10 +25,11 @@ import {
 } from '../config';
 
 const openLink = async (url: string, loadError: string) => {
-    const supported = await Linking.canOpenURL(url);
-    if (supported) {
+    // HTTPS 链接直接 openURL：Android 11+ 上 canOpenURL 需要额外声明 queries，
+    // 直接调用并捕获失败更可靠
+    try {
         await Linking.openURL(url);
-    } else {
+    } catch {
         Alert.alert(loadError, url);
     }
 };
