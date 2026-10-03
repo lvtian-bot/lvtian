@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { WebView } from 'react-native-webview';
 import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
@@ -212,6 +213,11 @@ export const PreviewScreen = () => {
             const data = JSON.parse(event.nativeEvent.data);
             if (data.type === 'ON_READY') {
                 setIsWebViewReady(true);
+                // 同步当前语言给预览 WebView（中英文案）
+                webViewRef.current?.postMessage(JSON.stringify({
+                    type: 'SET_LOCALE',
+                    payload: i18n.language?.startsWith('zh') ? 'zh' : 'en',
+                }));
             } else if (data.type === 'LINK_CLICK') {
                 handleLinkClick(data.payload);
             } else if (data.type === 'COPY_CODE') {
