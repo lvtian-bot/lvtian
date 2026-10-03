@@ -1,0 +1,76 @@
+# PR 检查流程
+#
+# - PR 阶段自动跑：TypeScript 类型检查 + Lint + 测试 + Expo 版本核对（约 2 分钟，零凭据）
+# - 原生编译不自动跑：需要验证依赖升级、原生配置或构建链时，在 Actions 页面
+#   手动触发（Run workflow，可选分支），或由助手用 gh workflow run 触发。
+#   编译为调试变体，全程零凭据（无 Expo 令牌、无签名文件），调试密钥由
+#   构建机本机自生成；产物仅作编译门禁，不作为真机验证。
+#   纯 JS/TS 变更无需编译（用户端经 OTA 热更新即可送达）。
+name: PR 检查
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  js-check:
+    name: JS 检查（类型/Lint/测试）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: TypeScript 类型检查
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npx eslint .
+      - name: 测试
+        run: npx jest
+      - name: Expo 版本核对（仅提示，不阻断）
+        run: npx expo install --check
+        continue-on-error: true
+
+  native-build:
+    name: Android 原生编译（手动触发，调试变体，零凭据）
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 释放磁盘空间（RN Android 构建含缓存需 20GB+，清理预装工具链）
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          echo "=== 磁盘余量 ==="; df -h /
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: 安装依赖
+        run: npm ci
+      - name: 生成原生工程
+        run: npx expo prebuild -p android --no-install
+      - name: 适配 CI 内存（构建机内存有限，压缩 Gradle 与 Kotlin 守护进程占用）
+        run: |
+          printf '\norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g\nkotlin.daemon.jvmargs=-Xmx1536m\norg.gradle.workers.max=2\n' >> android/gradle.properties
+      - name: 编译 Android 调试变体（验证原生编译通过，产物仅作门禁）
+        run: cd android && ./gradlew assembleDebug --no-daemon

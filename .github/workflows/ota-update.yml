@@ -1,0 +1,108 @@
+name: Publish OTA
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "OTA 更新说明"
+        required: false
+        default: "手动发布 production OTA"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# 串行推送：连续合并多个 PR 时取消旧的推送、保留最新一次
+# （推送内容均取自 main 最新状态，后推的天然覆盖先推的）
+concurrency:
+  group: ota-production
+  cancel-in-progress: true
+
+jobs:
+  native-guard:
+    name: 检查原生变更
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native_changed: ${{ steps.check.outputs.native_changed }}
+    steps:
+      - name: 核对合并 PR 的改动文件清单
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "native_changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          # 用 here-string 而非管道：GitHub Actions 的 bash 开了 pipefail，
+          # grep -q 提前退出会导致 printf 收 SIGPIPE、整个管道返回 141，
+          # 把"有原生变更"误判成没有。here-string 无此问题。
+          # assets/ 也视为原生变更：icon / splash / adaptiveIcon 在 prebuild
+          # 时写进原生工程，OTA 换不掉，改了必须重编 APK。
+          if grep -qE '^(package(-lock)?\.json|app\.config\.js|eas\.json|plugins/|assets/|android/|ios/)' <<< "$files"; then
+            echo "native_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  update:
+    name: 发布 production OTA
+    needs: native-guard
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && needs.native-guard.outputs.native_changed == 'false')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: TypeScript 检查
+        run: npx tsc --noEmit
+
+      - name: 发布 production OTA
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_MESSAGE: ${{ inputs.message }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            MESSAGE="Merge PR #${PR_NUMBER}: ${PR_TITLE}"
+          else
+            MESSAGE="${MANUAL_MESSAGE:-OTA update ${GITHUB_SHA::7}}"
+          fi
+
+          npx eas-cli@latest update \
+            --branch production \
+            --platform android \
+            --message "$MESSAGE" \
+            --non-interactive
+
+  skip-notice:
+    name: 含原生变更，已跳过 OTA
+    needs: native-guard
+    if: github.event.pull_request.merged == true && needs.native-guard.outputs.native_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 说明
+        run: |
+          echo "本次合并改动依赖清单 / app.config.js / 原生配置，代码指纹已变，推给旧安装包不会生效。"
+          echo "已跳过自动 OTA——需按发版流程构建新版本 APK 后才能送达用户。"
