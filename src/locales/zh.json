@@ -6,6 +6,44 @@
     "settings": "设置",
     "me": "我"
   },
+  "about": {
+    "title": "关于",
+    "help": {
+      "title": "使用帮助"
+    },
+    "privacy": {
+      "title": "隐私政策"
+    },
+    "permissions": {
+      "title": "权限说明",
+      "network": {
+        "title": "网络访问",
+        "description": "用于同步笔记数据到你配置的云端（腾讯云 COS / WebDAV）。"
+      },
+      "storage": {
+        "title": "存储空间",
+        "description": "用于在本地缓存笔记与图片，加快打开速度；缓存可随时在“缓存管理”中清理。"
+      }
+    },
+    "developer": {
+      "officialAccount": "微信公众号"
+    },
+    "officialAccount": {
+      "copied_title": "已复制",
+      "copied_message": "公众号名称已复制到剪贴板。"
+    },
+    "contact": {
+      "title": "联系邮箱",
+      "cta": "发送邮件",
+      "email_copied_title": "邮箱已复制",
+      "email_copied_message": "邮箱地址已复制到剪贴板。是否跳转发送邮件？",
+      "email_error": {
+        "title": "无法打开邮件应用",
+        "message": "请确认已安装邮箱客户端或手动复制邮箱地址。"
+      }
+    },
+    "linkError": "无法打开此链接"
+  },
   "todo": {
     "inProgress": "进行中",
     "todo": "未完成",

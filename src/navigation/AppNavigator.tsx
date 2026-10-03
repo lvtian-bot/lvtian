@@ -6,6 +6,8 @@ import { EditorScreen } from '../screens/EditorScreen';
 import { CloudRepoConfigScreen } from '../screens/CloudRepoConfigScreen'; // 新增
 import { FlashNoteConfigScreen } from '../screens/FlashNoteConfigScreen'; // 新增
 import { CacheManagerScreen } from '../screens/CacheManagerScreen'; // 新增
+import { AboutScreen } from '../screens/AboutScreen'; // 新增
+import { PermissionInfoScreen } from '../screens/PermissionInfoScreen'; // 新增
 import { MeScreen } from '../screens/MeScreen'; // 新增
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next'; // 新增
@@ -45,6 +47,24 @@ export const AppNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('settings.cacheManager')
+                }}
+            />
+            {/* 新增：关于页面 */}
+            <Stack.Screen
+                name="About"
+                component={AboutScreen}
+                options={{
+                    headerShown: true,
+                    title: t('about.title')
+                }}
+            />
+            {/* 新增：权限说明页面 */}
+            <Stack.Screen
+                name="PermissionInfo"
+                component={PermissionInfoScreen}
+                options={{
+                    headerShown: true,
+                    title: t('about.permissions.title')
                 }}
             />
             {/* 新增：我页面 */}

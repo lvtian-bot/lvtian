@@ -6,6 +6,44 @@
     "settings": "Settings",
     "me": "Me"
   },
+  "about": {
+    "title": "About",
+    "help": {
+      "title": "Help"
+    },
+    "privacy": {
+      "title": "Privacy Policy"
+    },
+    "permissions": {
+      "title": "Permissions",
+      "network": {
+        "title": "Network",
+        "description": "Used for syncing your notes to the configured cloud (Tencent Cloud COS / WebDAV)."
+      },
+      "storage": {
+        "title": "Storage",
+        "description": "Used for caching notes and images locally for faster access; the cache can be cleared in “Cache Manager” anytime."
+      }
+    },
+    "developer": {
+      "officialAccount": "WeChat Official Account"
+    },
+    "officialAccount": {
+      "copied_title": "Copied",
+      "copied_message": "The official account name has been copied to the clipboard."
+    },
+    "contact": {
+      "title": "Contact Email",
+      "cta": "Send Email",
+      "email_copied_title": "Email Copied",
+      "email_copied_message": "Email address copied to clipboard. Open mail app?",
+      "email_error": {
+        "title": "Cannot open email app",
+        "message": "Please ensure an email client is installed or copy the email address manually."
+      }
+    },
+    "linkError": "Cannot open this link"
+  },
   "todo": {
     "inProgress": "In Progress",
     "todo": "To Do",

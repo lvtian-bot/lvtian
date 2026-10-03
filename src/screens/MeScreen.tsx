@@ -110,6 +110,19 @@ export const MeScreen = () => {
                 <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
             </TouchableOpacity>
 
+            {/* 关于 - 独立小卡片 */}
+            <TouchableOpacity
+                style={styles.smallCard}
+                onPress={() => navigation.navigate('About')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.smallCardLeft}>
+                    <Icon name="information-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Text style={styles.smallCardTitle}>{t('about.title')}</Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+
             {/* Markdown主题选择模态框 */}
             <Modal
                 visible={themeModalVisible}
