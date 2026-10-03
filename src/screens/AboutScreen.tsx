@@ -157,7 +157,7 @@ export const AboutScreen = () => {
             <View style={styles.group}>
                 {renderRow(
                     'information-outline',
-                    'MDNote',
+                    t('about.appName'),
                     undefined,
                     <Text style={styles.rowValue}>v{appVersion}</Text>
                 )}
