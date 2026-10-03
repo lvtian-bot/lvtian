@@ -176,7 +176,16 @@
       "bucketConfig": "Bucket Configuration",
       "bucketName": "Bucket Name",
       "region": "Region",
-      "helpText": "Please ensure you have enabled COS service in Tencent Cloud Console and obtained the correct keys and bucket information."
+      "helpText": "Please ensure you have enabled COS service in Tencent Cloud Console and obtained the correct keys and bucket information.",
+      "webdav": {
+        "tabLabel": "Nutstore / WebDAV",
+        "recommendNutstore": "We recommend Nutstore. Please use an app-specific password.",
+        "configTitle": "WebDAV Settings",
+        "serverAddress": "Server Address",
+        "username": "Username",
+        "password": "Password",
+        "helpText": "WebDAV lets you sync your notes to any cloud storage supporting this protocol, such as Nutstore, Nextcloud, etc."
+      }
     },
     "saveCos": "Validate and Save COS Config",
     "saveFlashNote": "Save Flash Note Config",

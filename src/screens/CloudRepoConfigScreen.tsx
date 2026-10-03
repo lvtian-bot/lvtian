@@ -235,7 +235,7 @@ export const CloudRepoConfigScreen = () => {
                 {/* Tab Selector */}
                 <View style={styles.tabContainer}>
                     {renderTabButton('tencent', t('settings.cloudProvider.tencentCOS'), 'cloud-upload-outline' as any)}
-                    {renderTabButton('webdav', '坚果云 / WebDAV', 'server-network' as any)}
+                    {renderTabButton('webdav', t('settings.cloudProvider.webdav.tabLabel'), 'server-network' as any)}
                 </View>
 
                 {activeTab === 'tencent' ? (
@@ -256,12 +256,12 @@ export const CloudRepoConfigScreen = () => {
                         <View style={styles.card}>
                             <View style={styles.infoBox}>
                                 <Icon name="information-outline" size={20} color={theme.colors.primary} style={styles.infoIcon} />
-                                <Text style={styles.infoText}>推荐使用坚果云。请使用应用专用密码。</Text>
+                                <Text style={styles.infoText}>{t('settings.cloudProvider.webdav.recommendNutstore')}</Text>
                             </View>
-                            <Text style={styles.cardTitle}>WebDAV 配置</Text>
-                            {renderInput('服务器地址 (Server)', server, setServer, 'https://dav.jianguoyun.com/dav/', 'web')}
-                            {renderInput('账户 (Username)', username, setUsername, 'email@example.com', 'account')}
-                            {renderInput('密码 (Password)', password, setPassword, 'App Password', 'lock', true, showWebDavPassword, () => setShowWebDavPassword(!showWebDavPassword))}
+                            <Text style={styles.cardTitle}>{t('settings.cloudProvider.webdav.configTitle')}</Text>
+                            {renderInput(t('settings.cloudProvider.webdav.serverAddress'), server, setServer, 'https://dav.jianguoyun.com/dav/', 'web')}
+                            {renderInput(t('settings.cloudProvider.webdav.username'), username, setUsername, 'email@example.com', 'account')}
+                            {renderInput(t('settings.cloudProvider.webdav.password'), password, setPassword, 'App Password', 'lock', true, showWebDavPassword, () => setShowWebDavPassword(!showWebDavPassword))}
                         </View>
                     </>
                 )}
@@ -285,7 +285,7 @@ export const CloudRepoConfigScreen = () => {
                 </TouchableOpacity>
 
                 <Text style={styles.helpText}>
-                    {activeTab === 'tencent' ? t('settings.cloudProvider.helpText') : 'WebDAV 允许您将笔记同步到支持该协议的任何云存储服务，如坚果云、Nextcloud 等。'}
+                    {activeTab === 'tencent' ? t('settings.cloudProvider.helpText') : t('settings.cloudProvider.webdav.helpText')}
                 </Text>
             </ScrollView>
         </KeyboardAvoidingView>
