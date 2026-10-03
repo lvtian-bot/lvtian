@@ -159,7 +159,7 @@ module.exports = {
         },
         android: {
             package: "com.mdnote",
-            versionCode: 19,
+            versionCode: 20,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",

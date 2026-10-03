@@ -6,6 +6,45 @@
     "settings": "Settings",
     "me": "Me"
   },
+  "about": {
+    "title": "About",
+    "appName": "MDNote",
+    "help": {
+      "title": "Help"
+    },
+    "privacy": {
+      "title": "Privacy Policy"
+    },
+    "permissions": {
+      "title": "Permissions",
+      "network": {
+        "title": "Network",
+        "description": "Used for syncing your notes to the configured cloud (Tencent Cloud COS / WebDAV)."
+      },
+      "storage": {
+        "title": "Storage",
+        "description": "Used for caching notes and images locally for faster access; the cache can be cleared in “Cache Manager” anytime."
+      }
+    },
+    "developer": {
+      "officialAccount": "WeChat Official Account"
+    },
+    "officialAccount": {
+      "copied_title": "Copied",
+      "copied_message": "The official account name has been copied to the clipboard."
+    },
+    "contact": {
+      "title": "Contact Email",
+      "cta": "Send Email",
+      "email_copied_title": "Email Copied",
+      "email_copied_message": "Email address copied to clipboard. Open mail app?",
+      "email_error": {
+        "title": "Cannot open email app",
+        "message": "Please ensure an email client is installed or copy the email address manually."
+      }
+    },
+    "linkError": "Cannot open this link"
+  },
   "todo": {
     "inProgress": "In Progress",
     "todo": "To Do",
@@ -47,7 +86,13 @@
       "default": "Could not load files, please try again later.",
       "auth": "Cloud service authentication failed. Please check your keys in Settings.",
       "bucket": "The specified bucket was not found. Please check your configuration in Settings.",
-      "network": "Network error. Please check your internet connection."
+      "network": "Network error. Please check your internet connection.",
+      "downloadFailed": "Download failed"
+    },
+    "offlineMode": "Offline mode: only locally cached content is shown, which may be incomplete",
+    "offlineFileNotCached": "File is not cached and cannot be viewed offline",
+    "info": {
+      "notMarkdown": "Not a Markdown file, cannot be previewed"
     },
     "createNewFile": "Create New File",
     "enterFilename": "Enter filename (e.g. MyNote)",
@@ -87,7 +132,11 @@
     "send": "Send",
     "error": "Error",
     "confirm": "Confirm",
+    "retry": "Retry",
+    "notice": "Notice",
     "edit": "Edit",
+    "rename": "Rename",
+    "move": "Move",
     "delete": "Delete",
     "create": "Create",
     "draftFound": "Draft Found",
@@ -127,7 +176,16 @@
       "bucketConfig": "Bucket Configuration",
       "bucketName": "Bucket Name",
       "region": "Region",
-      "helpText": "Please ensure you have enabled COS service in Tencent Cloud Console and obtained the correct keys and bucket information."
+      "helpText": "Please ensure you have enabled COS service in Tencent Cloud Console and obtained the correct keys and bucket information.",
+      "webdav": {
+        "tabLabel": "Nutstore / WebDAV",
+        "recommendNutstore": "We recommend Nutstore. Please use an app-specific password.",
+        "configTitle": "WebDAV Settings",
+        "serverAddress": "Server Address",
+        "username": "Username",
+        "password": "Password",
+        "helpText": "WebDAV lets you sync your notes to any cloud storage supporting this protocol, such as Nutstore, Nextcloud, etc."
+      }
     },
     "saveCos": "Validate and Save COS Config",
     "saveFlashNote": "Save Flash Note Config",
@@ -175,6 +233,9 @@
   "fileItem": {
     "folder": "Folder",
     "kb": "KB"
+  },
+  "preview": {
+    "offlineMode": "Offline mode: showing the local version, which may not be the latest"
   },
   "flashNoteConfigScreen": {
     "saveSyncFailed": "Save or sync failed",

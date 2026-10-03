@@ -77,7 +77,7 @@ export const StatusBannerContainer: React.FC<StatusBannerContainerProps> = ({
                     message={msg}
                     type="warning"
                     actions={[
-                        { label: '重试', onPress: onResolveUseLocal || (() => { }) } // useLocal acts as retry for upload error
+                        { label: t('common.retry'), onPress: onResolveUseLocal || (() => { }) } // useLocal acts as retry for upload error
                     ]}
                 />
             </View>

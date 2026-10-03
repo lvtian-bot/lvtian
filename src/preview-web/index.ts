@@ -24,6 +24,25 @@ function sendMessage(type: string, payload?: unknown) {
     }
 }
 
+// --- Localized UI strings (set via SET_LOCALE from RN) ---
+type PreviewLocale = 'zh' | 'en';
+const PREVIEW_STRINGS: Record<PreviewLocale, { copy: string; copied: string; emptyFile: string; frontMatterTitle: string }> = {
+    zh: {
+        copy: '复制',
+        copied: '✓ 已复制',
+        emptyFile: '# 空文件<br/><br/>点击右上角编辑按钮开始编写',
+        frontMatterTitle: '元数据 (FrontMatter)',
+    },
+    en: {
+        copy: 'Copy',
+        copied: '✓ Copied',
+        emptyFile: '# Empty file<br/><br/>Tap the edit button on the top right to start writing',
+        frontMatterTitle: 'Metadata (FrontMatter)',
+    },
+};
+let previewLocale: PreviewLocale = 'zh';
+const ps = () => PREVIEW_STRINGS[previewLocale];
+
 // --- Markdown-it Configuration ---
 const md = new MarkdownIt({
     html: false,
@@ -51,7 +70,7 @@ const md = new MarkdownIt({
         return `<div class="code-block-wrapper">` +
             `<div class="code-block-header">` +
             `<span class="code-lang">${langDisplay}</span>` +
-            `<button class="code-copy-btn" data-code="${encodedCode}">复制</button>` +
+            `<button class="code-copy-btn" data-code="${encodedCode}">${ps().copy}</button>` +
             `</div>` +
             `<pre><code class="hljs ${validLang ? 'language-' + validLang : ''}">${highlighted}</code></pre>` +
             `</div>`;
@@ -114,7 +133,7 @@ function renderContent(rawContent: string) {
     if (!container) return;
 
     if (!rawContent || !rawContent.trim()) {
-        container.innerHTML = '<div style="color: #888; text-align: center; margin-top: 40px;"># 空文件<br/><br/>点击右上角编辑按钮开始编写</div>';
+        container.innerHTML = `<div style="color: #888; text-align: center; margin-top: 40px;">${ps().emptyFile}</div>`;
         return;
     }
 
@@ -126,7 +145,7 @@ function renderContent(rawContent: string) {
     const match = rawContent.match(frontMatterRegex);
     if (match) {
         const metadataContent = md.utils.escapeHtml(match[1].trim());
-        frontMatterHtml = `<div class="frontmatter-card"><div class="frontmatter-title">元数据 (FrontMatter)</div><pre style="margin:0;padding:0;background:transparent;"><code>${metadataContent}</code></pre></div>`;
+        frontMatterHtml = `<div class="frontmatter-card"><div class="frontmatter-title">${ps().frontMatterTitle}</div><pre style="margin:0;padding:0;background:transparent;"><code>${metadataContent}</code></pre></div>`;
         markdownText = rawContent.substring(match[0].length);
     }
 
@@ -153,8 +172,8 @@ document.addEventListener('click', function (e) {
             }
             sendMessage('COPY_CODE', code);
 
-            const originalText = copyBtn.textContent || '复制';
-            copyBtn.textContent = '✓ 已复制';
+            const originalText = copyBtn.textContent || ps().copy;
+            copyBtn.textContent = ps().copied;
             copyBtn.classList.add('copied');
             setTimeout(() => {
                 copyBtn.textContent = originalText;
@@ -190,6 +209,13 @@ function handleMessage(event: MessageEvent) {
             case 'SET_THEME': {
                 const theme = data.payload;
                 document.body.setAttribute('data-theme', theme === 'night' || theme === 'dark' ? 'dark' : 'light');
+                break;
+            }
+            case 'SET_LOCALE': {
+                const locale = data.payload;
+                if (locale === 'en' || locale === 'zh') {
+                    previewLocale = locale;
+                }
                 break;
             }
         }
