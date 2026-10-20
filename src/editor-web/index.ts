@@ -7,7 +7,7 @@ import { languages } from '@codemirror/language-data';
 import { oneDark } from '@codemirror/theme-one-dark';
 
 // --- Global Error Handling (Must be first) ---
-window.onerror = function (message, source, lineno, colno, error) {
+window.onerror = function (message, source, lineno, colno, _error) {
     const errorMsg = JSON.stringify({
         type: 'ERROR',
         payload: `JS Error: ${message} at ${source}:${lineno}:${colno}`
@@ -32,12 +32,12 @@ log('Editor script starting...');
 
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, HighlightStyle } from '@codemirror/language';
 import { yaml } from '@codemirror/lang-yaml';
-import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
+import { Decoration, ViewPlugin } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 
 // --- Bridge Protocol ---
 // Inbound: RN -> Web
-type InboundMessage =
+export type InboundMessage =
     | { type: 'SET_CONTENT'; payload: string }
     | { type: 'INITIAL_LOAD_DATA'; payload: { content: string; placeholder?: string; autoFocus?: boolean; theme?: 'light' | 'dark' } }
     | { type: 'GET_CONTENT' }

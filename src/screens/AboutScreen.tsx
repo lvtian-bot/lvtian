@@ -56,7 +56,7 @@ export const AboutScreen = () => {
                     onPress: async () => {
                         try {
                             await Linking.openURL('weixin://');
-                        } catch (e) {
+                        } catch (_e) {
                             // ignore: 未安装微信时不做处理
                         }
                     },
@@ -77,7 +77,7 @@ export const AboutScreen = () => {
                     onPress: async () => {
                         try {
                             await Linking.openURL(`mailto:${CONTACT_EMAIL}`);
-                        } catch (err) {
+                        } catch (_err) {
                             Alert.alert(
                                 t('about.contact.email_error.title'),
                                 t('about.contact.email_error.message')
