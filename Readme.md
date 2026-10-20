@@ -57,12 +57,12 @@
 
 | 特性 | 描述 | 技术实现 |
 |------|------|----------|
-| **☁️ 云优先 & 本地加速** | 云端为唯一真相来源，本地缓存加速访问 | 腾讯云 COS + WebDAV，策略模式设计 |
+| **☁️ 云优先 & 本地加速** | 云端为唯一真相来源，本地缓存加速访问 | WebDAV 协议，策略模式设计 |
 | **⚡ 闪念笔记 (Flash Note)** | 快速捕捉想法的时间线笔记 | `FlashNoteService` + 三阶段同步机制 |
-| **✅ 智能待办 (Smart Todo)** | 基于 Markdown 的轻量级任务管理 | `TodoParser` + 滑动日历选择器 |
+| **✅ 待办管理 (Todo)** | 任务管理模块 | 服务端驱动的独立待办体系（移动端就绪引导态） |
 | **🤖 AI 助手 (AI Agent)** | 集成大模型对话能力，辅助整理笔记 | `LLMService` + 流式对话 |
 | **🔄 智能同步** | 乐观锁 + 三路合并冲突检测 | ETag 机制 + Write-Through 策略 |
-| **📱 跨平台** | Android/iOS 统一体验 | Expo SDK 54 + React Native 0.81.5 |
+| **📱 跨平台** | Android/iOS 统一体验 | Expo SDK 57 + React Native 0.86.3 |
 
 ### 2.3 用户核心场景
 
@@ -70,13 +70,13 @@
 用户打开应用
     ↓
 【场景 A: 快速记录】
-    → 点击 "闪念" Tab → 输入想法 → 自动同步到云端
+    → 启动默认进入 "闪念" Tab → 输入想法 → 自动同步到 WebDAV 云端
 
 【场景 B: 浏览笔记】
-    → 点击 "笔记" Tab → 查看云端文件列表 → 点击文件 → 按需下载 → 预览/编辑
+    → 点击 "系统文件" Tab → 查看云端文件列表 → 点击文件 → 按需下载 → 预览/编辑
 
 【场景 C: 管理待办】
-    → 点击 "待办" → 滑动日历选择日期 → 标记完成状态 → 自动同步
+    → 点击 "待办" Tab → 查看服务端就绪引导态
 
 【场景 D: AI 辅助】
     → 在任意笔记页 → 打开 AI 侧栏 → 对话整理内容
@@ -118,8 +118,7 @@
     "react-native-keychain": "密钥链存储 (旧方案，迁移中)"
   },
   "云服务": {
-    "cos-js-sdk-v5": "腾讯云 COS SDK",
-    "axios": "HTTP 客户端 (WebDAV)"
+    "WebDAV": "WebDAV 协议支持"
   },
   "编辑器": {
     "codemirror": "Markdown 编辑器核心",
@@ -140,20 +139,18 @@
 ### 4.1 目录结构树
 
 ```
-D:/MDNote/
+MDNote/
 ├── 📄 App.tsx                          # 应用主入口 (Provider 初始化)
 ├── 📄 index.js                         # React Native 入口点
 ├── 📄 app.config.js                    # Expo 配置 + 自定义插件
-├── 📄 GEMINI.md                        # 本文档 (AI 工作指南)
-├── 📄 CLAUDE.md                        # Claude 特定工作指南
+├── 📄 AGENTS.md                        # 工作规范与项目定义
 │
 ├── 📁 src/                             # 源代码根目录
 │   ├── 📄 i18n.ts                      # 国际化配置 (优先加载)
 │   │
 │   ├── 📁 services/                    # ⭐ 核心业务服务 (业务逻辑集中地)
 │   │   ├── CloudService.ts             # 云服务抽象接口 (ICloudProvider)
-│   │   ├── TencentCOSProvider.ts       # 腾讯云 COS 实现
-│   │   ├── WebDavProvider.ts           # WebDAV 协议实现 (坚果云)
+│   │   ├── WebDavProvider.ts           # WebDAV 协议实现 (坚果云等)
 │   │   ├── FileSystemService.ts        # 文件系统封装 (唯一 IO 入口)
 │   │   ├── FlashNoteService.ts         # 闪念笔记业务逻辑
 │   │   ├── SyncService.ts              # 同步服务 (上传/下载/冲突)
@@ -189,7 +186,6 @@ D:/MDNote/
 │   │   ├── StatusBanner.tsx            # 状态横幅组件
 │   │   ├── StatusBannerContainer.tsx   # 横幅容器 (优先级管理)
 │   │   ├── AISidebar.tsx               # AI 功能侧栏
-│   │   ├── DatePickerModal.tsx         # 日期选择器
 │   │   └── ...                         # 其他 UI 组件
 │   │
 │   ├── 📁 hooks/                       # 自定义 Hooks
@@ -199,13 +195,10 @@ D:/MDNote/
 │   ├── 📁 utils/                       # 工具函数
 │   │   ├── theme.ts                    # 主题配置
 │   │   ├── pathUtils.ts                # 路径处理
-│   │   ├── mergeUtils.ts               # 三路合并工具
-│   │   ├── cosSignature.ts             # COS 签名工具
-│   │   └── TodoParser.ts               # Todo 解析器
+│   │   └── mergeUtils.ts               # 三路合并工具
 │   │
 │   ├── 📁 types/                       # TypeScript 类型定义
-│   │   ├── navigation.ts               # 导航类型
-│   │   └── todo.ts                     # Todo 类型
+│   │   └── navigation.ts               # 导航类型
 │   │
 │   ├── 📁 locales/                     # 国际化翻译
 │   │   ├── zh.json                     # 中文 (默认)
@@ -215,14 +208,12 @@ D:/MDNote/
 │       └── events.ts                   # 事件常量
 │
 ├── 📁 docs/                            # ⭐ 项目文档 (AI 必读)
-│   ├── FlashScreen_TodoSreen_logic.md  # 闪念/待办三阶段同步逻辑
-│   ├── PreviewScreen_logic.md          # 预览页状态判断矩阵
-│   ├── BrowerScreen_cloud_first.md     # 云优先架构原则
-│   └── editor-implementation-guide.md  # 编辑器实现指南
+│   ├── 技术架构.md                     # 技术架构总纲
+│   └── ...                             # 各模块专题文档
 │
 ├── 📁 android/                         # Android 原生代码 (Prebuild 生成)
 ├── 📁 plugins/                         # Expo 配置插件
-├── 📁 editor-bundler/                  # CodeMirror 编辑器独立构建工程
+├── 📁 src/editor-web/                  # CodeMirror 编辑器独立构建工程
 └── 📁 assets/                          # 静态资源
 ```
 
@@ -232,17 +223,15 @@ D:/MDNote/
 
 | 需要修改的功能 | 定位到文件 | 关键位置/说明 |
 |---------------|-----------|--------------|
-| **云同步逻辑** | `CloudService.ts` | 第 40-180 行，`ICloudProvider` 接口定义 |
-| **冲突检测策略** | `FlashNoteService.ts` | 第 89 行起，三路合并逻辑 |
-| **闪念格式解析** | `TimelineScreen.tsx` | 第 156 行起，时间戳正则匹配 |
-| **待办解析器** | `TodoParser.ts` | 完整文件，Markdown Todo 语法解析 |
-| **配置新云服务** | `TencentCOSProvider.ts` / `WebDAVProvider.ts` | 实现 `ICloudProvider` 接口 |
-| **主题颜色** | `theme.ts` | 第 12-45 行，颜色常量定义 |
-| **上传重试机制** | `useSyncStore.ts` | 第 67 行起，队列管理逻辑 |
-| **文件元数据** | `useFileMetadataStore.ts` | 完整文件，ETag 和 uploadState 管理 |
+| **云同步逻辑** | `CloudService.ts` | `ICloudProvider` 接口与策略调度 |
+| **冲突检测策略** | `FlashNoteService.ts` | 闪念时间线三路合并逻辑 |
+| **闪念时间格式** | `FlashNoteService.ts` | 严守 `## YYYY-MM-DD HH:mm:ss` 规范 |
+| **配置云存储** | `WebDavProvider.ts` | 实现 `ICloudProvider` WebDAV 接口 |
+| **主题颜色** | `theme.ts` | 颜色常量定义 |
+| **上传重试机制** | `useSyncStore.ts` | 队列管理逻辑 |
+| **文件元数据** | `useFileMetadataStore.ts` | ETag 和 uploadState 管理 |
 | **导航路由** | `navigation.ts` (types) | 导航参数类型定义 |
 | **状态横幅优先级** | `StatusBannerContainer.tsx` | Banner 显示优先级逻辑 |
-| **AI 对话流** | `LLMService.ts` | 流式对话实现 |
 | **国际化文本** | `locales/zh.json` | 中文翻译键值对 |
 
 ### 4.3 导航结构图
@@ -476,74 +465,9 @@ async function addFlashNote(content: string) {
 
 ---
 
-### 5.3 智能待办 (Smart Todo) 解析逻辑
+### 5.3 待办管理 (Todo) 逻辑说明
 
-#### Markdown Todo 语法
-
-MDNote 支持以下 Todo 格式：
-
-```markdown
-- [ ] 未完成的任务
-- [x] 已完成的任务
-- [X] 已完成 (大写 X 也支持)
-```
-
-#### 日期关联
-
-待办可以通过特殊格式关联到特定日期：
-
-```markdown
-## 2025-12-24
-
-- [ ] 今天要做的事情
-- [x] 已完成的任务
-
-## 2025-12-25
-
-- [ ] 明天要做的事情
-```
-
-#### TodoParser 解析流程
-
-```typescript
-// utils/TodoParser.ts 核心逻辑伪代码
-interface TodoItem {
-  id: string;
-  content: string;
-  completed: boolean;
-  date: string | null; // "2025-12-24" 或 null
-  lineNumber: number;
-}
-
-function parseTodos(markdownContent: string): TodoItem[] {
-  const lines = markdownContent.split('\n');
-  const todos: TodoItem[] = [];
-  let currentDate: string | null = null;
-
-  lines.forEach((line, index) => {
-    // 检测日期标题
-    const dateMatch = line.match(/^##\s+(\d{4}-\d{2}-\d{2})/);
-    if (dateMatch) {
-      currentDate = dateMatch[1];
-      return;
-    }
-
-    // 检测 Todo 项
-    const todoMatch = line.match(/^-\s+\[([ xX])\]\s+(.+)$/);
-    if (todoMatch) {
-      todos.push({
-        id: `todo-${index}`,
-        content: todoMatch[2],
-        completed: todoMatch[1].toLowerCase() === 'x',
-        date: currentDate,
-        lineNumber: index
-      });
-    }
-  });
-
-  return todos;
-}
-```
+> **架构演进说明**：早期基于 Markdown Checkbox 的本地待办解析器（`TodoParser.ts`）与滑动日历已退役清理。待办模块正重构为服务端驱动的独立任务系统，当前移动端展示就绪引导态。
 
 ---
 
@@ -1598,12 +1522,11 @@ await FileSystem.readAsStringAsync(filePath);
 | 错误现象 | 可能原因 | 解决方案 | 相关文件 |
 |---------|---------|---------|---------|
 | **同步冲突无法解决** | 智能合并失败，存在真正的内容冲突 | 检查 `FileMetadataStore` 中的 `uploadState` 是否为 `conflict-failed`；使用手动解决选项 (使用云端/使用本地/存为副本) | `PreviewScreen.tsx:120`<br>`FlashNoteService.ts:89` |
-| **上传一直失败** | 网络问题或云服务配置错误 | ① 检查网络连接；② 检查 `useSettingsStore` 中的云配置 (bucket, region)；③ 检查 `expo-secure-store` 中的凭证是否正确 | `CloudService.ts:40`<br>`TencentCOSProvider.ts:120` |
-| **WebView 编辑器无响应** | JavaScript 加载失败或通信中断 | ① 检查 `assets/codemirror.bundle.js` 是否存在；② 查看 WebView console 消息 (使用 `onMessage` 监听)；③ 重新构建编辑器 (`cd editor-bundler && npm run build`) | `EditorScreen.tsx:200`<br>`editor-bundler/src/index.js` |
+| **上传一直失败** | 网络问题或云服务配置错误 | ① 检查网络连接；② 检查 `useSettingsStore` 中的 WebDAV 配置；③ 检查 `expo-secure-store` 中的凭证是否正确 | `CloudService.ts:40`<br>`WebDavProvider.ts` |
+| **WebView 编辑器无响应** | JavaScript 加载失败或通信中断 | ① 检查 `src/editor-web/editorHtml.ts` 是否生成；② 查看 WebView console 消息 (使用 `onMessage` 监听)；③ 重新构建编辑器 (`npm run build:editor`) | `EditorScreen.tsx`<br>`src/editor-web/` |
 | **Android 构建失败** | Prebuild 插件配置错误 | ① 检查 `app.config.js` 中的 plugins 配置；② 清除 `android/` 目录并重新运行 `npx expo prebuild`；③ 查看错误日志定位插件问题 | `app.config.js`<br>`plugins/` |
 | **文件列表为空** | 云服务未配置或网络问题 | ① 检查 `cloudService.isConfigured()` 返回值；② 检查 `useFileListStore` 中的缓存是否损坏；③ 清除缓存重新拉取 (`AsyncStorage.removeItem('file-list-cache')`) | `NoteScreen.tsx:80`<br>`CloudService.ts:150` |
 | **闪念无法保存** | 文件路径配置错误 | 检查 `useSettingsStore` 中的 `flashNoteConfig.path` 和 `flashNoteConfig.filename`；确认目录存在 (`fsService.exists()`) | `FlashNoteService.ts:30`<br>`FlashNoteConfigScreen.tsx` |
-| **待办解析失败** | Markdown 格式不符合规范 | 检查 Todo 格式是否为 `- [ ]` 或 `- [x]`；检查日期标题格式是否为 `## YYYY-MM-DD` | `TodoParser.ts:50`<br>`TodoScreen.tsx:120` |
 | **AI 对话无响应** | API 配置错误或网络超时 | ① 检查 `useAIStore` 中的 `apiKey` 和 `baseURL`；② 查看网络请求日志；③ 确认 API 提供商状态 | `LLMService.ts:100`<br>`AIConfigScreen.tsx` |
 | **应用启动后状态丢失** | Store 持久化失败 | ① 检查 AsyncStorage 权限；② 查看 Store 的 `hasHydrated` 状态；③ 清除 AsyncStorage 重新初始化 | `useSettingsStore.ts:20`<br>`App.tsx:50` |
 | **文件下载失败** | 云端文件不存在或权限问题 | ① 使用 `cloudService.headFile()` 检查文件是否存在；② 检查云服务凭证权限；③ 查看云服务控制台日志 | `SyncService.ts:200`<br>`PreviewScreen.tsx:150` |

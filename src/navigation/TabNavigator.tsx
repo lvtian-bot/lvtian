@@ -152,6 +152,7 @@ export const TabNavigator = () => {
         <Tab.Navigator
             tabBarPosition="bottom"
             initialRouteName="Flash"
+            backBehavior="initialRoute"
             initialLayout={{ width: 0 }}
             screenOptions={{
                 swipeEnabled: false,
