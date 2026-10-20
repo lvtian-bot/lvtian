@@ -25,12 +25,13 @@ concurrency:
 
 jobs:
   native-guard:
-    name: 检查原生变更
+    name: 检查原生与客户端代码变更
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       native_changed: ${{ steps.check.outputs.native_changed }}
+      app_code_changed: ${{ steps.check.outputs.app_code_changed }}
     steps:
       - name: 核对合并 PR 的改动文件清单
         id: check
@@ -39,6 +40,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "native_changed=false" >> "$GITHUB_OUTPUT"
+            echo "app_code_changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
@@ -53,10 +55,18 @@ jobs:
             echo "native_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # 仅当改动包含安卓客户端应用代码（src/、App.tsx、index.js、scripts/、babel.config.js、metro.config.js 等）时才触发 OTA 发布
+          # 纯文档（docs/、*.md）、独立服务端代码（server/）等变更自动跳过安卓客户端热更新
+          if grep -qE '^(src/|App\.tsx|index\.js|scripts/|babel\.config\.js|metro\.config\.js)' <<< "$files"; then
+            echo "app_code_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_code_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   update:
     name: 发布 production OTA
     needs: native-guard
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && needs.native-guard.outputs.native_changed == 'false')
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && needs.native-guard.outputs.native_changed == 'false' && needs.native-guard.outputs.app_code_changed == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -106,3 +116,15 @@ jobs:
         run: |
           echo "本次合并改动依赖清单 / app.config.js / 原生配置，代码指纹已变，推给旧安装包不会生效。"
           echo "已跳过自动 OTA——需按发版流程构建新版本 APK 后才能送达用户。"
+
+  skip-no-app-code:
+    name: 无客户端代码变更，已跳过 OTA
+    needs: native-guard
+    if: github.event.pull_request.merged == true && needs.native-guard.outputs.native_changed == 'false' && needs.native-guard.outputs.app_code_changed == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 说明
+        run: |
+          echo "本次合并未包含安卓客户端代码变更（可能仅改动了文档、服务端或非客户端配置文件）。"
+          echo "已跳过自动 OTA 发布，无需向用户推送更新包。"

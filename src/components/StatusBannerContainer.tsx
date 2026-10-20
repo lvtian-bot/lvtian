@@ -26,12 +26,12 @@ interface StatusBannerContainerProps {
 
 export const StatusBannerContainer: React.FC<StatusBannerContainerProps> = ({
     syncStatus,
-    conflictType,
+    conflictType: _conflictType,
     checkSync,
     onResolveUseCloud,
     onResolveUseLocal,
     onResolveSaveCopy,
-    hasFailedUpload,
+    hasFailedUpload: _hasFailedUpload,
     conflictedFiles = [],
     uploadErrorFiles = []
 }) => {

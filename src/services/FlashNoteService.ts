@@ -5,8 +5,6 @@ import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
 import { syncService } from './SyncService';
-import { TodoItem, TodoStatus } from '../types/todo';
-import { TodoParser } from '../utils/TodoParser';
 import * as Network from 'expo-network';
 import {
     FLASH_NOTES_UPDATED_EVENT,
@@ -21,11 +19,7 @@ export interface FlashNote {
     filePath: string; // Added source file path
 }
 
-// TodoStatus and TodoItem are now imported from ../types/todo
-export type { TodoItem, TodoStatus };
-
 const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
-// TODO_REGEX is now handled by TodoParser
 
 // Re-export events for backward compatibility
 export { FLASH_NOTES_UPDATED_EVENT, SHARE_RECEIVED_EVENT, BATCH_SYNC_STATUS_CHANGED_EVENT };
@@ -106,15 +100,7 @@ class FlashNoteService {
         return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     }
 
-    private getDateString(): string {
-        const now = new Date();
-        const pad = (n: number) => n.toString().padStart(2, '0');
-        return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    }
-
     parseNotes(content: string, filePath: string = ''): FlashNote[] {
-        // const { flashNoteConfig } = useSettingsStore.getState();
-
         const lines = content.split('\n');
         const parsedNotes: FlashNote[] = [];
         let currentNote: Partial<FlashNote> = {};
@@ -123,7 +109,6 @@ class FlashNoteService {
             const match = line.match(HEADER_REGEX);
             if (match) {
                 if (currentNote.id) {
-                    // Only remove trailing whitespace/empty lines, preserving suffix and content
                     currentNote.content = currentNote.content!.replace(/\s+$/, '');
                     parsedNotes.push(currentNote as FlashNote);
                 }
@@ -131,36 +116,17 @@ class FlashNoteService {
                 currentNote = { id: timestamp, timestamp: timestamp, content: '', filePath: filePath };
             } else {
                 if (currentNote.id) {
-                    // Append line, preserving content
                     currentNote.content += line + '\n';
                 }
             }
         });
         if (currentNote.id) {
-            // Only remove trailing whitespace/empty lines
             currentNote.content = currentNote.content!.replace(/\s+$/, '');
             parsedNotes.push(currentNote as FlashNote);
         }
 
-        // console.log(`Parsed ${parsedNotes.length} notes from ${filePath}. Latest: ${parsedNotes[0]?.timestamp}`);
         parsedNotes.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
         return parsedNotes;
-    }
-
-    extractTodos(notes: FlashNote[]): TodoItem[] {
-        const todos: TodoItem[] = [];
-
-        notes.forEach(note => {
-            const lines = note.content.split('\n');
-            lines.forEach((line, index) => {
-                const todoItem = TodoParser.parse(line, note.id, note.filePath, index);
-                if (todoItem) {
-                    todos.push(todoItem);
-                }
-            });
-        });
-
-        return todos;
     }
 
     async addNote(content: string): Promise<FlashNote | null> {
@@ -223,125 +189,6 @@ class FlashNoteService {
         }
     }
 
-    async updateTodoStatus(noteId: string, rawLine: string, newStatus: TodoStatus, filePath?: string): Promise<void> {
-        const targetPath = filePath || this.getFlashNotePath();
-        const currentContent = await fsService.readFile(targetPath);
-
-        // Find the note block
-        const noteBlocks = currentContent.split(/(?=^##\s)/m).filter(b => b.trim());
-        let noteFound = false;
-
-        const newBlocks = noteBlocks.map(block => {
-            if (block.trim().startsWith(`## ${noteId}`)) {
-                noteFound = true;
-
-                const lines = block.split('\n');
-                let replaced = false;
-                const newLines = lines.map((line, index) => {
-                    // Try exact match or trimmed match
-                    if (!replaced && (line === rawLine || line.trim() === rawLine.trim())) {
-                        const todoItem = TodoParser.parse(line, noteId, targetPath, index);
-                        if (todoItem) {
-                            replaced = true;
-                            todoItem.status = newStatus;
-
-                            const today = this.getDateString();
-
-                            if (newStatus === 'done') {
-                                todoItem.completedAt = today;
-                                todoItem.canceledAt = undefined;
-                            } else if (newStatus === 'canceled') {
-                                todoItem.canceledAt = today;
-                                todoItem.completedAt = undefined;
-                            } else {
-                                // Reset dates if moving back to todo/in-progress
-                                todoItem.completedAt = undefined;
-                                todoItem.canceledAt = undefined;
-                            }
-
-                            return TodoParser.serialize(todoItem);
-                        }
-                    }
-                    return line;
-                });
-
-                if (replaced) {
-                    return newLines.join('\n');
-                }
-            }
-            return block;
-        });
-
-        if (noteFound) {
-            await this.saveAndSync(targetPath, newBlocks.join(''));
-        }
-    }
-
-    async updateTodoContent(noteId: string, rawLine: string, newContentText: string, filePath?: string): Promise<void> {
-        const targetPath = filePath || this.getFlashNotePath();
-        const currentContent = await fsService.readFile(targetPath);
-
-        const noteBlocks = currentContent.split(/(?=^##\s)/m).filter(b => b.trim());
-        let noteFound = false;
-
-        const newBlocks = noteBlocks.map(block => {
-            if (block.trim().startsWith(`## ${noteId}`)) {
-                noteFound = true;
-
-                const lines = block.split('\n');
-                let replaced = false;
-                const newLines = lines.map((line, index) => {
-                    if (!replaced && (line === rawLine || line.trim() === rawLine.trim())) {
-                        const todoItem = TodoParser.parse(line, noteId, targetPath, index);
-                        if (todoItem) {
-                            replaced = true;
-
-                            // Split input which might contain multiple lines (from multiline edit)
-                            const inputLines = newContentText.split('\n');
-
-                            const resultLines = inputLines.map((lineContent, idx) => {
-                                // Create a dummy line to parse tags from the input text (which includes suffix tags)
-                                const dummyLine = `- [ ] ${lineContent}`;
-                                const parsedNew = TodoParser.parse(dummyLine, '', '', 0);
-
-                                if (idx === 0) {
-                                    // First line updates the EXISTING item
-                                    if (parsedNew) {
-                                        todoItem.content = parsedNew.content;
-                                        todoItem.priority = parsedNew.priority;
-                                        todoItem.dueAt = parsedNew.dueAt;
-                                        // Preserve completedAt/canceledAt unless needed (omitted here as typically content edit doesn't change status)
-                                    } else {
-                                        todoItem.content = lineContent;
-                                    }
-                                    return TodoParser.serialize(todoItem);
-                                } else {
-                                    // Subsequent lines become NEW independent todos
-                                    // They start as 'todo' status (from dummy string '- [ ]')
-                                    if (parsedNew) {
-                                        return TodoParser.serialize(parsedNew);
-                                    }
-                                    return dummyLine;
-                                }
-                            });
-
-                            return resultLines.join('\n');
-
-
-                        }
-                    }
-                    return line;
-                });
-                return newLines.join('\n');
-            }
-            return block;
-        });
-
-        if (noteFound) {
-            await this.saveAndSync(targetPath, newBlocks.join(''));
-        }
-    }
-
     async deleteNote(noteId: string): Promise<void> {
         const filePath = this.getFlashNotePath();
         const currentContent = await fsService.readFile(filePath);
@@ -385,14 +232,12 @@ class FlashNoteService {
             if (!metadata) continue;
 
             if (metadata.uploadState === 'failed') {
-                // Simple retry
                 console.log(`[FlashNoteService] Retrying failed upload for ${filePath}`);
                 const success = await syncService.uploadFile(filePath);
                 if (!success) {
                     uploadErrors.push(filePath);
                 }
             } else if (metadata.uploadState === 'conflict-failed') {
-                // Optimistic lock failure -> Try Smart Merge immediately
                 console.log(`[FlashNoteService] Optimistic lock failure for ${filePath} -> Attempting Smart Merge`);
                 const mergeSuccess = await syncService.syncFile(filePath, { smartMerge: true });
                 if (mergeSuccess !== 'synced') {
@@ -454,11 +299,9 @@ class FlashNoteService {
 
         try {
             // 3. Stage 2: Retry Local Failures
-            // Check known local files for failure states
             const { uploadErrors: retryErrors, conflicts: retryConflicts } = await this.retryLocalFailures(localFiles);
 
             // 4. Stage 3: Full Sync & Conflict Detection
-            // Fetch Cloud Files — only list history prefix when historyFolderPath is configured
             let prefix = scanDirPath;
             if (prefix && !prefix.endsWith('/')) prefix += '/';
 
@@ -497,7 +340,6 @@ class FlashNoteService {
                 return false;
             };
 
-            // Use enhanced syncBatchFiles (no extra HEAD requests, returns specific conflict files)
             const batchResults = await syncService.syncBatchFiles(cloudFiles, fileFilter, {
                 useShadow: true,
                 localFiles: localFiles,

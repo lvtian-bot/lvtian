@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { DeviceEventEmitter } from 'react-native';
 import { flashNoteService, FLASH_NOTES_UPDATED_EVENT, BATCH_SYNC_STATUS_CHANGED_EVENT } from '../services/FlashNoteService';
 import { fsService } from '../services/FileSystemService';
-import { cloudService, CLOUD_INIT_COMPLETED_EVENT, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
+import { CLOUD_INIT_COMPLETED_EVENT, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { SyncStatus, ConflictType } from '../services/SyncService';
 
 
@@ -37,7 +37,7 @@ export function useFlashNoteList<T extends { id: string }>({
 
     // Sync State
     const [syncStatus, setSyncStatus] = useState<SyncStatus>('checking');
-    const [conflictType, setConflictType] = useState<ConflictType>(null);
+    const [conflictType] = useState<ConflictType>(null);
     const [isSyncing, setIsSyncing] = useState(false);
     const [conflictedFiles, setConflictedFiles] = useState<string[]>([]);
     const [uploadErrorFiles, setUploadErrorFiles] = useState<string[]>([]);

@@ -18,24 +18,17 @@ export interface CloudFileItem {
     isDirectory?: boolean;
 }
 
-import { TencentCOSProvider } from './TencentCOSProvider';
 import { WebDavProvider } from './WebDavProvider';
 import * as SecureStore from 'expo-secure-store';
-// Note: We avoid importing useSettingsStore directly in top-level to avoid cycles if store imports services.
-// But CloudService -> Provider -> ... -> generic.
-// Better to pass config to init method or read from SecureStore + async storage manually if needed.
-// Actually, accessing store.getState() inside a method is usually fine.
 import { useSettingsStore } from '../store/useSettingsStore';
 import { UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT } from '../constants/events';
 
 // Re-export events for backward compatibility
 export { UPLOAD_COMPLETED_EVENT, CLOUD_INIT_COMPLETED_EVENT };
 
-
 class CloudService {
     private provider: ICloudProvider | null = null;
     private _isInitialized: boolean = false;
-
 
     setProvider(provider: ICloudProvider | null) {
         this.provider = provider;
@@ -54,18 +47,7 @@ class CloudService {
 
             console.log('[CloudService] Initializing provider:', type);
 
-            if (type === 'tencent') {
-                const secretId = await SecureStore.getItemAsync('COS_SECRET_ID');
-                const secretKey = await SecureStore.getItemAsync('COS_SECRET_KEY');
-                const { bucket, region } = store.cosConfig;
-
-                if (secretId && secretKey && bucket && region) {
-                    this.setProvider(new TencentCOSProvider(secretId, secretKey, bucket, region));
-                } else {
-                    console.warn('[CloudService] Tencent COS config missing');
-                    this.setProvider(null);
-                }
-            } else if (type === 'webdav') {
+            if (type === 'webdav') {
                 const password = await SecureStore.getItemAsync('WEBDAV_PASSWORD');
                 const { server, username } = store.webDavConfig;
 

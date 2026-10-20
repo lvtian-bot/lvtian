@@ -1,23 +1,67 @@
 import React from 'react';
+import { TouchableOpacity, StyleSheet } from 'react-native';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 
+import { ChatScreen } from '../screens/ChatScreen';
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
+import { MomentsScreen } from '../screens/MomentsScreen';
 import { NoteNavigator } from './NoteNavigator';
-import { MeScreen } from '../screens/MeScreen';
 import { MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
 
-// 1. Create Stacks for screens that need headers (Flash, Todo, Me)
-// This is necessary because MaterialTopTabs does not provide a built-in header.
+const styles = StyleSheet.create({
+    settingsButton: {
+        marginRight: 16,
+    },
+});
+
+const SettingsButton = () => {
+    const navigation = useNavigation<any>();
+    return (
+        <TouchableOpacity
+            onPress={() => navigation.navigate('Me')}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={styles.settingsButton}
+            activeOpacity={0.7}
+        >
+            <Icon name="settings" size={22} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
+    );
+};
+
+const renderSettingsButton = () => <SettingsButton />;
+
+const ChatStack = createNativeStackNavigator();
 const FlashStack = createNativeStackNavigator();
 const TodoStack = createNativeStackNavigator();
-const MeStack = createNativeStackNavigator();
+const MomentsStack = createNativeStackNavigator();
+
+const ChatStackScreen = () => {
+    const { t } = useTranslation();
+    return (
+        <ChatStack.Navigator
+            screenOptions={{
+                headerTitleAlign: 'center',
+                headerShadowVisible: false,
+                headerStyle: { backgroundColor: theme.colors.background },
+                headerRight: renderSettingsButton,
+            }}
+        >
+            <ChatStack.Screen
+                name="ChatScreen"
+                component={ChatScreen}
+                options={{ title: t('tabs.chat') }}
+            />
+        </ChatStack.Navigator>
+    );
+};
 
 const FlashStackScreen = () => {
     const { t } = useTranslation();
@@ -46,6 +90,7 @@ const TodoStackScreen = () => {
                 headerTitleAlign: 'center',
                 headerShadowVisible: false,
                 headerStyle: { backgroundColor: theme.colors.background },
+                headerRight: renderSettingsButton,
             }}
         >
             <TodoStack.Screen
@@ -57,30 +102,32 @@ const TodoStackScreen = () => {
     );
 };
 
-const MeStackScreen = () => {
+const MomentsStackScreen = () => {
     const { t } = useTranslation();
     return (
-        <MeStack.Navigator
+        <MomentsStack.Navigator
             screenOptions={{
                 headerTitleAlign: 'center',
                 headerShadowVisible: false,
                 headerStyle: { backgroundColor: theme.colors.background },
+                headerRight: renderSettingsButton,
             }}
         >
-            <MeStack.Screen
-                name="MeScreen"
-                component={MeScreen}
-                options={{ title: t('tabs.me') }}
+            <MomentsStack.Screen
+                name="MomentsScreen"
+                component={MomentsScreen}
+                options={{ title: t('tabs.moments') }}
             />
-        </MeStack.Navigator>
+        </MomentsStack.Navigator>
     );
 };
 
-
 const Tab = createMaterialTopTabNavigator<MainTabParamList>();
 
-// Icons
-// MaterialTopTabs passes { focused, color } (no size by default)
+const ChatIcon = ({ color }: { color: string }) => (
+    <Icon name="chat" color={color} size={24} />
+);
+
 const FlashIcon = ({ color }: { color: string }) => (
     <Icon name="flash-on" color={color} size={24} />
 );
@@ -89,14 +136,13 @@ const TodoIcon = ({ color }: { color: string }) => (
     <Icon name="task-alt" color={color} size={24} />
 );
 
-const NoteIcon = ({ color }: { color: string }) => (
+const MomentsIcon = ({ color }: { color: string }) => (
+    <Icon name="dynamic-feed" color={color} size={24} />
+);
+
+const FilesIcon = ({ color }: { color: string }) => (
     <Icon name="folder" color={color} size={24} />
 );
-
-const MeIcon = ({ color }: { color: string }) => (
-    <Icon name="person" color={color} size={24} />
-);
-
 
 export const TabNavigator = () => {
     const { t } = useTranslation();
@@ -105,26 +151,27 @@ export const TabNavigator = () => {
     return (
         <Tab.Navigator
             tabBarPosition="bottom"
+            initialRouteName="Flash"
+            backBehavior="initialRoute"
             initialLayout={{ width: 0 }}
             screenOptions={{
-                swipeEnabled: false, // Disable swipe
-                animationEnabled: false, // Disable animation on click
+                swipeEnabled: false,
+                animationEnabled: false,
                 tabBarShowIcon: true,
                 tabBarShowLabel: true,
-                tabBarIndicatorStyle: { height: 0 }, // Hide the indicator line
+                tabBarIndicatorStyle: { height: 0 },
                 tabBarStyle: {
                     backgroundColor: theme.colors.surface,
                     borderTopWidth: 1,
                     borderTopColor: '#e0e0e0',
-                    elevation: 8, // Shadow for Android
-                    paddingBottom: insets.bottom, // Limit to max 16px bottom padding
-                    paddingTop: 0, // No top padding for maximum compactness
+                    elevation: 8,
+                    paddingBottom: insets.bottom,
+                    paddingTop: 0,
                 },
                 tabBarActiveTintColor: theme.colors.primary,
                 tabBarInactiveTintColor: 'gray',
-                // 控制单个标签项（图标+文字）的垂直内边距
                 tabBarItemStyle: {
-                    paddingVertical: 6, // 减少图标和文字本身的上下留白
+                    paddingVertical: 6,
                 },
                 tabBarLabelStyle: {
                     fontSize: 10,
@@ -133,6 +180,14 @@ export const TabNavigator = () => {
                 },
             }}
         >
+            <Tab.Screen
+                name="Chat"
+                component={ChatStackScreen}
+                options={{
+                    title: t('tabs.chat'),
+                    tabBarIcon: ChatIcon,
+                }}
+            />
             <Tab.Screen
                 name="Flash"
                 component={FlashStackScreen}
@@ -150,19 +205,19 @@ export const TabNavigator = () => {
                 }}
             />
             <Tab.Screen
-                name="Note"
-                component={NoteNavigator}
+                name="Moments"
+                component={MomentsStackScreen}
                 options={{
-                    title: t('tabs.browser'),
-                    tabBarIcon: NoteIcon,
+                    title: t('tabs.moments'),
+                    tabBarIcon: MomentsIcon,
                 }}
             />
             <Tab.Screen
-                name="Me"
-                component={MeStackScreen}
+                name="Files"
+                component={NoteNavigator}
                 options={{
-                    title: t('tabs.me'),
-                    tabBarIcon: MeIcon,
+                    title: t('tabs.files'),
+                    tabBarIcon: FilesIcon,
                 }}
             />
         </Tab.Navigator>

@@ -54,7 +54,7 @@ class FileSystemService {
         let pathToCheck = userPath.replace(/^file:\/+/, '/');
         try {
             pathToCheck = decodeURI(pathToCheck);
-        } catch (e) {
+        } catch (_e) {
             // If decoding fails, continue with original string (might not be encoded)
         }
 
