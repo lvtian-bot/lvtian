@@ -11,7 +11,7 @@ import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 export const CloudRepoConfigScreen = () => {
     const { t } = useTranslation();
-    const { webDavConfig, setWebDavConfig, setCloudProvider, cloudProvider } = useSettingsStore();
+    const { webDavConfig, setWebDavConfig, setCloudProvider, cloudProvider, migratedFromCos, setMigratedFromCos } = useSettingsStore();
 
     // WebDAV State
     const [server, setServer] = useState(webDavConfig.server);
@@ -47,14 +47,15 @@ export const CloudRepoConfigScreen = () => {
             const testProvider = new WebDavProvider({ server, username, password });
             await testProvider.listFiles('');
 
-            // Check if server changed while previously configured
-            const isRepoChanged = cloudProvider === 'webdav' && server !== webDavConfig.server;
+            // Check if server changed while previously configured, or if migrating from legacy COS provider
+            const isRepoChanged = (cloudProvider === 'webdav' && server !== webDavConfig.server) || migratedFromCos;
             needsConfirmation = isRepoChanged;
 
             const performSave = async () => {
                 await SecureStore.setItemAsync('WEBDAV_PASSWORD', password);
                 setWebDavConfig({ server, username });
                 setCloudProvider('webdav');
+                setMigratedFromCos(false);
 
                 // Sync with CloudService (Re-init)
                 await cloudService.initProvider();

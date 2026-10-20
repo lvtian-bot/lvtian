@@ -55,9 +55,9 @@ jobs:
             echo "native_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # 仅当改动包含安卓客户端应用代码（src/、App.tsx、index.js、scripts/ 等）时才触发 OTA 发布
+          # 仅当改动包含安卓客户端应用代码（src/、App.tsx、index.js、scripts/、babel.config.js、metro.config.js 等）时才触发 OTA 发布
           # 纯文档（docs/、*.md）、独立服务端代码（server/）等变更自动跳过安卓客户端热更新
-          if grep -qE '^(src/|App\.tsx|index\.js|scripts/)' <<< "$files"; then
+          if grep -qE '^(src/|App\.tsx|index\.js|scripts/|babel\.config\.js|metro\.config\.js)' <<< "$files"; then
             echo "app_code_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "app_code_changed=false" >> "$GITHUB_OUTPUT"

@@ -104,9 +104,9 @@
 **MDNote** 是一款基于 **React Native (Expo)** 构建的现代化、**云优先、本地加速**的 Markdown 个人笔记与任务管理应用。
 
 **核心特性：**
-*   **云优先 & 本地加速**：支持腾讯云对象存储 (COS) 和 WebDAV 协议。采用策略模式设计，确保云服务可扩展。恪守“列表即菜单，点击即下单”设计哲学，本地缓存仅作首屏加速，云端为唯一真相来源。
+*   **云优先 & 本地加速**：支持 WebDAV 协议（原腾讯云 COS 已退出）。采用策略模式设计，确保云服务可扩展。恪守“列表即菜单，点击即下单”设计哲学，本地缓存仅作首屏加速，云端为唯一真相来源。
 *   **闪念笔记 (Flash Note)**：支持快速捕捉灵感想法，通过 `FlashNoteService` 管理，具备即时追加同步和三阶段自动冲突检测与救援功能。
-*   **智能待办 (Smart Todo)**：基于 Markdown Checkbox 的轻量级任务管理，支持滑动日历选择、完成度徽标与状态双向同步。
+*   **待办管理 (Todo)**：待办系统正从原 Markdown Checkbox 提取模式重构为服务端驱动的独立待办体系，当前移动端展示引导就绪态。
 *   **嵌入式编辑器**：基于 WebView 托管 CodeMirror 6，独立打包，彻底根治跨线程输入时的光标闪烁与长文排版跳动。
 
 ## 2. 技术概况
@@ -128,9 +128,9 @@
 ### 2.2 技术骨架
 
 - **分层协作**：`App.tsx` 为应用主入口（Provider 初始化与状态挂载）；`navigation/` 与 `screens/` 构成 UI 层；核心业务逻辑下沉 `services/`（业务中枢）；全局状态由 `store/`（Zustand）管理。
-- **云同步链路**：`CloudService` 作为云策略入口调度 `TencentCOSProvider` / `WebDavProvider`；`SyncService` 实现三阶段同步引擎（ETag 乐观锁、diff-match-patch 三路合并、`ShadowFileService` 维护的 `.shadows/` 影子基准）；`useFileMetadataStore` 保存 ETag/LastModified 作为冲突检测核心依据；`useSyncStore` 以 Write-Through 机制（写入即入队）管理上传队列。
+- **云同步链路**：`CloudService` 作为云策略入口调度 `WebDavProvider`（原腾讯云 COS 已退出）；`SyncService` 实现三阶段同步引擎（ETag 乐观锁、diff-match-patch 三路合并、`ShadowFileService` 维护的 `.shadows/` 影子基准）；`useFileMetadataStore` 保存 ETag/LastModified 作为冲突检测核心依据；`useSyncStore` 以 Write-Through 机制（写入即入队）管理上传队列。
 - **云优先数据流**：“列表即菜单，点击即下单”——本地缓存仅作首屏加速，云端为唯一真相来源；`useFileListStore` 保存云端列表快照。
-- **闪念与待办**：`FlashNoteService` 向 `flash_notes.md` 时间线流式追加写入；`TodoParser` 解析 Markdown Checkbox 实现待办与日历的状态双向同步；`FlashNoteInputModal` 为全局快速录入模态框。
+- **闪念与待办**：`FlashNoteService` 向 `flash_notes.md` 时间线流式追加写入；待办系统后续由服务端驱动，原 Markdown `TodoParser` 已清理；`FlashNoteInputModal` 为全局快速录入模态框。
 - **编辑器与预览**：`src/editor-web/` 为独立的 CodeMirror 6 工程（Vite 单文件打包），产物经 `editorHtml.ts` 注入 RN WebView，通过 Bridge 协议与 RN 侧通信；Markdown 预览渲染为同构的 `src/preview-web/` 工程（产物 `previewHtml.ts`）。
 - **国际化与事件**：`i18n.ts` 为国际化入口，App 启动首位加载；组件与非 React 上下文（如后台服务）通过 `DeviceEventEmitter` 通信（如 `SHARE_RECEIVED_EVENT`）。
 
@@ -163,7 +163,6 @@ MDNote/
 │   ├── screens/                     # 页面级组件 (FlashScreen, TodoScreen, NoteScreen, PreviewScreen, EditorScreen...)
 │   ├── services/                    # ⭐ 业务逻辑服务层 (业务中枢)
 │   │   ├── CloudService.ts          # 云服务策略入口 (ICloudProvider)
-│   │   ├── TencentCOSProvider.ts    # 腾讯云 COS 实现
 │   │   ├── WebDavProvider.ts        # WebDAV 协议实现
 │   │   ├── FileSystemService.ts     # 文件读写唯一入口 (Scoped Storage 封装)
 │   │   ├── FlashNoteService.ts      # 闪念追加写入与时间格式处理
@@ -176,7 +175,7 @@ MDNote/
 │   │   ├── useFileListStore.ts      # 云端列表快照缓存
 │   │   └── useShareStore.ts         # 跨进程系统分享处理
 │   ├── types/                       # TypeScript 类型定义
-│   └── utils/                       # 工具函数 (mergeUtils, TodoParser, cosSignature...)
+│   └── utils/                       # 工具函数 (mergeUtils 等)
 ├── android/                         # Expo Prebuild 生成物 (严禁直接修改，定制经 plugins/ 插件)
 └── docs/                            # ⭐ 模块化设计与运维文档体系
 ```
@@ -186,7 +185,7 @@ MDNote/
 | 文件路径 | 关键职责 | 必读场景 |
 |---------|---------|---------|
 | `src/services/SyncService.ts` | 同步引擎核心 (三阶段对账/冲突调度) | 同步逻辑、全量对账、冲突排查 |
-| `src/services/CloudService.ts` | 云策略入口 (TencentCOS/WebDAV 调度) | 上传、下载、云协议扩展 |
+| `src/services/CloudService.ts` | 云策略入口 (WebDAV 调度) | 上传、下载、云协议扩展 |
 | `src/services/FlashNoteService.ts` | 闪念时间线流式追加写入逻辑 | 闪念功能、时间格式规范 |
 | `src/services/FileSystemService.ts` | 文件系统操作唯一入口 | 文件读写、沙盒路径、Scoped Storage |
 | `src/services/ShadowFileService.ts` | 影子文件副本管理 (`.shadows/`) | 三路合并基准、冲突恢复 |
@@ -206,9 +205,9 @@ MDNote/
 | `docs/Expo_FileSystem迁移备忘录.md` | `expo-file-system` 新老 API 混用规则、Scoped Storage 封装底线与迁移备忘 |
 | `docs/编码规范与示例.md` | 编码规范详解、DRY 原则、扩展新云端/页面/Hook/Store 代码范式、手势与拖拽排序参考 |
 | `docs/同步/` | `同步算法与流转设计.md`（Stage 1-3、状态矩阵、决策树、Banner 优先级）＋ `三路合并与乐观锁.md`（diff-match-patch、ETag、影子系统）＋ `同步问题记录.md` |
-| `docs/多云端/` | `多云端架构与实现.md`（ICloudProvider 策略模式、COS 签名、WebDAV 映射）＋ `多云端问题记录.md` |
+| `docs/多云端/` | `多云端架构与实现.md`（ICloudProvider 策略模式、WebDAV 映射、COS 退役迁移）＋ `多云端问题记录.md` |
 | `docs/编辑器/` | `编辑器架构与选型.md`（CodeMirror 6 嵌入、Vite 单文件打包注入、Bridge 协议）＋ `编辑器问题记录.md` |
-| `docs/闪念与待办/` | `闪念与待办业务逻辑.md`（时间线格式规范、TodoParser 算法与日历联动）＋ `闪念与待办问题记录.md` |
+| `docs/闪念与待办/` | `闪念与待办业务逻辑.md`（时间线格式规范、待办演进说明）＋ `闪念与待办问题记录.md` |
 | `docs/浏览与缓存/` | `云优先架构与按需缓存.md`（“列表即菜单，点击即下单”、View/Action 分层、单向数据流）＋ `浏览与缓存问题记录.md` |
 | `docs/分享与原生插件/` | `分享扩展与原生插件配置.md`（跨进程分享广播、Config Plugins）＋ `分享与原生插件问题记录.md`（新架构生命周期修复） |
 | `docs/运维与排障/` | `故障排查与速查手册.md`（全链路排查步骤、错误代码速查表、日志收集）＋ `运维与排障问题记录.md` |
