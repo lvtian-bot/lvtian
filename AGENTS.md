@@ -145,7 +145,7 @@ MDNote/
 │   └── withDisablePredictiveBack.js # 禁用 Android 预测性返回手势
 ├── assets/                          # 静态图标与打包资源
 ├── src/                             # 核心源码
-│   ├── components/                  # 可复用 UI 组件 (StatusBanner, DatePickerModal...)
+│   ├── components/                  # 可复用 UI 组件 (StatusBanner, FlashNoteInputModal...)
 │   ├── constants/                   # 事件常量 (events.ts)
 │   ├── editor-web/                  # CodeMirror 6 嵌入式编辑器工程 (Vite)
 │   │   ├── index.ts / index.html    # 编辑器核心源码

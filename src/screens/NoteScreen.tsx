@@ -275,10 +275,7 @@ export const NoteScreen = ({ route, navigation }: Props) => {
 
         try {
             // 1. Rename Local if exists (to ensure content preservation for upload)
-            // If local doesn't exist, we need to download first?
-            // Actually, for rename, if we don't have local, we can technically copy+delete on cloud.
-            // But TencentCOSProvider doesn't expose copyObject yet. 
-            // So safe fallback: Ensure local exists -> Move Local -> Upload New -> Delete Old Cloud.
+            // Safe fallback: Ensure local exists -> Move Local -> Upload New -> Delete Old Cloud.
 
             let hasContent = await fsService.exists(oldPath);
             if (!hasContent && !selectedFile.isDirectory) {

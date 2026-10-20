@@ -964,7 +964,6 @@ function processFile(file: FileItem): string {
 
 **常用类型定义位置**：
 - 导航类型: `src/types/navigation.ts`
-- Todo 类型: `src/types/todo.ts`
 - 服务接口: 在各自的服务文件中定义
 
 ---
