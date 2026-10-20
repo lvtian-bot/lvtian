@@ -6,13 +6,6 @@ import { MarkdownThemeKey } from '../utils/markdownThemes';
 interface SettingsState {
     themeMode: 'light' | 'dark' | 'system';
     setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
-    cosConfig: {
-        // Note: secretId and secretKey are stored in expo-secure-store (encrypted)
-        // Only non-sensitive config is stored here
-        bucket: string;
-        region: string;
-    };
-    setCosConfig: (config: Partial<SettingsState['cosConfig']>) => void;
     flashNoteConfig: {
         path: string;
         filename: string;
@@ -24,15 +17,15 @@ interface SettingsState {
     setShowFlashNotesInCache: (show: boolean) => void;
     setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
 
-    // Cloud Provider Selection
-    cloudProvider: 'tencent' | 'webdav' | 'none';
-    setCloudProvider: (provider: 'tencent' | 'webdav' | 'none') => void;
+    // Cloud Provider Selection (WebDAV for flash notes)
+    cloudProvider: 'webdav' | 'none';
+    setCloudProvider: (provider: 'webdav' | 'none') => void;
 
     // WebDAV Config
     webDavConfig: {
         server: string;
         username: string;
-        // Password is securely stored
+        // Password is securely stored in expo-secure-store
     };
     setWebDavConfig: (config: Partial<SettingsState['webDavConfig']>) => void;
 
@@ -47,12 +40,6 @@ export const useSettingsStore = create<SettingsState>()(
         (set) => ({
             themeMode: 'system',
             setThemeMode: (mode) => set({ themeMode: mode }),
-            cosConfig: {
-                bucket: '',
-                region: '',
-            },
-            setCosConfig: (config) =>
-                set((state) => ({ cosConfig: { ...state.cosConfig, ...config } })),
             flashNoteConfig: {
                 path: '',
                 filename: 'flash_notes.md',
@@ -63,7 +50,7 @@ export const useSettingsStore = create<SettingsState>()(
             setFlashNoteConfig: (config) =>
                 set((state) => ({ flashNoteConfig: { ...state.flashNoteConfig, ...config } })),
 
-            cloudProvider: 'tencent', // Default to tencent for backward compatibility or 'none'
+            cloudProvider: 'none',
             setCloudProvider: (provider) => set({ cloudProvider: provider }),
 
             webDavConfig: {
@@ -83,10 +70,13 @@ export const useSettingsStore = create<SettingsState>()(
         {
             name: 'settings-storage',
             storage: createJSONStorage(() => AsyncStorage),
-            onRehydrateStorage: () => () => {
-                // 使用 store.getState() 获取 setHasHydrated 方法
-                const { setHasHydrated } = useSettingsStore.getState();
-                setHasHydrated(true); // ✅ 正确设置 hasHydrated 为 true
+            onRehydrateStorage: () => (state) => {
+                const { setHasHydrated, setCloudProvider } = useSettingsStore.getState();
+                setHasHydrated(true);
+                // Safe migration: if old config was 'tencent', reset to 'none' without clobbering WebDAV
+                if (state && (state.cloudProvider as string) === 'tencent') {
+                    setCloudProvider('none');
+                }
             },
         }
     )

@@ -40,6 +40,7 @@ local.properties
 dist-web/
 dist-preview-web/
 .tmp/
+node_modules
 node_modules/
 npm-debug.log
 yarn-error.log

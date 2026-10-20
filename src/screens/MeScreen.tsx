@@ -18,7 +18,6 @@ export const MeScreen = () => {
 
     // Config Store - include hydration status
     const {
-        cosConfig,
         webDavConfig,
         cloudProvider,
         markdownTheme,
@@ -49,19 +48,16 @@ export const MeScreen = () => {
                         </View>
                         <View style={styles.cardServiceTag}>
                             <Text style={styles.cardServiceName}>
-                                {cloudProvider === 'tencent' ? t('settings.cloudProvider.tencentCOS') :
-                                    cloudProvider === 'webdav' ? 'WebDAV' : t('settings.notConfigured')}
+                                {cloudProvider === 'webdav' ? 'WebDAV' : t('settings.notConfigured')}
                             </Text>
                         </View>
                     </View>
 
                     <View style={styles.cardStatusRow}>
                         <Text style={styles.cardStatusText} numberOfLines={1} ellipsizeMode="tail">
-                            {cloudProvider === 'tencent' && cosConfig.bucket && cosConfig.region
-                                ? `${t('settings.configured')} · ${cosConfig.bucket}`
-                                : cloudProvider === 'webdav' && webDavConfig.server
-                                    ? `${t('settings.configured')} · ${webDavConfig.server}`
-                                    : t('settings.cloudProvider.subtitle')}
+                            {cloudProvider === 'webdav' && webDavConfig.server
+                                ? `${t('settings.configured')} · ${webDavConfig.server}`
+                                : t('settings.cloudProvider.subtitle')}
                         </Text>
                         <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
                     </View>

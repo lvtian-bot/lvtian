@@ -26,7 +26,7 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
   const [isGlobalModalVisible, setIsGlobalModalVisible] = React.useState(false);
   const [globalShareContent, setGlobalShareContent] = React.useState<string>('');
   // Logic to initialize cloud service based on settings
-  const { cosConfig, webDavConfig, cloudProvider, hasHydrated } = useSettingsStore();
+  const { webDavConfig, cloudProvider, hasHydrated } = useSettingsStore();
 
   useEffect(() => {
     const initializeCloud = async () => {
@@ -40,7 +40,7 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
 
     // Initialize cloud service only, load AI sessions when history page opens
     initializeCloud();
-  }, [cosConfig, webDavConfig, cloudProvider, hasHydrated]);
+  }, [webDavConfig, cloudProvider, hasHydrated]);
 
   // Shared handler for processing shared content
   const handleSharedContent = React.useCallback(async (sharedText: string) => {
@@ -100,7 +100,6 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
         <FlashNoteInputModal
           visible={isGlobalModalVisible}
           initialContent={globalShareContent}
-          mode="note"
           onSave={async (id, content) => {
             try {
               // Determine if it should be saved as Note or Todo based on some heuristic? 

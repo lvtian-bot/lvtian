@@ -167,14 +167,24 @@ export const NoteScreen = ({ route, navigation }: Props) => {
 
     // Header Options
     const headerRight = useCallback(() => (
-        <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
-            <Icon name="note-add" size={20} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
-    ), []);
+        <View style={styles.headerRightContainer}>
+            <TouchableOpacity onPress={() => setIsCreateModalVisible(true)} style={styles.headerButton}>
+                <Icon name="note-add" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+                onPress={() => (navigation as any).navigate('Me')}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={styles.settingsButton}
+                activeOpacity={0.7}
+            >
+                <Icon name="settings" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+        </View>
+    ), [navigation]);
 
     useEffect(() => {
         navigation.setOptions({
-            title: prefix ? prefix.split('/').filter(Boolean).pop() : t('tabs.browser'),
+            title: prefix ? prefix.split('/').filter(Boolean).pop() : t('tabs.files'),
             headerRight: headerRight,
         });
     }, [navigation, prefix, t, headerRight]);
@@ -485,7 +495,7 @@ export const NoteScreen = ({ route, navigation }: Props) => {
 
     const renderContent = () => {
         if (status === 'unconfigured') {
-            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => rootNavigation.navigate('MainTabs', { screen: 'Me' })} />;
+            return <MessageView title={t('browser.unconfiguredTitle')} message={t('browser.unconfiguredMessage')} buttonText={t('browser.goToSettings')} onButtonPress={() => rootNavigation.navigate('Me')} />;
         }
 
         if (status === 'loading' && files.length === 0) {
@@ -589,6 +599,8 @@ const styles = StyleSheet.create({
     messageText: { color: theme.colors.textSecondary, fontSize: theme.typography.body.fontSize, textAlign: 'center', lineHeight: 22 },
     button: { backgroundColor: theme.colors.primary, paddingVertical: theme.spacing.s, paddingHorizontal: theme.spacing.l, borderRadius: 8, alignItems: 'center', marginTop: theme.spacing.l },
     buttonText: { color: theme.colors.white, fontSize: 16, fontWeight: 'bold' },
+    headerRightContainer: { flexDirection: 'row', alignItems: 'center' },
+    settingsButton: { marginLeft: 6, marginRight: 8 },
     headerButton: { padding: 8 },
     fileListContainer: { flex: 1 },
 });

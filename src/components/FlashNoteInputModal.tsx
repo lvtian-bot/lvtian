@@ -5,11 +5,9 @@ import {
     TextInput,
     TouchableOpacity,
     StyleSheet,
-
     Platform,
     Dimensions,
     Alert,
-    Text,
     Keyboard,
     KeyboardEvent,
 } from 'react-native';
@@ -17,24 +15,19 @@ import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
-import { Priority } from '../types/todo';
-import { DatePickerModal } from './DatePickerModal';
 
 interface FlashNoteInputModalProps {
     visible: boolean;
     initialId?: string; // For editing existing note
     initialContent?: string;
-    initialPriority?: Priority;
-    initialDueAt?: string;
     onSave: (id: string | undefined, content: string) => void;
     onCancel: () => void;
     onExpand?: (content: string) => void;
-    mode?: 'todo' | 'note';
 }
 
 const { height: screenHeight } = Dimensions.get('window');
-const MIN_INPUT_HEIGHT_LINES = 10; // Increased height
-const MAX_INPUT_HEIGHT_RATIO = 0.5; // Increased max height ratio
+const MIN_INPUT_HEIGHT_LINES = 10;
+const MAX_INPUT_HEIGHT_RATIO = 0.5;
 
 const TEXT_INPUT_FONT_SIZE = 16;
 
@@ -45,25 +38,19 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     visible,
     initialId,
     initialContent,
-    initialPriority,
-    initialDueAt,
     onSave,
     onCancel,
     onExpand,
-    mode = 'todo',
 }) => {
     const { t } = useTranslation();
     const [inputText, setInputText] = useState(initialContent || '');
-    const [priority, setPriority] = useState<Priority>(initialPriority || 'none');
-    const [dueAt, setDueAt] = useState<string | undefined>(initialDueAt);
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
-    const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
 
     const inputRef = useRef<TextInput>(null);
-    const isDraftLoaded = useRef(false); // Ref to track if draft check is done to avoid overwriting with initialContent
+    const isDraftLoaded = useRef(false);
 
-    const MIN_HEIGHT = (mode === 'todo' ? 6 : MIN_INPUT_HEIGHT_LINES) * TEXT_INPUT_FONT_SIZE * 1.5;
-    const MAX_HEIGHT = screenHeight * (mode === 'todo' ? 0.35 : MAX_INPUT_HEIGHT_RATIO);
+    const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5;
+    const MAX_HEIGHT = screenHeight * MAX_INPUT_HEIGHT_RATIO;
 
     // Load draft when modal becomes visible
     useEffect(() => {
@@ -110,18 +97,10 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                 setInputMeasuredHeight(MIN_HEIGHT);
             };
 
-            // Reset state before checking draft
             isDraftLoaded.current = false;
             checkDraft();
-
-            // Reset fields if not draft (draft logic handles text, but what about fields? 
-            // For simplicity, draft only restores text. Fields reset to initial.)
-            setPriority(initialPriority || 'none');
-            setDueAt(initialDueAt);
-            setIsDatePickerVisible(false);
         }
-    }, [visible, initialId, initialContent, initialPriority, initialDueAt, MIN_HEIGHT, t]);
-
+    }, [visible, initialId, initialContent, MIN_HEIGHT, t]);
 
     // Auto-save draft
     useEffect(() => {
@@ -136,7 +115,6 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                 if (inputText && inputText !== (initialContent || '')) {
                     await AsyncStorage.setItem(draftKey, inputText);
                 } else {
-                    // If content matches initial (or empty), remove draft to keep clean
                     await AsyncStorage.removeItem(draftKey);
                 }
             } catch (error) {
@@ -144,51 +122,17 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             }
         };
 
-        const timeoutId = setTimeout(saveDraft, 500); // Debounce save
+        const timeoutId = setTimeout(saveDraft, 500);
         return () => clearTimeout(timeoutId);
     }, [inputText, visible, initialId, initialContent]);
 
-
-    const handleSaveWithTags = async () => {
-        if (!inputText.trim()) {
+    const handleSave = async () => {
+        const trimmed = inputText.trim();
+        if (!trimmed) {
             Alert.alert(t('common.error'), t('timeline.emptyNoteError'));
             return;
         }
 
-        // Construct tags suffix
-        let tagSuffix = '';
-
-        // Add Priority Tag
-        if (priority !== 'none') {
-            switch (priority) {
-                case 'highest': tagSuffix += ' 🔺'; break;
-                case 'high': tagSuffix += ' ⏫'; break;
-                case 'medium': tagSuffix += ' 🔼'; break;
-                case 'low': tagSuffix += ' 🔽'; break;
-                case 'lowest': tagSuffix += ' ⏬'; break;
-            }
-        }
-
-        // Add Due Date Tag
-        if (dueAt) {
-            tagSuffix += ` 📅 ${dueAt}`;
-        }
-
-        let finalContent = '';
-
-        // If in todo mode (create or edit), apply tags to every line
-        if (mode === 'todo') {
-            finalContent = inputText.trim()
-                .split('\n')
-                .filter(line => line.trim().length > 0)
-                .map(line => `${line.trim()}${tagSuffix}`)
-                .join('\n');
-        } else {
-            // For notes, just append tags to the end (though notes rarely use these tags)
-            finalContent = inputText.trim() + tagSuffix;
-        }
-
-        // Clear draft
         try {
             const draftKey = initialId
                 ? `${FLASH_NOTE_DRAFT_EDIT_PREFIX}${initialId}`
@@ -198,25 +142,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             console.error('Failed to clear draft:', error);
         }
 
-        onSave(initialId, finalContent);
-    };
-
-    const togglePriority = () => {
-        const order: Priority[] = ['none', 'highest', 'high', 'medium', 'low', 'lowest'];
-        const currentIndex = order.indexOf(priority);
-        const nextIndex = (currentIndex + 1) % order.length;
-        setPriority(order[nextIndex]);
-    };
-
-    const getPriorityDisplay = () => {
-        switch (priority) {
-            case 'highest': return { icon: 'error', label: t('priority.highest') || 'Highest', color: theme.colors.danger || '#F44336' };
-            case 'high': return { icon: 'keyboard-double-arrow-up', label: t('priority.high') || 'High', color: theme.colors.orange || '#FF9800' };
-            case 'medium': return { icon: 'keyboard-arrow-up', label: t('priority.medium') || 'Medium', color: theme.colors.warning || '#FFC107' };
-            case 'low': return { icon: 'keyboard-arrow-down', label: t('priority.low') || 'Low', color: theme.colors.info || '#2196F3' };
-            case 'lowest': return { icon: 'keyboard-double-arrow-down', label: t('priority.lowest') || 'Lowest', color: theme.colors.textSecondary || '#9E9E9E' };
-            default: return { icon: 'outlined-flag', label: t('priority.none') || 'Priority', color: theme.colors.textSecondary };
-        }
+        onSave(initialId, trimmed);
     };
 
     const handleCancel = async () => {
@@ -229,7 +155,6 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                         text: t('common.dontSave'),
                         style: 'destructive',
                         onPress: async () => {
-                            // Clear draft on discard
                             try {
                                 const draftKey = initialId
                                     ? `${FLASH_NOTE_DRAFT_EDIT_PREFIX}${initialId}`
@@ -247,7 +172,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                     },
                     {
                         text: t('common.save'),
-                        onPress: handleSaveWithTags,
+                        onPress: handleSave,
                     },
                 ]
             );
@@ -256,18 +181,25 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
         }
     };
 
+    // Keyboard Handling for Android
     const [keyboardHeight, setKeyboardHeight] = useState(0);
 
     useEffect(() => {
-        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-
-        const showSubscription = Keyboard.addListener(showEvent, (e: KeyboardEvent) => {
+        const onKeyboardShow = (e: KeyboardEvent) => {
             setKeyboardHeight(e.endCoordinates.height);
-        });
-        const hideSubscription = Keyboard.addListener(hideEvent, () => {
+        };
+        const onKeyboardHide = () => {
             setKeyboardHeight(0);
-        });
+        };
+
+        const showSubscription = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            onKeyboardShow
+        );
+        const hideSubscription = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            onKeyboardHide
+        );
 
         return () => {
             showSubscription.remove();
@@ -275,104 +207,66 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
         };
     }, []);
 
-    const keyboardAvoidingStyle = useMemo(() => [
-        styles.keyboardAvoidingView,
-        { paddingBottom: Platform.OS === 'ios' ? keyboardHeight : 0 }
-    ], [keyboardHeight]);
+    const keyboardAvoidingStyle = useMemo(() => {
+        return [
+            styles.keyboardAvoidingView,
+            Platform.OS === 'android' ? { marginBottom: keyboardHeight } : {}
+        ];
+    }, [keyboardHeight]);
 
-    const modalContentStyle = useMemo(() => [
-        styles.modalContentContainer,
-        { marginBottom: Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight : 0 }
-    ], [keyboardHeight]);
-
-    const priorityDisplay = getPriorityDisplay();
+    const modalContentStyle = useMemo(() => {
+        return [
+            styles.modalContent,
+            Platform.OS === 'ios' ? { marginBottom: keyboardHeight } : {}
+        ];
+    }, [keyboardHeight]);
 
     return (
-        <>
-            <Modal
-                animationType="slide"
-                transparent={true}
-                visible={visible}
-                onRequestClose={handleCancel}
-                onShow={() => {
-                    setTimeout(() => {
-                        inputRef.current?.focus();
-                    }, 100);
-                }}
-            >
-                <View style={keyboardAvoidingStyle}>
-                    <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={handleCancel} />
+        <Modal
+            visible={visible}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={handleCancel}
+            onShow={() => {
+                setTimeout(() => {
+                    inputRef.current?.focus();
+                }, 100);
+            }}
+        >
+            <View style={keyboardAvoidingStyle}>
+                <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={handleCancel} />
 
-                    <View style={modalContentStyle}>
-                        <TextInput
-                            ref={inputRef}
-                            style={[
-                                styles.input,
-                                { height: Math.max(MIN_HEIGHT, Math.min(inputMeasuredHeight, MAX_HEIGHT)) }
-                            ]}
-                            multiline
-                            placeholder={t('timeline.placeholder')}
-                            value={inputText}
-                            onChangeText={setInputText}
-                            textAlignVertical="top"
-                            onContentSizeChange={(event) => {
-                                setInputMeasuredHeight(event.nativeEvent.contentSize.height);
-                            }}
-                        />
-                        <View style={styles.actionContainer}>
-                            <View style={styles.toolbar}>
-                                {mode === 'todo' && (
-                                    <>
-                                        <TouchableOpacity
-                                            onPress={togglePriority}
-                                            style={styles.priorityButton}
-                                        >
-                                            <Icon name={priorityDisplay.icon as any} size={24} color={priorityDisplay.color} />
-                                            {priority !== 'none' && (
-                                                <Text style={[styles.priorityButtonText, { color: priorityDisplay.color }]}>
-                                                    {priorityDisplay.label}
-                                                </Text>
-                                            )}
-                                        </TouchableOpacity>
-
-                                        {dueAt ? (
-                                            <TouchableOpacity onPress={() => setIsDatePickerVisible(true)} style={styles.dateInputContainer}>
-                                                <Icon name="event" size={18} color={theme.colors.primary} style={styles.dateIcon} />
-                                                <Text style={styles.dateInputText}>{dueAt}</Text>
-                                                <TouchableOpacity onPress={() => setDueAt(undefined)} style={styles.clearDateButton}>
-                                                    <Icon name="close" size={16} color={theme.colors.textSecondary} />
-                                                </TouchableOpacity>
-                                            </TouchableOpacity>
-                                        ) : (
-                                            <TouchableOpacity onPress={() => setIsDatePickerVisible(true)} style={styles.toolbarButton}>
-                                                <Icon name="event" size={20} color={theme.colors.textSecondary} />
-                                            </TouchableOpacity>
-                                        )}
-                                    </>
-                                )}
-                                {mode === 'note' && onExpand && (
-                                    <TouchableOpacity onPress={() => onExpand(inputText)} style={styles.toolbarButton}>
-                                        <Icon name="fullscreen" size={24} color={theme.colors.textSecondary} />
-                                    </TouchableOpacity>
-                                )}
-                            </View>
-                            <TouchableOpacity onPress={handleSaveWithTags} style={styles.sendButton}>
-                                <Icon name="send" size={24} color={theme.colors.primary} />
-                            </TouchableOpacity>
+                <View style={modalContentStyle}>
+                    <TextInput
+                        ref={inputRef}
+                        style={[
+                            styles.input,
+                            { height: Math.max(MIN_HEIGHT, Math.min(inputMeasuredHeight, MAX_HEIGHT)) }
+                        ]}
+                        multiline
+                        placeholder={t('timeline.placeholder')}
+                        value={inputText}
+                        onChangeText={setInputText}
+                        textAlignVertical="top"
+                        onContentSizeChange={(event) => {
+                            setInputMeasuredHeight(event.nativeEvent.contentSize.height);
+                        }}
+                    />
+                    <View style={styles.actionContainer}>
+                        <View style={styles.toolbar}>
+                            {onExpand && (
+                                <TouchableOpacity onPress={() => onExpand(inputText)} style={styles.toolbarButton}>
+                                    <Icon name="fullscreen" size={24} color={theme.colors.textSecondary} />
+                                </TouchableOpacity>
+                            )}
                         </View>
+                        <TouchableOpacity onPress={handleSave} style={styles.sendButton}>
+                            <Icon name="send" size={24} color={theme.colors.primary} />
+                        </TouchableOpacity>
                     </View>
                 </View>
-            </Modal>
-            <DatePickerModal
-                visible={isDatePickerVisible}
-                initialDate={dueAt}
-                onConfirm={(date) => {
-                    setDueAt(date);
-                    setIsDatePickerVisible(false);
-                }}
-                onCancel={() => setIsDatePickerVisible(false)}
-            />
-        </>
+            </View>
+        </Modal>
     );
 };
 
@@ -387,77 +281,47 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
+        backgroundColor: 'rgba(0, 0, 0, 0.4)',
     },
-    modalContentContainer: {
-        width: '100%',
-        backgroundColor: theme.colors.white,
-        borderTopLeftRadius: 12,
-        borderTopRightRadius: 12,
-        overflow: 'hidden',
-        paddingBottom: theme.spacing.xl, // Reduced padding for button area
+    modalContent: {
+        backgroundColor: theme.colors.surface,
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        padding: 16,
+        paddingBottom: Platform.OS === 'ios' ? 24 : 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 5,
     },
     input: {
+        backgroundColor: theme.colors.background,
+        borderRadius: 8,
+        padding: 12,
         fontSize: TEXT_INPUT_FONT_SIZE,
         color: theme.colors.text,
-        padding: theme.spacing.l,
-        paddingTop: theme.spacing.l,
-        paddingBottom: theme.spacing.xl, // Consistently reduced padding
-        backgroundColor: 'transparent', // 确保不覆盖圆角
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
     },
     actionContainer: {
-        position: 'absolute',
-        right: theme.spacing.l,
-        bottom: theme.spacing.m * 1.5, // Increased from xs for more clearance
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        left: theme.spacing.l, // Make it span full width minus padding
+        marginTop: 12,
     },
     toolbar: {
         flexDirection: 'row',
         alignItems: 'center',
-    },
-    priorityButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: theme.spacing.s,
-        paddingLeft: -4,
-        marginRight: theme.spacing.s,
-    },
-    priorityButtonText: {
-        fontSize: 12,
-        fontWeight: '600',
-        marginLeft: 4,
+        flex: 1,
     },
     toolbarButton: {
-        padding: theme.spacing.s,
-        paddingLeft: 0,
-        marginRight: theme.spacing.s,
+        padding: 6,
+        marginRight: 8,
     },
     sendButton: {
-        padding: theme.spacing.s,
-        backgroundColor: theme.colors.surface,
+        padding: 8,
+        backgroundColor: '#e8f5e9',
         borderRadius: 20,
-    },
-    dateInputContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: theme.colors.background,
-        borderRadius: 16,
-        paddingHorizontal: theme.spacing.s,
-        height: 32,
-        marginLeft: theme.spacing.s,
-    },
-    dateIcon: {
-        marginRight: 4,
-    },
-    dateInputText: {
-        fontSize: 12,
-        color: theme.colors.text,
-        marginRight: 4,
-    },
-    clearDateButton: {
-        padding: 4,
     },
 });

@@ -1,10 +1,21 @@
 {
   "tabs": {
+    "chat": "Chat",
     "timeline": "Flash",
+    "todo": "Todo",
+    "moments": "Moments",
+    "files": "Files",
     "browser": "Notes",
-    "todo": "Todos",
     "settings": "Settings",
-    "me": "Me"
+    "me": "Settings"
+  },
+  "chat": {
+    "placeholderTitle": "Lvtian AI Assistant",
+    "placeholderDesc": "Service not connected yet. Once connected to your server, you can chat, assign tasks, and track progress here."
+  },
+  "moments": {
+    "placeholderTitle": "Moments & Digest",
+    "placeholderDesc": "Moments will be available once the assistant service is connected and digests are generated."
   },
   "about": {
     "title": "About",
@@ -19,7 +30,7 @@
       "title": "Permissions",
       "network": {
         "title": "Network",
-        "description": "Used for syncing your notes to the configured cloud (Tencent Cloud COS / WebDAV)."
+        "description": "Used for syncing flash notes to your configured WebDAV cloud."
       },
       "storage": {
         "title": "Storage",
@@ -46,6 +57,8 @@
     "linkError": "Cannot open this link"
   },
   "todo": {
+    "placeholderTitle": "Assistant Todos",
+    "placeholderDesc": "Will be enabled once the assistant service is connected and task rules are defined.",
     "inProgress": "In Progress",
     "todo": "To Do",
     "finished": "Finished",
@@ -166,28 +179,18 @@
       "notEmpty": "All configuration fields are required."
     },
     "switchCloudWarning": "Switching cloud service requires clearing local cache of the old service (including unsynced changes). Are you sure?",
-    "cosConfig": "COS Configuration",
     "cloudProvider": {
-      "tencentCOS": "Tencent Cloud COS",
-      "subtitle": "Configure your cloud storage to sync notes",
-      "authInfo": "Authentication Info",
-      "secretId": "SecretId",
-      "secretKey": "SecretKey",
-      "bucketConfig": "Bucket Configuration",
-      "bucketName": "Bucket Name",
-      "region": "Region",
-      "helpText": "Please ensure you have enabled COS service in Tencent Cloud Console and obtained the correct keys and bucket information.",
+      "subtitle": "Configure WebDAV account to sync flash notes",
       "webdav": {
-        "tabLabel": "Nutstore / WebDAV",
+        "tabLabel": "WebDAV",
         "recommendNutstore": "We recommend Nutstore. Please use an app-specific password.",
         "configTitle": "WebDAV Settings",
         "serverAddress": "Server Address",
         "username": "Username",
         "password": "Password",
-        "helpText": "WebDAV lets you sync your notes to any cloud storage supporting this protocol, such as Nutstore, Nextcloud, etc."
+        "helpText": "WebDAV lets you sync your flash notes to any cloud storage supporting this protocol, such as Nutstore, Nextcloud, etc."
       }
     },
-    "saveCos": "Validate and Save COS Config",
     "saveFlashNote": "Save Flash Note Config",
     "flashNote": "Flash Note Settings",
     "flashNotePath": "Storage Path (e.g. notes/)",
@@ -199,7 +202,7 @@
       "none": "None"
     },
     "markdownStyle": "Markdown Style",
-    "cloudRepoConfig": "Cloud Storage",
+    "cloudRepoConfig": "WebDAV Settings",
     "configured": "Configured",
     "flashNoteConfig": "Flash Note Configuration",
     "current": "Current:",

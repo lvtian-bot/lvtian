@@ -1,10 +1,21 @@
 {
   "tabs": {
+    "chat": "主聊天",
     "timeline": "闪念",
-    "browser": "笔记",
     "todo": "待办",
+    "moments": "动态",
+    "files": "系统文件",
+    "browser": "笔记",
     "settings": "设置",
-    "me": "我"
+    "me": "设置"
+  },
+  "chat": {
+    "placeholderTitle": "绿天个人助理",
+    "placeholderDesc": "服务待连接。接通独立服务端后，您可在此持续与助理交流、安排事项并跟进任务进展。"
+  },
+  "moments": {
+    "placeholderTitle": "动态资讯",
+    "placeholderDesc": "动态功能待助理服务接通后启用。助理将根据您的关注主题整理并呈现最新动态。"
   },
   "about": {
     "title": "关于",
@@ -19,7 +30,7 @@
       "title": "权限说明",
       "network": {
         "title": "网络访问",
-        "description": "用于同步笔记数据到你配置的云端（腾讯云 COS / WebDAV）。"
+        "description": "用于同步闪念数据到你配置的 WebDAV 云端。"
       },
       "storage": {
         "title": "存储空间",
@@ -46,6 +57,8 @@
     "linkError": "无法打开此链接"
   },
   "todo": {
+    "placeholderTitle": "助理待办事项",
+    "placeholderDesc": "待助理服务接通与跟进规则确定后启用。助理将协助跟进任务、记录长期事项并配合执行。",
     "inProgress": "进行中",
     "todo": "未完成",
     "finished": "已完成",
@@ -166,28 +179,18 @@
       "notEmpty": "所有配置项都不能为空"
     },
     "switchCloudWarning": "切换云服务需要在本地清除旧服务的缓存文件（包括未同步的更改）。是否确认切换？",
-    "cosConfig": "COS 设置",
     "cloudProvider": {
-      "tencentCOS": "腾讯云 COS",
-      "subtitle": "配置您的云端存储以同步笔记",
-      "authInfo": "认证信息",
-      "secretId": "SecretId",
-      "secretKey": "SecretKey",
-      "bucketConfig": "存储桶配置",
-      "bucketName": "存储桶名称",
-      "region": "地域 (Region)",
-      "helpText": "请确保您已在腾讯云控制台开启 COS 服务，并获取了正确的密钥和存储桶信息。",
+      "subtitle": "配置 WebDAV 账户以同步闪念笔记",
       "webdav": {
-        "tabLabel": "坚果云 / WebDAV",
+        "tabLabel": "WebDAV",
         "recommendNutstore": "推荐使用坚果云。请使用应用专用密码。",
         "configTitle": "WebDAV 配置",
         "serverAddress": "服务器地址 (Server)",
         "username": "账户 (Username)",
         "password": "密码 (Password)",
-        "helpText": "WebDAV 允许您将笔记同步到支持该协议的任何云存储服务，如坚果云、Nextcloud 等。"
+        "helpText": "WebDAV 用于将闪念笔记同步到支持该协议的云存储服务（如坚果云、Nextcloud 等）。"
       }
     },
-    "saveCos": "验证并保存 COS 配置",
     "saveFlashNote": "保存闪念笔记配置",
     "flashNote": "闪念笔记设置",
     "flashNotePath": "存储路径 (例如: notes/)",
@@ -199,7 +202,7 @@
       "none": "无"
     },
     "markdownStyle": "Markdown样式",
-    "cloudRepoConfig": "云端存储",
+    "cloudRepoConfig": "WebDAV 设置",
     "configured": "已配置",
     "flashNoteConfig": "闪念笔记设置",
     "current": "当前:",

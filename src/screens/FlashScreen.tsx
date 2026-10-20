@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, BackHandler, Share } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
@@ -63,8 +64,18 @@ export const FlashScreen = () => {
     const hasFailedUpload = Object.values(fileMetadataStore.metadata).some(m => m.uploadState === 'failed' || m.uploadState === 'conflict-failed');
 
     const headerRight = useCallback(() => (
-        <HeaderSyncStatus isSyncing={isSyncing} syncStatus={syncStatus} conflictType={conflictType} />
-    ), [isSyncing, syncStatus, conflictType]);
+        <View style={styles.headerRightContainer}>
+            <HeaderSyncStatus isSyncing={isSyncing} syncStatus={syncStatus} conflictType={conflictType} />
+            <TouchableOpacity
+                onPress={() => (navigation as any).navigate('Me')}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={styles.settingsButton}
+                activeOpacity={0.7}
+            >
+                <Icon name="settings" size={22} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+        </View>
+    ), [isSyncing, syncStatus, conflictType, navigation]);
 
     useLayoutEffect(() => {
         navigation.setOptions({
@@ -252,7 +263,6 @@ export const FlashScreen = () => {
                 onSave={handleSaveFlashNote}
                 onCancel={handleCancelFlashNote}
                 onExpand={handleExpandFlashNote}
-                mode="note"
             />
 
             <ActionSheetModal
@@ -269,6 +279,14 @@ export const FlashScreen = () => {
 };
 
 const styles = StyleSheet.create({
+    headerRightContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    settingsButton: {
+        marginLeft: 12,
+        marginRight: 8,
+    },
     card: {
         backgroundColor: theme.colors.surface,
         borderRadius: theme.radius.sm,
