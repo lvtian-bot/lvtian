@@ -21,10 +21,6 @@ interface SettingsState {
     cloudProvider: 'webdav' | 'none';
     setCloudProvider: (provider: 'webdav' | 'none') => void;
 
-    // Migration state from legacy COS
-    migratedFromCos: boolean;
-    setMigratedFromCos: (migrated: boolean) => void;
-
     // WebDAV Config
     webDavConfig: {
         server: string;
@@ -68,8 +64,6 @@ export const useSettingsStore = create<SettingsState>()(
             setShowFlashNotesInCache: (show) => set({ showFlashNotesInCache: show }),
             markdownTheme: 'default',
             setMarkdownTheme: (theme) => set({ markdownTheme: theme }),
-            migratedFromCos: false,
-            setMigratedFromCos: (migrated) => set({ migratedFromCos: migrated }),
             hasHydrated: false,
             setHasHydrated: (state) => set({ hasHydrated: state }),
         }),
@@ -77,12 +71,10 @@ export const useSettingsStore = create<SettingsState>()(
             name: 'settings-storage',
             storage: createJSONStorage(() => AsyncStorage),
             onRehydrateStorage: () => (state) => {
-                const { setHasHydrated, setCloudProvider, setMigratedFromCos } = useSettingsStore.getState();
+                const { setHasHydrated, setCloudProvider } = useSettingsStore.getState();
                 setHasHydrated(true);
-                // Safe migration: if old config was 'tencent', reset to 'none' and retain migration flag
-                if (state && (state.cloudProvider as string) === 'tencent') {
+                if (state && (state.cloudProvider as string) !== 'webdav') {
                     setCloudProvider('none');
-                    setMigratedFromCos(true);
                 }
             },
         }

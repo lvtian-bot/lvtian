@@ -205,7 +205,7 @@ MDNote/
 | `docs/Expo_FileSystem迁移备忘录.md` | `expo-file-system` 新老 API 混用规则、Scoped Storage 封装底线与迁移备忘 |
 | `docs/编码规范与示例.md` | 编码规范详解、DRY 原则、扩展新云端/页面/Hook/Store 代码范式、手势与拖拽排序参考 |
 | `docs/同步/` | `同步算法与流转设计.md`（Stage 1-3、状态矩阵、决策树、Banner 优先级）＋ `三路合并与乐观锁.md`（diff-match-patch、ETag、影子系统）＋ `同步问题记录.md` |
-| `docs/多云端/` | `多云端架构与实现.md`（ICloudProvider 策略模式、WebDAV 映射、COS 退役迁移）＋ `多云端问题记录.md` |
+| `docs/多云端/` | `多云端架构与实现.md`（ICloudProvider 策略模式、WebDAV 映射、COS 退役清理）＋ `多云端问题记录.md` |
 | `docs/编辑器/` | `编辑器架构与选型.md`（CodeMirror 6 嵌入、Vite 单文件打包注入、Bridge 协议）＋ `编辑器问题记录.md` |
 | `docs/闪念与待办/` | `闪念与待办业务逻辑.md`（时间线格式规范、待办演进说明）＋ `闪念与待办问题记录.md` |
 | `docs/浏览与缓存/` | `云优先架构与按需缓存.md`（“列表即菜单，点击即下单”、View/Action 分层、单向数据流）＋ `浏览与缓存问题记录.md` |
