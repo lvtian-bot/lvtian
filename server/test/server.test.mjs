@@ -107,3 +107,21 @@ test('scripts match server absolute entrypoint as exact argv and reject sub-path
     assert.equal(isServerArgv(['node', '/home/other/server/dist/index.js']), false);
     assert.equal(isServerArgv(['cat', 'other-data']), false);
 });
+
+test('composite final text preserves earlier committed segments and replaces truncated terminal segment', () => {
+    // 模拟包含工具调用的多阶段输出：工具前有 text 事件，工具后有截断 text 事件，最终有无损 final 事件
+    const committedSegments = ['好的，我正在为您查询日程...', '日程如下（截断）：- 会议'];
+    const finalEventText = '日程如下（完整）：- 会议A\n- 会议B\n- 会议C';
+
+    const priorText = committedSegments.length > 1 ? committedSegments.slice(0, -1).join('') : '';
+    const fullLosslessText = priorText + finalEventText;
+
+    assert.equal(
+        fullLosslessText,
+        '好的，我正在为您查询日程...日程如下（完整）：- 会议A\n- 会议B\n- 会议C'
+    );
+    // 验证前置工具调用文字未被丢弃
+    assert.ok(fullLosslessText.includes('好的，我正在为您查询日程...'));
+    assert.ok(fullLosslessText.includes('会议C'));
+});
+

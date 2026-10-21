@@ -253,6 +253,7 @@ ${userPrompt}`;
             let stderrAcc = '';
             let stdoutBuffer = '';
             let finalFullText = '';
+            const committedTextSegments: string[] = [];
             const stdoutDecoder = new StringDecoder('utf8');
             const stderrDecoder = new StringDecoder('utf8');
             let currentToolCall: ToolCallState | null = null;
@@ -283,6 +284,7 @@ ${userPrompt}`;
                             if (currentToolCall && currentToolCall.status === 'running') {
                                 finalizeCurrentTool('done');
                             }
+                            committedTextSegments.push(evt.text);
                             callbacks.onDelta(evt.text);
                         } else if (evt.type === 'thinking' && typeof evt.text === 'string') {
                             callbacks.onStatusChange('thinking');
@@ -311,10 +313,16 @@ ${userPrompt}`;
                                 callbacks.onStatusChange('thinking');
                             }
                         } else if (evt.type === 'final' && typeof evt.text === 'string' && evt.text) {
-                            // 捕获无损终态完整文本（长文本 >8KiB 在普通 text 事件被截断，final 事件携带完整副本）
-                            finalFullText = evt.text;
+                            // 官方 headless 协议中，每个 text 事件代表已提交的 assistant 消息；
+                            // 终态 final 事件的 text 是最后一个非空 assistant 文本的无损副本（长文本 >8KiB 在 text 事件会被截断）；
+                            // 需完整保留工具调用前已提交的前置文本段，仅使用 final 替换终端可能被截断的最后一段
+                            const priorText =
+                                committedTextSegments.length > 1
+                                    ? committedTextSegments.slice(0, -1).join('')
+                                    : '';
+                            finalFullText = priorText + evt.text;
                             if (callbacks.onFinalText) {
-                                callbacks.onFinalText(evt.text);
+                                callbacks.onFinalText(finalFullText);
                             }
                         } else if (evt.type === 'error' && typeof evt.message === 'string') {
                             callbacks.onDelta(`\n\n> ⚠️ [执行反馈]：${evt.message}`);
