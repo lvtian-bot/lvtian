@@ -324,6 +324,9 @@
     "clearConfirm": "Are you sure you want to clear current chat history? Server memory files won't be affected.",
     "taskRunningRejection": "A previous task is currently running. Please wait or tap Stop.",
     "taskStopped": "Task was stopped manually",
-    "serviceRestartInterrupted": "⚠️ Server restarted, previous task was interrupted"
+    "serviceRestartInterrupted": "⚠️ Server restarted, previous task was interrupted",
+    "configApplied": "Configuration successfully applied",
+    "configInvalid": "Could not identify a valid server URL from clipboard",
+    "thinkingText": "Lvtian is thinking..."
   }
 }

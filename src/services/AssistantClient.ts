@@ -317,6 +317,13 @@ export class AssistantClient {
             case 'auth_result': {
                 if (!msg.success) {
                     store.setConnectionState('error', msg.error || '认证失败，请检查访问令牌');
+                    this.isExplicitlyClosed = true;
+                    this.stopPing();
+                    if (this.reconnectTimer) {
+                        clearTimeout(this.reconnectTimer);
+                        this.reconnectTimer = null;
+                    }
+                    this.cleanUpWs();
                 }
                 break;
             }
@@ -351,9 +358,15 @@ export class AssistantClient {
                 for (const m of msg.messages) {
                     msgMap.set(m.id, m);
                 }
-                // 确保本地未成功的消息依然保留
+                // 确保本地未成功的消息依然保留；若原本处于 sending 的消息未获服务端确认，转为 error 状态以激活重试按钮
                 for (const m of localUnsent) {
-                    if (!msgMap.has(m.id) || msgMap.get(m.id)?.status === 'error') {
+                    if (!msgMap.has(m.id)) {
+                        msgMap.set(m.id, {
+                            ...m,
+                            status: 'error',
+                            errorMessage: m.errorMessage || '发送中断，请重试',
+                        });
+                    } else if (msgMap.get(m.id)?.status === 'error') {
                         msgMap.set(m.id, m);
                     }
                 }

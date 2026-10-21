@@ -417,6 +417,9 @@ export class LvtianServer {
 
     public stop(): Promise<void> {
         return new Promise((resolve) => {
+            // 终止所有正在运行的底层 dsh 子进程，防止僵尸进程常驻
+            this.dshRunner.stopAll();
+
             if (this.heartbeatInterval) {
                 clearInterval(this.heartbeatInterval);
             }

@@ -72,10 +72,16 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
         // ignore
     }
 
-    // 回写配置文件，限制仅本用户读写 (0600)
+    // 回写配置文件，限制仅本用户读写 (0600)，采用 tmp 文件原子重命名方式落盘
     try {
-        fs.writeFileSync(configFile, JSON.stringify(mergedConfig, null, 2), { mode: 0o600 });
-        fs.chmodSync(configFile, 0o600);
+        const tmpFile = `${configFile}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+        fs.writeFileSync(tmpFile, JSON.stringify(mergedConfig, null, 2), { encoding: 'utf8', mode: 0o600 });
+        try {
+            fs.chmodSync(tmpFile, 0o600);
+        } catch {
+            // ignore
+        }
+        fs.renameSync(tmpFile, configFile);
     } catch (err) {
         console.warn(`[Config] 保存配置文件失败: ${err}`);
     }

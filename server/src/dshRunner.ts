@@ -41,8 +41,12 @@ export class DshRunner {
             return true;
         }
         if (proc && proc.stdin && !proc.stdin.destroyed) {
-            proc.stdin.write(approved ? 'y\n' : 'n\n');
-            return true;
+            try {
+                proc.stdin.write(approved ? 'y\n' : 'n\n');
+                return true;
+            } catch {
+                // ignore
+            }
         }
         return false;
     }
@@ -53,9 +57,9 @@ export class DshRunner {
             this.stoppedSessions.add(sessionId);
             this.sessionManager.setTaskState(sessionId, 'stopped');
             try {
-                proc.kill('SIGINT');
+                let exited = false;
                 const killTimer = setTimeout(() => {
-                    if (proc.exitCode === null && !proc.killed) {
+                    if (!exited && proc.exitCode === null) {
                         try {
                             proc.kill('SIGKILL');
                         } catch {
@@ -65,9 +69,12 @@ export class DshRunner {
                 }, 2000);
 
                 proc.once('close', () => {
+                    exited = true;
                     clearTimeout(killTimer);
                     this.activeProcesses.delete(sessionId);
                 });
+
+                proc.kill('SIGINT');
             } catch (err) {
                 console.warn(`[DshRunner] 终止进程失败: ${err}`);
                 this.activeProcesses.delete(sessionId);
@@ -75,6 +82,12 @@ export class DshRunner {
             return true;
         }
         return false;
+    }
+
+    public stopAll(): void {
+        for (const sessionId of Array.from(this.activeProcesses.keys())) {
+            this.stop(sessionId);
+        }
     }
 
     public async execute(
@@ -109,20 +122,26 @@ ${systemInstructions}
 [主人当前提问与指令]
 ${userPrompt}`;
 
-        // 调用 npx @deepseek-ai/dsh --profile headless --session-id <sessionId> --json 执行，
-        // 保持多轮会话上下文接续，并通过 JSON 事件流与前置上下文无损传递人设记忆
+        // 检查当前会话是否已有持久化的 dshSessionId
+        const dshSessionId = this.sessionManager.getDshSessionId(sessionId);
+
+        // 调用 dsh --profile headless 执行，
+        // 若已有 dshSessionId 则传入 --session-id 接续多轮对话，若为首轮则不传由 dsh 自动新建；
+        // 通过 stdin 管道以 '-' 传参，避免在命令行参数中暴露人设与提问，同时消除命令行长度限制
         const dshArgs = [
             '-y',
             '@deepseek-ai/dsh',
             '--profile',
             'headless',
-            '--session-id',
-            sessionId,
-            '--json',
-            fullPrompt,
         ];
 
-        console.log(`[DshRunner] 在工作区 ${this.workspace} 启动任务 (会话: ${sessionId})...`);
+        if (dshSessionId) {
+            dshArgs.push('--session-id', dshSessionId);
+        }
+
+        dshArgs.push('--json', '-');
+
+        console.log(`[DshRunner] 在工作区 ${this.workspace} 启动任务 (会话: ${sessionId}, dshSession: ${dshSessionId || '新会话'})...`);
 
         try {
             const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
@@ -139,8 +158,15 @@ ${userPrompt}`;
 
             this.activeProcesses.set(sessionId, child);
 
+            // 将提示词与记忆通过 stdin 写入，不在 argv 中暴露私密指令，解除命令行参数长度限制
+            if (child.stdin && !child.stdin.destroyed) {
+                child.stdin.write(fullPrompt);
+                child.stdin.end();
+            }
+
             let stdoutAcc = '';
             let stderrAcc = '';
+            let stdoutBuffer = '';
             let currentToolCall: ToolCallState | null = null;
             let toolSeq = 0;
 
@@ -152,90 +178,124 @@ ${userPrompt}`;
                 }
             };
 
-            child.stdout?.on('data', async (chunk: Buffer) => {
-                const text = chunk.toString('utf8');
-                stdoutAcc += text;
+            const processLine = async (line: string) => {
+                const trimmedLine = line.trim();
+                if (!trimmedLine) return;
 
-                // 尝试解析是否为 JSON 事件流（dsh --json 输出）
-                const lines = text.split('\n');
-                for (const line of lines) {
-                    const trimmedLine = line.trim();
-                    if (!trimmedLine) continue;
+                let isJsonEvent = false;
+                if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
+                    try {
+                        const evt = JSON.parse(trimmedLine) as Record<string, unknown>;
+                        isJsonEvent = true;
 
-                    let isJsonEvent = false;
-                    if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
-                        try {
-                            const evt = JSON.parse(trimmedLine) as Record<string, unknown>;
-                            if (evt.type === 'delta' && typeof evt.text === 'string') {
-                                isJsonEvent = true;
-                                callbacks.onDelta(evt.text);
-                            } else if (evt.type === 'tool_call' || evt.tool) {
-                                isJsonEvent = true;
-                                toolSeq++;
-                                currentToolCall = {
-                                    id: `tool-${sessionId}-${toolSeq}`,
-                                    name: String(evt.name || evt.tool || '系统工具'),
-                                    status: 'running',
-                                    summary: String(evt.summary || evt.description || ''),
-                                };
-                                callbacks.onToolCall({ ...currentToolCall });
-                                callbacks.onStatusChange('running_tool');
+                        if (evt.type === 'session' && typeof evt.sessionId === 'string' && evt.sessionId) {
+                            // 捕获 dsh 分配的真实会话 ID，并持久化到会话数据中
+                            this.sessionManager.setDshSessionId(sessionId, evt.sessionId);
+                        } else if (evt.type === 'text' && typeof evt.text === 'string') {
+                            if (currentToolCall && currentToolCall.status === 'running') {
+                                finalizeCurrentTool('done');
                             }
-                        } catch {
-                            // 非合法 JSON 则走下方普通文本流式匹配
-                        }
-                    }
-
-                    if (!isJsonEvent) {
-                        // 识别审批请求提示（例如 [y/N] 或需要人工确认的特定标记）
-                        const approvalMatch = trimmedLine.match(/\[APPROVAL_REQUIRED:([^:]+):([^\]]+)\]/i);
-                        const isInteractiveConfirm = !approvalMatch && (trimmedLine.includes('确认执行') && trimmedLine.includes('[y/n]'));
-
-                        if ((approvalMatch || isInteractiveConfirm) && callbacks.onApprovalRequest) {
-                            const approvalId = `appr-${Date.now()}`;
-                            const toolName = approvalMatch ? approvalMatch[1] : '系统指令';
-                            const prompt = approvalMatch ? approvalMatch[2] : '助手请求确认执行高风险操作，是否同意？';
-
-                            callbacks.onApprovalRequest({
-                                approvalId,
-                                toolName,
-                                prompt,
-                                status: 'pending',
-                            });
-                            callbacks.onStatusChange('running_tool');
-
-                            const approved = await new Promise<boolean>((resolve) => {
-                                this.pendingApprovals.set(sessionId, resolve);
-                            });
-                            this.pendingApprovals.delete(sessionId);
-
-                            if (child.stdin && !child.stdin.destroyed) {
-                                child.stdin.write(approved ? 'y\n' : 'n\n');
-                            }
-                            return;
-                        }
-
-                        // 识别常规工具调用流式标记
-                        if (trimmedLine.includes('[Tool]') || trimmedLine.includes('Running tool')) {
+                            callbacks.onDelta(evt.text);
+                        } else if (evt.type === 'thinking' && typeof evt.text === 'string') {
+                            callbacks.onStatusChange('thinking');
+                        } else if (evt.type === 'tool_call') {
                             if (currentToolCall && currentToolCall.status === 'running') {
                                 finalizeCurrentTool('done');
                             }
                             toolSeq++;
+                            const toolName = typeof evt.tool === 'string' ? evt.tool : '系统工具';
+                            const toolInput = evt.input ? JSON.stringify(evt.input).slice(0, 100) : '';
                             currentToolCall = {
-                                id: `tool-${sessionId}-${toolSeq}`,
-                                name: '系统工具',
+                                id: typeof evt.callId === 'string' ? evt.callId : `tool-${sessionId}-${toolSeq}`,
+                                name: toolName,
                                 status: 'running',
-                                summary: trimmedLine.slice(0, 100),
+                                summary: toolInput || toolName,
                             };
                             callbacks.onToolCall({ ...currentToolCall });
                             callbacks.onStatusChange('running_tool');
-                        } else {
-                            if (currentToolCall && currentToolCall.status === 'running') {
-                                finalizeCurrentTool('done');
+                        } else if (evt.type === 'tool_result') {
+                            if (currentToolCall) {
+                                const isErr = evt.status === 'error';
+                                finalizeCurrentTool(isErr ? 'failed' : 'done');
                             }
-                            callbacks.onDelta(trimmedLine + '\n');
+                        } else if (evt.type === 'status') {
+                            if (evt.phase === 'turn_start' || evt.phase === 'step_start') {
+                                callbacks.onStatusChange('thinking');
+                            }
+                        } else if (evt.type === 'final' && typeof evt.text === 'string' && evt.text) {
+                            // 终态文本
+                        } else if (evt.type === 'error' && typeof evt.message === 'string') {
+                            callbacks.onDelta(`\n\n> ⚠️ [执行反馈]：${evt.message}`);
+                            callbacks.onStatusChange('error', evt.message);
                         }
+                    } catch {
+                        isJsonEvent = false;
                     }
+                }
+
+                if (!isJsonEvent) {
+                    // 识别审批请求提示（例如 [y/N] 或需要人工确认的特定标记）
+                    const approvalMatch = trimmedLine.match(/\[APPROVAL_REQUIRED:([^:]+):([^\]]+)\]/i);
+                    const isInteractiveConfirm = !approvalMatch && (trimmedLine.includes('确认执行') && trimmedLine.includes('[y/n]'));
+
+                    if ((approvalMatch || isInteractiveConfirm) && callbacks.onApprovalRequest) {
+                        const approvalId = `appr-${Date.now()}`;
+                        const toolName = approvalMatch ? approvalMatch[1] : '系统指令';
+                        const prompt = approvalMatch ? approvalMatch[2] : '助手请求确认执行高风险操作，是否同意？';
+
+                        callbacks.onApprovalRequest({
+                            approvalId,
+                            toolName,
+                            prompt,
+                            status: 'pending',
+                        });
+                        callbacks.onStatusChange('running_tool');
+
+                        const approved = await new Promise<boolean>((resolve) => {
+                            this.pendingApprovals.set(sessionId, resolve);
+                        });
+                        this.pendingApprovals.delete(sessionId);
+
+                        if (child.stdin && !child.stdin.destroyed) {
+                            child.stdin.write(approved ? 'y\n' : 'n\n');
+                        }
+                        return;
+                    }
+
+                    // 识别常规工具调用流式标记
+                    if (trimmedLine.includes('[Tool]') || trimmedLine.includes('Running tool')) {
+                        if (currentToolCall && currentToolCall.status === 'running') {
+                            finalizeCurrentTool('done');
+                        }
+                        toolSeq++;
+                        currentToolCall = {
+                            id: `tool-${sessionId}-${toolSeq}`,
+                            name: '系统工具',
+                            status: 'running',
+                            summary: trimmedLine.slice(0, 100),
+                        };
+                        callbacks.onToolCall({ ...currentToolCall });
+                        callbacks.onStatusChange('running_tool');
+                    } else {
+                        if (currentToolCall && currentToolCall.status === 'running') {
+                            finalizeCurrentTool('done');
+                        }
+                        callbacks.onDelta(trimmedLine + '\n');
+                    }
+                }
+            };
+
+            child.stdout?.on('data', async (chunk: Buffer) => {
+                const text = chunk.toString('utf8');
+                stdoutAcc += text;
+                stdoutBuffer += text;
+
+                // 跨 chunk 完整换行解析，防止跨包拆分导致 JSON 解析截断
+                const lines = stdoutBuffer.split('\n');
+                stdoutBuffer = lines.pop() ?? '';
+
+                for (const line of lines) {
+                    await processLine(line);
                 }
             });
 
@@ -246,7 +306,12 @@ ${userPrompt}`;
             });
 
             await new Promise<void>((resolve) => {
-                child.on('close', (code: number | null) => {
+                child.on('close', async (code: number | null) => {
+                    if (stdoutBuffer.trim()) {
+                        await processLine(stdoutBuffer);
+                        stdoutBuffer = '';
+                    }
+
                     finalizeCurrentTool(code === 0 ? 'done' : 'failed');
                     this.activeProcesses.delete(sessionId);
                     console.log(`[DshRunner] 进程退出，退出码: ${code}`);

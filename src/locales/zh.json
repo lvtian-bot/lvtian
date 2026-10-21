@@ -324,6 +324,9 @@
     "clearConfirm": "确定要清空当前的聊天记录吗？这不会影响服务端的记忆文件。",
     "taskRunningRejection": "上一个任务正在执行中，请等待其完成或点击停止",
     "taskStopped": "任务已被手动终止",
-    "serviceRestartInterrupted": "⚠️ 服务已重启，前序执行已中断"
+    "serviceRestartInterrupted": "⚠️ 服务已重启，前序执行已中断",
+    "configApplied": "已成功解析并应用配置",
+    "configInvalid": "未能在剪贴板中识别出有效服务地址",
+    "thinkingText": "绿天正在思考中..."
   }
 }

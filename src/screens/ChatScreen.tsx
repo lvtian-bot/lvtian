@@ -79,19 +79,19 @@ export const ChatScreen = () => {
         try {
             const text = await Clipboard.getStringAsync();
             if (!text.trim()) {
-                Alert.alert(t('settings.notice', '提示'), '剪贴板内容为空');
+                Alert.alert(t('common.notice', '提示'), t('assistant.clipboardEmpty', '剪贴板内容为空'));
                 return;
             }
             const parsed = AssistantClient.parseConnectionUrl(text);
             if (parsed.url) {
                 await setServerConfig(parsed.url, parsed.token);
                 AssistantClient.getInstance().connect();
-                Alert.alert(t('settings.success', '成功'), '已成功解析并应用配置');
+                Alert.alert(t('common.success', '成功'), t('assistant.configApplied', '已成功解析并应用配置'));
             } else {
-                Alert.alert(t('settings.failure', '失败'), '未能在剪贴板中识别出有效服务地址');
+                Alert.alert(t('common.error', '错误'), t('assistant.configInvalid', '未能在剪贴板中识别出有效服务地址'));
             }
         } catch {
-            Alert.alert(t('settings.failure', '失败'), '读取剪贴板失败');
+            Alert.alert(t('common.error', '错误'), t('assistant.clipboardFail', '读取剪贴板失败'));
         }
     };
 
@@ -235,7 +235,7 @@ export const ChatScreen = () => {
                                                     color={theme.colors.primary}
                                                 />
                                                 <Text style={styles.thinkingText}>
-                                                    绿天正在思考中...
+                                                    {t('assistant.thinkingText', '绿天正在思考中...')}
                                                 </Text>
                                             </View>
                                         )}

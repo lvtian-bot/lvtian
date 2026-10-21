@@ -8,6 +8,7 @@ export interface SessionData {
     messages: AssistantMessage[];
     taskState: TaskExecutionState;
     pendingApproval?: ApprovalRequest;
+    dshSessionId?: string;
     updatedAt: number;
 }
 
@@ -50,22 +51,28 @@ export class SessionManager {
                     const filePath = path.join(this.sessionsDir, file);
                     const raw = fs.readFileSync(filePath, 'utf8');
                     const session = JSON.parse(raw) as SessionData;
-                    // 如果服务重启时处于 processing 状态，重置为 stopped 状态，并修补中断中的消息
-                    if (session.taskState === 'processing') {
+                    // 如果服务重启时处于 processing 或 awaiting_approval 状态，重置为 stopped 状态，并修补中断中的消息
+                    let modified = false;
+                    if (session.taskState === 'processing' || session.taskState === 'awaiting_approval') {
                         session.taskState = 'stopped';
-                        let modified = false;
-                        for (const m of session.messages) {
-                            if (m.status === 'processing') {
-                                m.status = 'error';
-                                m.content = m.content
-                                    ? `${m.content}\n\n⚠️ [任务中断：服务已重启]`
-                                    : '⚠️ 服务已重启，前序执行已中断';
-                                modified = true;
-                            }
+                        session.pendingApproval = undefined;
+                        modified = true;
+                    }
+
+                    for (const m of session.messages) {
+                        if (m.status === 'processing') {
+                            m.status = 'error';
+                            m.content = m.content
+                                ? `${m.content}\n\n⚠️ [任务中断：服务已重启]`
+                                : '⚠️ 服务已重启，前序执行已中断';
+                            // 同步推进 seq 与 currentSeq，确保客户端重连增量同步能感知此修补
+                            session.currentSeq += 1;
+                            m.seq = session.currentSeq;
+                            modified = true;
                         }
-                        if (modified) {
-                            this.persistSession(session, true);
-                        }
+                    }
+                    if (modified) {
+                        this.persistSession(session, true);
                     }
                     this.sessions.set(session.sessionId, session);
                 }
@@ -236,6 +243,17 @@ export class SessionManager {
         const session = this.getOrCreateSession(sessionId);
         session.pendingApproval = undefined;
         this.persistSession(session);
+    }
+
+    public setDshSessionId(sessionId: string, dshSessionId: string): void {
+        const session = this.getOrCreateSession(sessionId);
+        session.dshSessionId = dshSessionId;
+        this.persistSession(session, true);
+    }
+
+    public getDshSessionId(sessionId: string): string | undefined {
+        const session = this.getOrCreateSession(sessionId);
+        return session.dshSessionId;
     }
 
     public getReconcileData(

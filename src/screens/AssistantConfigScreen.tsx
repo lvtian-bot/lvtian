@@ -79,6 +79,10 @@ export const AssistantConfigScreen = () => {
             Alert.alert(t('settings.failure', '失败'), t('assistant.urlRequired', '服务地址不能为空'));
             return;
         }
+        if (!token.trim()) {
+            Alert.alert(t('settings.failure', '失败'), t('assistant.tokenRequired', '访问令牌（Token）不能为空'));
+            return;
+        }
 
         setSaving(true);
         try {
