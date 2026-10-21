@@ -53,6 +53,16 @@ export class DshRunner {
     }
 
     public stop(sessionId: string): boolean {
+        // 将会话中进行中的助理消息状态终态化为 error，避免离线重连客户端一直悬挂思考动画
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        const lastMsg = session.messages[session.messages.length - 1];
+        if (lastMsg && lastMsg.status === 'processing') {
+            this.sessionManager.updateMessage(sessionId, lastMsg.id, (m) => {
+                m.status = 'error';
+                m.errorMessage = '任务已被手动终止';
+            });
+        }
+
         const proc = this.activeProcesses.get(sessionId);
         if (proc) {
             this.stoppedSessions.add(sessionId);
@@ -75,7 +85,13 @@ export class DshRunner {
                     this.activeProcesses.delete(sessionId);
                 });
 
-                proc.kill('SIGINT');
+                if (proc.exitCode === null) {
+                    proc.kill('SIGINT');
+                } else {
+                    exited = true;
+                    clearTimeout(killTimer);
+                    this.activeProcesses.delete(sessionId);
+                }
             } catch (err) {
                 console.warn(`[DshRunner] 终止进程失败: ${err}`);
                 this.activeProcesses.delete(sessionId);
@@ -85,10 +101,36 @@ export class DshRunner {
         return false;
     }
 
-    public stopAll(): void {
-        for (const sessionId of Array.from(this.activeProcesses.keys())) {
-            this.stop(sessionId);
-        }
+    public async stopAll(): Promise<void> {
+        const sessionIds = Array.from(this.activeProcesses.keys());
+        if (sessionIds.length === 0) return;
+
+        const promises = sessionIds.map((sessionId) => {
+            return new Promise<void>((resolve) => {
+                const proc = this.activeProcesses.get(sessionId);
+                if (!proc || proc.exitCode !== null) {
+                    this.stop(sessionId);
+                    resolve();
+                    return;
+                }
+
+                let resolved = false;
+                const done = () => {
+                    if (!resolved) {
+                        resolved = true;
+                        resolve();
+                    }
+                };
+
+                proc.once('close', done);
+                this.stop(sessionId);
+
+                // 2.5 秒超时兜底，保证主服务停机绝不挂起
+                setTimeout(done, 2500);
+            });
+        });
+
+        await Promise.all(promises);
     }
 
     public async execute(
@@ -302,7 +344,10 @@ ${userPrompt}`;
             child.stdout?.on('data', async (chunk: Buffer) => {
                 // 使用 StringDecoder 解码，避免汉字等 UTF-8 多字节字符被 chunk 边界截断导致乱码
                 const text = stdoutDecoder.write(chunk);
-                stdoutAcc += text;
+                // 限制内存累加器上限为 1000 字符，用于每日日志记录，同时防止长任务无上限膨胀内存
+                if (stdoutAcc.length < 1000) {
+                    stdoutAcc = (stdoutAcc + text).slice(0, 1000);
+                }
                 stdoutBuffer += text;
 
                 // 跨 chunk 完整换行解析，防止跨包拆分导致 JSON 解析截断
@@ -316,7 +361,9 @@ ${userPrompt}`;
 
             child.stderr?.on('data', (chunk: Buffer) => {
                 const text = stderrDecoder.write(chunk);
-                stderrAcc += text;
+                if (stderrAcc.length < 1000) {
+                    stderrAcc = (stderrAcc + text).slice(0, 1000);
+                }
                 console.log(`[DshRunner:stderr] ${text.trim()}`);
             });
 

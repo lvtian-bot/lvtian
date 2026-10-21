@@ -1,3 +1,4 @@
+import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
 import {
     ClientMessage,
@@ -27,8 +28,12 @@ export class AssistantClient {
      */
     public static parseConnectionUrl(input: string): { url: string; token: string } {
         const trimmed = input.trim();
+        let toParse = trimmed;
+        if (!/^https?:\/\//i.test(toParse) && !toParse.startsWith('ws://') && !toParse.startsWith('wss://')) {
+            toParse = `http://${toParse}`;
+        }
         try {
-            const parsed = new URL(trimmed);
+            const parsed = new URL(toParse);
             const token = parsed.searchParams.get('token') || '';
             parsed.search = '';
             parsed.hash = '';
@@ -48,10 +53,10 @@ export class AssistantClient {
     ): Promise<{ success: boolean; message: string; version?: string }> {
         const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
         if (!cleanUrl) {
-            return { success: false, message: '服务地址不能为空' };
+            return { success: false, message: i18n.t('assistant.urlRequired', '服务地址不能为空') };
         }
         if (!token || !token.trim()) {
-            return { success: false, message: '访问令牌（Token）不能为空' };
+            return { success: false, message: i18n.t('assistant.tokenRequired', '访问令牌（Token）不能为空') };
         }
 
         try {
@@ -65,7 +70,7 @@ export class AssistantClient {
             clearTimeout(timeoutId);
 
             if (!healthRes.ok) {
-                return { success: false, message: `服务响应异常 (${healthRes.status})` };
+                return { success: false, message: `${i18n.t('assistant.serverError', '服务响应异常')} (${healthRes.status})` };
             }
 
             const healthData = (await healthRes.json()) as { version?: string };
@@ -82,23 +87,23 @@ export class AssistantClient {
             clearTimeout(authTimeout);
 
             if (infoRes.status === 401) {
-                return { success: false, message: '连接成功，但访问令牌（Token）不正确' };
+                return { success: false, message: i18n.t('assistant.tokenIncorrect', '连接成功，但访问令牌（Token）不正确') };
             }
             if (!infoRes.ok) {
-                return { success: false, message: `鉴权验证失败 (${infoRes.status})` };
+                return { success: false, message: `${i18n.t('assistant.authFailed', '鉴权验证失败')} (${infoRes.status})` };
             }
 
             return {
                 success: true,
-                message: '连接成功',
+                message: i18n.t('assistant.testSuccess', '连接成功'),
                 version: healthData.version,
             };
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             if (msg.includes('aborted') || msg.includes('timeout')) {
-                return { success: false, message: '连接超时，请检查服务是否启动或网络可达性' };
+                return { success: false, message: i18n.t('assistant.connectionTimeout', '连接超时，请检查服务是否启动或网络可达性') };
             }
-            return { success: false, message: `网络连接失败: ${msg}` };
+            return { success: false, message: `${i18n.t('assistant.connectionFailed', '网络连接失败')}: ${msg}` };
         }
     }
 
@@ -137,7 +142,6 @@ export class AssistantClient {
             this.ws = new WebSocket(wsUrl);
 
             this.ws.onopen = () => {
-                this.reconnectAttempts = 0;
                 store.setConnectionState('connected');
                 this.startPing();
 
@@ -315,7 +319,10 @@ export class AssistantClient {
 
         switch (msg.type) {
             case 'auth_result': {
-                if (!msg.success) {
+                if (msg.success) {
+                    // 仅在鉴权真正成功后才重置重连尝试计数，防止闪断网络进入 1s 高频重试死循环
+                    this.reconnectAttempts = 0;
+                } else {
                     store.setConnectionState('error', msg.error || '认证失败，请检查访问令牌');
                     this.isExplicitlyClosed = true;
                     this.stopPing();
@@ -343,32 +350,26 @@ export class AssistantClient {
                     store.setPendingApproval(null);
                 }
 
-                // 保留本地发送失败或仍在排队发送的未决消息，防止重连后用户重试入口丢失
+                // 收集服务端确认返回的所有消息 ID
+                const serverIdSet = new Set(msg.messages.map((m) => m.id));
                 const localMessages = store.messages;
-                const localUnsent = localMessages.filter(
-                    (m) => m.status === 'error' || m.status === 'sending'
-                );
 
                 const msgMap = new Map<string, AssistantMessage>();
-                // 先写入本地已有的所有消息（支持增量同步）
+                // 先写入本地已有的所有消息；若原本处于 sending 的消息未在服务端返回列表中，转为 error 状态以激活重试按钮
                 for (const m of localMessages) {
-                    msgMap.set(m.id, m);
+                    if (m.status === 'sending' && !serverIdSet.has(m.id)) {
+                        msgMap.set(m.id, {
+                            ...m,
+                            status: 'error',
+                            errorMessage: m.errorMessage || i18n.t('assistant.sendInterrupted', '发送中断，请重试'),
+                        });
+                    } else {
+                        msgMap.set(m.id, m);
+                    }
                 }
                 // 服务端下发的消息优先覆盖更新
                 for (const m of msg.messages) {
                     msgMap.set(m.id, m);
-                }
-                // 确保本地未成功的消息依然保留；若原本处于 sending 的消息未获服务端确认，转为 error 状态以激活重试按钮
-                for (const m of localUnsent) {
-                    if (!msgMap.has(m.id)) {
-                        msgMap.set(m.id, {
-                            ...m,
-                            status: 'error',
-                            errorMessage: m.errorMessage || '发送中断，请重试',
-                        });
-                    } else if (msgMap.get(m.id)?.status === 'error') {
-                        msgMap.set(m.id, m);
-                    }
                 }
 
                 const merged = Array.from(msgMap.values()).sort(
@@ -385,7 +386,7 @@ export class AssistantClient {
                     id: msg.messageId,
                     seq: msg.seq,
                     role: 'user',
-                    content: existing ? existing.content : '',
+                    content: existing ? existing.content : (msg.content || ''),
                     timestamp: existing ? existing.timestamp : Date.now(),
                     status: isError ? 'error' : 'sent',
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,

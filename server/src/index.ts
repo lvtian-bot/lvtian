@@ -80,7 +80,10 @@ async function main() {
     console.log(`⚙️ 配置文件路径:     ~/.config/lvtian/config.json (权限 0600)`);
     console.log('====================================================\n');
 
+    let isShuttingDown = false;
     const shutdown = async () => {
+        if (isShuttingDown) return;
+        isShuttingDown = true;
         console.log('\n正在停止绿天服务端...');
         await server.stop();
         console.log('绿天服务端已安全停止。');

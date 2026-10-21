@@ -329,6 +329,13 @@
     "configInvalid": "Could not identify a valid server URL from clipboard",
     "thinkingText": "Lvtian is thinking...",
     "stopFailedOffline": "Network not ready, stop request could not be delivered",
-    "tokenMissingInClip": "Clipboard link is missing access token"
+    "tokenMissingInClip": "Clipboard link is missing access token",
+    "testSuccess": "Connection successful",
+    "tokenIncorrect": "Connected, but access token is incorrect",
+    "authFailed": "Authentication failed",
+    "serverError": "Server responded with an error",
+    "connectionTimeout": "Connection timed out. Please check if the service is running",
+    "connectionFailed": "Network connection failed",
+    "sendInterrupted": "Send interrupted, please retry"
   }
 }

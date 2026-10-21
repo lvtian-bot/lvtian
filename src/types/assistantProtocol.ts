@@ -65,6 +65,8 @@ export type ServerMessage =
           messageId: string;
           seq: number;
           status?: 'sent' | 'error';
+          role?: 'user';
+          content?: string;
           error?: string;
       }
     | {

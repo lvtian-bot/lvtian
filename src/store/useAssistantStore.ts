@@ -70,8 +70,9 @@ export const useAssistantStore = create<AssistantState>()(
                     throw new Error('安全凭据存储失败，请检查系统安全存储或权限');
                 }
 
-                // 如果切换了不同的服务器地址，重置本地旧服务器的对话与对账序列状态
-                if (currentUrl && currentUrl !== cleanUrl) {
+                // 如果切换了不同的服务器地址或访问令牌（代表新服务实例），重置本地旧服务器的对话与对账序列状态
+                const currentToken = get().serverToken;
+                if ((currentUrl && currentUrl !== cleanUrl) || (currentToken && currentToken !== cleanToken)) {
                     set({
                         serverUrl: cleanUrl,
                         serverToken: cleanToken,

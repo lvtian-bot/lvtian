@@ -329,6 +329,13 @@
     "configInvalid": "未能在剪贴板中识别出有效服务地址",
     "thinkingText": "绿天正在思考中...",
     "stopFailedOffline": "当前网络未就绪，停止指令未送达",
-    "tokenMissingInClip": "剪贴板链接缺少访问令牌（Token）"
+    "tokenMissingInClip": "剪贴板链接缺少访问令牌（Token）",
+    "testSuccess": "连接成功",
+    "tokenIncorrect": "连接成功，但访问令牌（Token）不正确",
+    "authFailed": "鉴权验证失败",
+    "serverError": "服务响应异常",
+    "connectionTimeout": "连接超时，请检查服务是否启动或网络可达性",
+    "connectionFailed": "网络连接失败",
+    "sendInterrupted": "发送中断，请重试"
   }
 }

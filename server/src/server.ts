@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
+import type { WebSocketServer } from 'ws';
 import { ServerConfig } from './config.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
@@ -27,7 +28,7 @@ export class LvtianServer {
     private memoryManager: MemoryManager;
     private dshRunner: DshRunner;
     private httpServer: http.Server;
-    private wss: any;
+    private wss: WebSocketServer;
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
     constructor(
@@ -48,7 +49,7 @@ export class LvtianServer {
         this.wss = new WS.Server({
             server: this.httpServer,
             maxPayload: 1024 * 1024, // 限制单条报文 1MB 上限，防止超大报文消耗内存或阻塞事件循环
-        });
+        }) as WebSocketServer;
         this.setupWebSocket();
     }
 
@@ -275,20 +276,36 @@ export class LvtianServer {
             return;
         }
 
-        // 1. 存入用户消息
-        const userMsg = this.sessionManager.addMessage(sessionId, {
-            id: userMessageId,
-            role: 'user',
-            content,
-            timestamp: Date.now(),
-            status: 'sent',
-        });
+        // 1. 存入用户消息 (包裹磁盘写入异常保护)
+        let userMsg;
+        try {
+            userMsg = this.sessionManager.addMessage(sessionId, {
+                id: userMessageId,
+                role: 'user',
+                content,
+                timestamp: Date.now(),
+                status: 'sent',
+            });
+        } catch (addErr) {
+            const errStr = addErr instanceof Error ? addErr.message : String(addErr);
+            console.error(`[Server] 保存用户消息失败:`, addErr);
+            this.send(ws, {
+                type: 'message_ack',
+                messageId: userMessageId,
+                seq: 0,
+                status: 'error',
+                error: errStr,
+            });
+            return;
+        }
 
-        // 2. 向该会话所有活跃连接广播用户消息受理确认，确保多端时间线完全同步
+        // 2. 向该会话所有活跃连接广播用户消息受理确认，并携带提问内容，确保多端时间线完全同步
         this.broadcastSession(sessionId, {
             type: 'message_ack',
             messageId: userMessageId,
             seq: userMsg.seq,
+            role: 'user',
+            content,
         });
 
         // 3. 创建助理回复消息占位
@@ -311,7 +328,7 @@ export class LvtianServer {
             status: 'thinking',
         });
 
-        // 4. 调用 DshRunner 驱动底层任务
+        // 4. 调用 DshRunner 驱动底层任务 (捕获异步异常，避免 unhandled rejection 导致主进程崩溃)
         this.dshRunner.execute(sessionId, assistantMessageId, content, {
             onDelta: (delta: string) => {
                 const updated = this.sessionManager.appendDelta(sessionId, assistantMessageId, delta);
@@ -369,6 +386,21 @@ export class LvtianServer {
                     error,
                 });
             },
+        }).catch((err: unknown) => {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            console.error(`[Server] 执行任务发生未捕获异常:`, err);
+            this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
+                m.status = 'error';
+                m.errorMessage = errorMsg;
+            });
+            const seq = this.sessionManager.setTaskState(sessionId, 'error');
+            this.broadcastSession(sessionId, {
+                type: 'task_status',
+                seq,
+                sessionId,
+                state: 'error',
+                error: errorMsg,
+            });
         });
     }
 
@@ -396,23 +428,23 @@ export class LvtianServer {
         });
     }
 
-    public stop(): Promise<void> {
-        return new Promise((resolve) => {
-            // 终止所有正在运行的底层 dsh 子进程，防止僵尸进程常驻
-            this.dshRunner.stopAll();
+    public async stop(): Promise<void> {
+        // 优雅终止所有正在运行的底层 dsh 子进程，等待其退出（带 2.5s 超时），防止僵尸进程常驻
+        await this.dshRunner.stopAll();
 
-            if (this.heartbeatInterval) {
-                clearInterval(this.heartbeatInterval);
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+        }
+        // 终止所有存活的客户端 WebSocket，避免 wss.close() 等待未断开客户端导致关停挂起
+        this.wss.clients.forEach((client: WebSocket) => {
+            try {
+                client.terminate();
+            } catch {
+                // ignore
             }
-            // 终止所有存活的客户端 WebSocket，避免 wss.close() 等待未断开客户端导致关停挂起
-            this.wss.clients.forEach((client: WebSocket) => {
-                try {
-                    client.terminate();
-                } catch {
-                    // ignore
-                }
-            });
+        });
 
+        return new Promise((resolve) => {
             const forceTimeout = setTimeout(() => {
                 this.httpServer.close(() => {
                     resolve();

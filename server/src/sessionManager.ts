@@ -105,10 +105,10 @@ export class SessionManager {
         return session;
     }
 
-    public persistSession(session: SessionData, immediate = true): void {
+    public persistSession(session: SessionData, immediate = true): boolean {
         session.updatedAt = Date.now();
 
-        const writeNow = () => {
+        const writeNow = (): boolean => {
             try {
                 const filePath = this.getSafeSessionPath(session.sessionId);
                 const tmpPath = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
@@ -119,8 +119,10 @@ export class SessionManager {
                     // ignore
                 }
                 fs.renameSync(tmpPath, filePath);
+                return true;
             } catch (err) {
                 console.error(`[SessionManager] 保存会话 ${session.sessionId} 失败: ${err}`);
+                return false;
             }
         };
 
@@ -130,7 +132,7 @@ export class SessionManager {
                 clearTimeout(timer);
                 this.writeTimers.delete(session.sessionId);
             }
-            writeNow();
+            return writeNow();
         } else {
             // 防抖落盘，避免高频流式 chunk 频繁同步阻塞事件循环
             if (!this.writeTimers.has(session.sessionId)) {
@@ -140,6 +142,7 @@ export class SessionManager {
                 }, 300);
                 this.writeTimers.set(session.sessionId, timer);
             }
+            return true;
         }
     }
 
@@ -161,7 +164,10 @@ export class SessionManager {
             seq,
         };
         session.messages.push(fullMsg);
-        this.persistSession(session, true);
+        const saved = this.persistSession(session, true);
+        if (!saved) {
+            throw new Error(`持久化会话消息失败 (存储满或权限受限): ${sessionId}`);
+        }
         return fullMsg;
     }
 
@@ -272,10 +278,10 @@ export class SessionManager {
         currentSeq: number;
     } {
         const session = this.getOrCreateSession(sessionId);
-        // 如果客户端是初次同步（lastSeq <= 0），返回全部消息；如果增量同步，返回当前会话中大于 lastSeq 的消息
+        // 如果客户端是初次同步（lastSeq <= 0），返回最近 100 条消息窗口切片；如果增量同步，返回当前会话中大于 lastSeq 的消息
         const messages = lastSeq > 0
             ? session.messages.filter((m) => (m.seq ?? 0) > lastSeq)
-            : session.messages;
+            : session.messages.slice(-100);
 
         return {
             messages,
