@@ -133,12 +133,16 @@ test('FileManager correctly lists, reads, saves and resolves files', async () =>
     const testFile = path.join(tmpDir, 'test.md');
     fs.writeFileSync(testFile, '# 标题\n内容测试', 'utf8');
 
-    const fm = new FileManager(tmpDir);
+    const fm = new FileManager(tmpDir, tmpDir);
 
     // 1. 系统信息
     const sysInfo = fm.getSystemInfo();
     assert.equal(sysInfo.workspaceDir, tmpDir);
+    assert.equal(sysInfo.allowedRoot, tmpDir);
     assert.ok(sysInfo.homeDir);
+
+    // 验证越界访问拦截
+    assert.throws(() => fm.resolvePath('/etc/passwd'), /超出允许的访问根目录/);
 
     // 2. 目录列表
     const listing = await fm.listDirectory(tmpDir);
@@ -174,7 +178,7 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
     const sm = new SessionManager(tmpDir);
     const mm = new MemoryManager(tmpDir);
     const runner = new DshRunner(tmpDir, mm, sm);
-    const fm = new FileManager(tmpDir);
+    const fm = new FileManager(tmpDir, tmpDir);
 
     const testFile = path.join(tmpDir, 'report.md');
     fs.writeFileSync(testFile, '初始报告内容', 'utf8');

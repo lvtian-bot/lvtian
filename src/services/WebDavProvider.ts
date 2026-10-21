@@ -85,12 +85,20 @@ export class WebDavProvider implements ICloudProvider {
     }
 
 
-    async uploadContent(key: string, content: string): Promise<void> {
+    async uploadContent(key: string, content: string, expectedEtag?: string): Promise<void> {
         const headers: Record<string, string> = {
             'Content-Type': 'text/markdown; charset=utf-8',
         };
+        if (expectedEtag) {
+            headers['If-Match'] = expectedEtag;
+        }
         const response = await this.request('PUT', key, headers, content);
-        if (!response.ok && response.status !== 201 && response.status !== 204) {
+        if (!response.ok) {
+            if (response.status === 412) {
+                const err: any = new Error('云端文件已被修改，保存已被阻止 (412 Precondition Failed)');
+                err.code = 'PreconditionFailed';
+                throw err;
+            }
             throw new Error(`WebDav 上传内容失败: ${response.status} ${response.statusText}`);
         }
     }

@@ -237,6 +237,15 @@ export class LvtianServer {
                     'Content-Disposition': `attachment; filename="${encodeURIComponent(downloadInfo.fileName)}"`,
                 });
                 const stream = fs.createReadStream(downloadInfo.resolvedPath);
+                stream.on('error', (streamErr: unknown) => {
+                    console.error('[Server] 下载流传输异常:', streamErr);
+                    if (!res.headersSent) {
+                        res.writeHead(500, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: '文件传输读取失败' }));
+                    } else {
+                        res.destroy();
+                    }
+                });
                 stream.pipe(res);
             } catch (err: unknown) {
                 res.writeHead(404, { 'Content-Type': 'application/json' });

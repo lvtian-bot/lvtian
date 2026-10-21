@@ -1,6 +1,6 @@
 export interface ICloudProvider {
     uploadFile(key: string, filePath: string, expectedEtag?: string): Promise<{ etag: string; lastModified: string } | void>;
-    uploadContent?(key: string, content: string): Promise<void>;
+    uploadContent?(key: string, content: string, expectedEtag?: string): Promise<void>;
     downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }>;
     getCloudFileContent(key: string): Promise<string>;
     listFiles(prefix?: string): Promise<CloudFileItem[]>;
@@ -83,10 +83,10 @@ class CloudService {
         return this.provider.uploadFile(key, filePath, expectedEtag);
     }
 
-    async uploadContent(key: string, content: string): Promise<void> {
+    async uploadContent(key: string, content: string, expectedEtag?: string): Promise<void> {
         if (!this.provider) throw new Error('Cloud provider not configured');
         if (this.provider.uploadContent) {
-            return this.provider.uploadContent(key, content);
+            return this.provider.uploadContent(key, content, expectedEtag);
         }
         throw new Error('当前云服务不支持直接上传内容');
     }

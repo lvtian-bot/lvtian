@@ -7,8 +7,8 @@ import {
     RefreshControl,
     ActivityIndicator,
     TouchableOpacity,
-    Alert,
     BackHandler,
+    DeviceEventEmitter,
 } from 'react-native';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -17,7 +17,7 @@ import Icon from '@expo/vector-icons/MaterialIcons';
 
 import { theme } from '../utils/theme';
 import { RootStackParamList, NoteStackParamList } from '../types/navigation';
-import { cloudService, CloudFileItem } from '../services/CloudService';
+import { cloudService, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudService';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList & NoteStackParamList>;
 type RoutePropType = RouteProp<NoteStackParamList, 'CloudFileList'>;
@@ -40,8 +40,17 @@ export const CloudNoteScreen = () => {
     const [loading, setLoading] = useState<boolean>(false);
     const [refreshing, setRefreshing] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const [isConfigured, setIsConfigured] = useState<boolean>(cloudService.isConfigured());
 
-    const isConfigured = cloudService.isConfigured();
+    // 监听云存储初始化完成事件，确保非响应式的 SecureStore 异步读取完成后及时更新界面
+    useEffect(() => {
+        const checkConfig = () => {
+            setIsConfigured(cloudService.isConfigured());
+        };
+        const sub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, checkConfig);
+        checkConfig();
+        return () => sub.remove();
+    }, []);
 
     /**
      * 在线拉取云盘文件并提取当前目录层级
@@ -120,12 +129,6 @@ export const CloudNoteScreen = () => {
         [currentPrefix, t]
     );
 
-    useFocusEffect(
-        useCallback(() => {
-            loadCloudFiles();
-        }, [loadCloudFiles])
-    );
-
     /**
      * 计算上级前缀
      */
@@ -141,19 +144,23 @@ export const CloudNoteScreen = () => {
 
     const parentPrefix = getParentPrefix(currentPrefix);
 
-    // 监听返回键：子目录返回上级，根目录返回上一页
-    useEffect(() => {
-        const backAction = () => {
-            if (currentPrefix) {
-                setCurrentPrefix(parentPrefix ?? '');
-                return true;
-            }
-            return false;
-        };
+    useFocusEffect(
+        useCallback(() => {
+            loadCloudFiles();
 
-        const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
-        return () => backHandler.remove();
-    }, [currentPrefix, parentPrefix]);
+            // 仅在当前屏幕获焦时监听 Android 返回键：子目录返回上级，根目录返回上一页
+            const backAction = () => {
+                if (currentPrefix) {
+                    setCurrentPrefix(parentPrefix ?? '');
+                    return true;
+                }
+                return false;
+            };
+
+            const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+            return () => backHandler.remove();
+        }, [loadCloudFiles, currentPrefix, parentPrefix])
+    );
 
     /**
      * 点击单个条目

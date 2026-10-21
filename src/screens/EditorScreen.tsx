@@ -114,7 +114,7 @@ export const EditorScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [filePath, DRAFT_KEY, t, isFlashMode, flashNoteId, paramInitialContent]);
+    }, [filePath, DRAFT_KEY, t, isFlashMode, flashNoteId, paramInitialContent, source]);
 
     useEffect(() => {
         loadFile();

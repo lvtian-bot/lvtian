@@ -20,15 +20,18 @@ export interface ServerDirectoryListing {
 export interface FileSystemInfo {
     homeDir: string;
     workspaceDir: string;
+    allowedRoot: string;
     separator: string;
     platform: string;
 }
 
 export class FileManager {
     private workspaceDir: string;
+    private allowedRoot: string;
 
-    constructor(workspaceDir?: string) {
-        this.workspaceDir = workspaceDir || path.join(os.homedir(), 'workspace');
+    constructor(workspaceDir?: string, allowedRoot?: string) {
+        this.workspaceDir = workspaceDir ? path.resolve(workspaceDir) : path.join(os.homedir(), 'workspace');
+        this.allowedRoot = allowedRoot ? path.resolve(allowedRoot) : os.homedir();
     }
 
     /**
@@ -38,23 +41,40 @@ export class FileManager {
         return {
             homeDir: os.homedir(),
             workspaceDir: this.workspaceDir,
+            allowedRoot: this.allowedRoot,
             separator: path.sep,
             platform: process.platform,
         };
     }
 
     /**
-     * 规范化并解析路径
+     * 规范化并解析路径，同时强制校验访问边界（防目录穿越与越权）
      */
     public resolvePath(inputPath?: string): string {
-        if (!inputPath || !inputPath.trim()) {
-            return os.homedir();
+        if (!inputPath || inputPath.trim() === '') {
+            return this.allowedRoot;
         }
-        const trimmed = inputPath.trim();
-        if (trimmed.startsWith('~/') || trimmed === '~') {
-            return path.join(os.homedir(), trimmed.slice(1));
+
+        let resolved: string;
+        if (inputPath.startsWith('~/') || inputPath === '~') {
+            resolved = path.join(os.homedir(), inputPath.slice(1));
+        } else {
+            // 保留文件名中合法的首尾空格，不对真实文件路径整体 trim
+            resolved = path.resolve(inputPath);
         }
-        return path.resolve(trimmed);
+
+        // 统一小写比较在 Windows 上更可靠，POSIX 下保持大小写敏感
+        const isWindows = process.platform === 'win32';
+        const normTarget = isWindows ? resolved.toLowerCase() : resolved;
+        const normRoot = isWindows ? this.allowedRoot.toLowerCase() : this.allowedRoot;
+
+        // 目标路径必须等于根目录或以根目录加上路径分隔符开头
+        const isAllowed = normTarget === normRoot || normTarget.startsWith(normRoot + (normRoot.endsWith(path.sep) ? '' : path.sep));
+        if (!isAllowed) {
+            throw new Error(`无权限访问该路径: 超出允许的访问根目录 (${this.allowedRoot})`);
+        }
+
+        return resolved;
     }
 
     /**
@@ -95,7 +115,6 @@ export class FileManager {
         const items: ServerFileItem[] = [];
 
         for (const entry of dirEntries) {
-            // 忽略 '.' 和 '..'
             if (entry.name === '.' || entry.name === '..') {
                 continue;
             }
@@ -131,9 +150,9 @@ export class FileManager {
         });
 
         const parsed = path.parse(resolvedPath);
-        // 如果当前路径等于其 root，说明已到达根目录，没有 parentPath
-        const isRoot = resolvedPath === parsed.root;
-        const parentPath = isRoot ? null : path.dirname(resolvedPath);
+        // 如果当前路径等于 allowedRoot 或根目录，则 parentPath 为 null
+        const isRootOrBoundary = resolvedPath === this.allowedRoot || resolvedPath === parsed.root;
+        const parentPath = isRootOrBoundary ? null : path.dirname(resolvedPath);
 
         return {
             currentPath: resolvedPath,
@@ -184,9 +203,18 @@ export class FileManager {
     }
 
     /**
-     * 保存文件内容（支持轻度编辑保存）
+     * 保存文件内容（支持轻度编辑保存，保持权限与大小限制对齐）
      */
-    public async saveFileContent(targetPath: string, content: string): Promise<{ success: boolean; mtime: number; size: number }> {
+    public async saveFileContent(
+        targetPath: string,
+        content: string,
+        maxBytes: number = 5 * 1024 * 1024
+    ): Promise<{ success: boolean; mtime: number; size: number }> {
+        const contentBytes = Buffer.byteLength(content, 'utf8');
+        if (contentBytes > maxBytes) {
+            throw new Error(`保存内容过大（${(contentBytes / 1024 / 1024).toFixed(1)}MB），超出最大允许限制（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`);
+        }
+
         const resolvedPath = this.resolvePath(targetPath);
         const parentDir = path.dirname(resolvedPath);
 
@@ -197,10 +225,23 @@ export class FileManager {
             throw new Error(`创建父级目录失败: ${nodeErr.message}`);
         }
 
-        // 使用临时文件写入后原子重命名，防止并发截断或落盘崩溃
-        const tmpFile = `${resolvedPath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+        // 如果文件已存在，记录其原有权限模式（如可执行 0755 或私有 0600）
+        let existingMode: number | null = null;
         try {
-            await fs.promises.writeFile(tmpFile, content, { encoding: 'utf8', mode: 0o644 });
+            const existingStats = await fs.promises.stat(resolvedPath);
+            existingMode = existingStats.mode;
+        } catch {
+            // 新文件使用默认权限
+        }
+
+        const defaultMode = existingMode !== null ? existingMode : 0o644;
+        const tmpFile = `${resolvedPath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+
+        try {
+            await fs.promises.writeFile(tmpFile, content, { encoding: 'utf8', mode: defaultMode });
+            if (existingMode !== null) {
+                await fs.promises.chmod(tmpFile, existingMode);
+            }
             await fs.promises.rename(tmpFile, resolvedPath);
             const stats = await fs.promises.stat(resolvedPath);
             return {
@@ -214,7 +255,7 @@ export class FileManager {
                     await fs.promises.unlink(tmpFile);
                 }
             } catch {
-                // 忽略清理临时文件时的异常
+                // ignore
             }
             const nodeErr = err as NodeJS.ErrnoException;
             throw new Error(`保存文件失败: ${nodeErr.message}`);

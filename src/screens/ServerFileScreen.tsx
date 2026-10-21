@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -10,7 +10,7 @@ import {
     Alert,
     BackHandler,
 } from 'react-native';
-import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -24,7 +24,6 @@ import { ServerFileItem, FileSystemInfo } from '../types/assistantProtocol';
 import { useAssistantStore } from '../store/useAssistantStore';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList & NoteStackParamList>;
-type RoutePropType = RouteProp<NoteStackParamList, 'ServerFileList'>;
 
 const TEXT_EXTENSIONS = new Set([
     '.md',
@@ -43,10 +42,25 @@ const TEXT_EXTENSIONS = new Set([
     '.csv',
 ]);
 
+interface HeaderCloudButtonProps {
+    onPress: () => void;
+    label: string;
+}
+
+const HeaderCloudButton: React.FC<HeaderCloudButtonProps> = ({ onPress, label }) => (
+    <TouchableOpacity
+        style={styles.headerRightButton}
+        onPress={onPress}
+        activeOpacity={0.7}
+    >
+        <Icon name="cloud-queue" size={20} color={theme.colors.primary} />
+        <Text style={styles.headerRightText}>{label}</Text>
+    </TouchableOpacity>
+);
+
 export const ServerFileScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
-    const route = useRoute<RoutePropType>();
 
     const { serverUrl } = useAssistantStore();
     const isConfigured = !!serverUrl && serverUrl.trim().length > 0;
@@ -60,21 +74,32 @@ export const ServerFileScreen = () => {
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [downloadingItem, setDownloadingItem] = useState<string | null>(null);
 
+    const prevServerUrl = useRef(serverUrl);
+    useEffect(() => {
+        if (prevServerUrl.current !== serverUrl) {
+            prevServerUrl.current = serverUrl;
+            setCurrentPath('');
+            setParentPath(null);
+            setSystemInfo(null);
+            setItems([]);
+        }
+    }, [serverUrl]);
+
+    const handleOpenCloud = useCallback(() => {
+        navigation.navigate('CloudFileList');
+    }, [navigation]);
+
+    const renderHeaderRight = useCallback(
+        () => <HeaderCloudButton onPress={handleOpenCloud} label={t('browser.cloudRepo', { defaultValue: '云盘' })} />,
+        [handleOpenCloud, t]
+    );
+
     // 设置导航栏右上角按钮：跳转到纯在线云盘文件页面
     useEffect(() => {
         navigation.setOptions({
-            headerRight: () => (
-                <TouchableOpacity
-                    style={styles.headerRightButton}
-                    onPress={() => navigation.navigate('CloudFileList')}
-                    activeOpacity={0.7}
-                >
-                    <Icon name="cloud-queue" size={20} color={theme.colors.primary} />
-                    <Text style={styles.headerRightText}>{t('browser.cloudRepo', { defaultValue: '云盘' })}</Text>
-                </TouchableOpacity>
-            ),
+            headerRight: renderHeaderRight,
         });
-    }, [navigation, t]);
+    }, [navigation, renderHeaderRight]);
 
     /**
      * 加载指定目录或初始化主目录
@@ -124,22 +149,20 @@ export const ServerFileScreen = () => {
             if (isConfigured) {
                 loadDirectory(currentPath || undefined);
             }
-        }, [isConfigured, currentPath, loadDirectory])
+
+            // 仅在当前屏幕获焦时监听 Android 返回键：如果在子目录，先返回上级
+            const backAction = () => {
+                if (parentPath !== null) {
+                    loadDirectory(parentPath);
+                    return true;
+                }
+                return false;
+            };
+
+            const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+            return () => backHandler.remove();
+        }, [isConfigured, currentPath, parentPath, loadDirectory])
     );
-
-    // 监听 Android 返回键：如果在子目录，先返回上级
-    useEffect(() => {
-        const backAction = () => {
-            if (parentPath !== null) {
-                loadDirectory(parentPath);
-                return true;
-            }
-            return false;
-        };
-
-        const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
-        return () => backHandler.remove();
-    }, [parentPath, loadDirectory]);
 
     /**
      * 点击单个文件或文件夹
