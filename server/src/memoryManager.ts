@@ -12,8 +12,8 @@ export class MemoryManager {
     private homeDir: string;
     private memoryDir: string;
 
-    constructor() {
-        this.homeDir = os.homedir();
+    constructor(homeDir?: string) {
+        this.homeDir = homeDir || os.homedir();
         this.memoryDir = path.join(this.homeDir, 'memory');
         this.ensureInit();
     }

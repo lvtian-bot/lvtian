@@ -13,6 +13,9 @@
     "test": "tsc && node --test test/server.test.mjs",
     "typecheck": "tsc --noEmit"
   },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "dependencies": {
     "@deepseek-ai/dsh": "^0.2.1-rc.2",
     "ws": "^8.18.0"

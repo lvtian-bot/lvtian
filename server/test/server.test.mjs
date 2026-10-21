@@ -51,7 +51,7 @@ test('SessionManager handles final lossless text update and advances sequence', 
 test('LvtianServer handles WebSocket connection error without crash', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-srv-'));
     const sm = new SessionManager(tmpDir);
-    const mm = new MemoryManager();
+    const mm = new MemoryManager(tmpDir);
     const runner = new DshRunner(tmpDir, mm, sm);
 
     const config = {
@@ -68,20 +68,29 @@ test('LvtianServer handles WebSocket connection error without crash', async () =
 
     const assignedPort = server.httpServer.address().port;
 
-    // 客户端连接并触发 error
+    // 客户端发送超过 maxPayload (1MB) 的超大报文，切实触发服务端 accepted socket 的 RangeError
     await new Promise((resolve) => {
         const ws = new WebSocket(`ws://127.0.0.1:${assignedPort}`);
         ws.on('open', () => {
-            // 客户端连接成功后模拟触发 error 事件，验证服务端已挂载 ws.on('error')，进程安然无恙
-            ws.emit('error', new Error('Simulated client network error'));
-            setTimeout(() => {
-                ws.terminate();
-                resolve();
-            }, 100);
+            const oversized = Buffer.alloc(1024 * 1024 + 1024);
+            ws.send(oversized);
         });
         ws.on('error', () => {
-            // ignore client error
+            // 客户端侧网络重置
         });
+        ws.on('close', () => {
+            resolve();
+        });
+    });
+
+    // 验证服务端稳定存活，后续正常客户端依然可顺畅连接
+    await new Promise((resolve, reject) => {
+        const healthyWs = new WebSocket(`ws://127.0.0.1:${assignedPort}`);
+        healthyWs.on('open', () => {
+            healthyWs.close();
+            resolve();
+        });
+        healthyWs.on('error', reject);
     });
 
     await server.stop();
