@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -41,6 +41,7 @@ export const CloudNoteScreen = () => {
     const [refreshing, setRefreshing] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [isConfigured, setIsConfigured] = useState<boolean>(cloudService.isConfigured());
+    const requestIdRef = useRef<number>(0);
 
     // 监听云存储初始化完成事件，确保非响应式的 SecureStore 异步读取完成后及时更新界面
     useEffect(() => {
@@ -62,6 +63,8 @@ export const CloudNoteScreen = () => {
                 return;
             }
 
+            const reqId = ++requestIdRef.current;
+
             if (isRefresh) {
                 setRefreshing(true);
             } else {
@@ -72,6 +75,11 @@ export const CloudNoteScreen = () => {
             try {
                 // 直接向 WebDAV 请求云端文件列表（纯在线）
                 const rawFiles = await cloudService.listFiles(currentPrefix);
+
+                if (reqId !== requestIdRef.current) {
+                    // 已有更新的请求发出，忽略过期结果
+                    return;
+                }
 
                 // 组织当前目录层级的条目
                 const map = new Map<string, DisplayItem>();
@@ -119,11 +127,15 @@ export const CloudNoteScreen = () => {
 
                 setItems(displayList);
             } catch (err: unknown) {
-                const message = (err as Error).message || '连接网盘失败，请检查网络';
-                setErrorMessage(message);
+                if (reqId === requestIdRef.current) {
+                    const message = (err as Error).message || '连接网盘失败，请检查网络';
+                    setErrorMessage(message);
+                }
             } finally {
-                setLoading(false);
-                setRefreshing(false);
+                if (reqId === requestIdRef.current) {
+                    setLoading(false);
+                    setRefreshing(false);
+                }
             }
         },
         [currentPrefix, t]
@@ -293,10 +305,12 @@ export const CloudNoteScreen = () => {
                         />
                     }
                     ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Icon name="folder-open" size={48} color={theme.colors.border} />
-                            <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
-                        </View>
+                        !errorMessage ? (
+                            <View style={styles.emptyContainer}>
+                                <Icon name="folder-open" size={48} color={theme.colors.border} />
+                                <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
+                            </View>
+                        ) : null
                     }
                 />
             )}

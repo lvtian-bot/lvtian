@@ -5,6 +5,18 @@ import {
 } from '../types/assistantProtocol';
 import * as FileSystem from 'expo-file-system/legacy';
 
+export class ServerFileError extends Error {
+    public code?: string;
+    public status?: number;
+
+    constructor(message: string, code?: string, status?: number) {
+        super(message);
+        this.name = 'ServerFileError';
+        this.code = code;
+        this.status = status;
+    }
+}
+
 export class ServerFileService {
     private static instance: ServerFileService | null = null;
 
@@ -82,20 +94,24 @@ export class ServerFileService {
             clearTimeout(timeoutId);
 
             if (response.status === 401) {
-                throw new Error('访问令牌无效或已过期，请重新配置');
+                throw new ServerFileError('访问令牌无效或已过期，请重新配置', 'UNAUTHORIZED', 401);
             }
 
             if (!response.ok) {
                 let errorMsg = `服务响应失败 (${response.status})`;
+                let errorCode: string | undefined;
                 try {
-                    const errData = (await response.json()) as { error?: string };
+                    const errData = (await response.json()) as { error?: string; code?: string };
                     if (errData.error) {
                         errorMsg = errData.error;
+                    }
+                    if (errData.code) {
+                        errorCode = errData.code;
                     }
                 } catch {
                     // ignore json parse error
                 }
-                throw new Error(errorMsg);
+                throw new ServerFileError(errorMsg, errorCode, response.status);
             }
 
             return (await response.json()) as T;
@@ -103,7 +119,7 @@ export class ServerFileService {
             clearTimeout(timeoutId);
             const errObj = err as Error;
             if (errObj.name === 'AbortError') {
-                throw new Error('请求超时，请检查服务端连接');
+                throw new ServerFileError('请求超时，请检查服务端连接', 'TIMEOUT', 408);
             }
             throw errObj;
         }
@@ -133,37 +149,53 @@ export class ServerFileService {
     }
 
     /**
-     * 保存文件内容（轻度编辑保存）
+     * 保存文件内容（轻度编辑保存，支持 expectedMtime 乐观锁）
      */
     public async saveFileContent(
         targetPath: string,
-        content: string
+        content: string,
+        expectedMtime?: number
     ): Promise<{ success: boolean; mtime: number; size: number }> {
         return this.request<{ success: boolean; mtime: number; size: number }>('/api/files/content', {
             method: 'POST',
-            body: { path: targetPath, content },
+            body: { path: targetPath, content, expectedMtime },
             timeoutMs: 15000,
         });
     }
 
     /**
-     * 下载文件到本地沙盒临时目录（用于调起系统原生分享或查看）
+     * 下载文件到本地沙盒临时目录（用于调起系统原生分享或查看，带 30 秒熔断防挂死）
      */
     public async downloadFile(remotePath: string, localDestUri: string): Promise<string> {
         const { baseUrl, token } = await this.getHttpEndpoint();
         const url = `${baseUrl}/api/files/download?path=${encodeURIComponent(remotePath)}`;
 
-        const downloadResult = await FileSystem.downloadAsync(url, localDestUri, {
+        const downloadPromise = FileSystem.downloadAsync(url, localDestUri, {
             headers: {
                 Authorization: `Bearer ${token}`,
             },
         });
 
-        if (downloadResult.status !== 200) {
-            throw new Error(`下载失败，服务端返回状态码: ${downloadResult.status}`);
-        }
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                reject(new ServerFileError('文件下载超时（超过 30 秒），请检查网络或稍后重试', 'DOWNLOAD_TIMEOUT', 408));
+            }, 30000);
+        });
 
-        return downloadResult.uri;
+        try {
+            const downloadResult = await Promise.race([downloadPromise, timeoutPromise]);
+            if (timer) clearTimeout(timer);
+
+            if (downloadResult.status !== 200) {
+                throw new ServerFileError(`下载失败，服务端返回状态码: ${downloadResult.status}`, 'DOWNLOAD_FAILED', downloadResult.status);
+            }
+
+            return downloadResult.uri;
+        } catch (err: unknown) {
+            if (timer) clearTimeout(timer);
+            throw err;
+        }
     }
 }
 

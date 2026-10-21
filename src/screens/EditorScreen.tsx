@@ -17,6 +17,7 @@ import { syncService } from '../services/SyncService';
 import { flashNoteService } from '../services/FlashNoteService';
 import { serverFileService } from '../services/ServerFileService';
 import { cloudService } from '../services/CloudService';
+import { useAssistantStore } from '../store/useAssistantStore';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -31,8 +32,10 @@ export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
-    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent, source = 'local', title } = route.params; // Get params
+    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent, source = 'local', title, expectedMtime: paramExpectedMtime } = route.params; // Get params
     const filePath = source === 'server' ? rawFilePath : normalizePath(rawFilePath);
+    const currentMtimeRef = useRef<number | undefined>(paramExpectedMtime);
+    const serverUrl = useAssistantStore(state => state.serverUrl);
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [isDirty, setIsDirty] = useState(false);
@@ -44,7 +47,12 @@ export const EditorScreen = () => {
     const { markFileAsModified } = useFileMetadataStore();
 
     const isFlashMode = !!flashNoteId;
-    const DRAFT_KEY = isFlashMode ? `editor_draft_flash_${flashNoteId}` : `editor_draft_${source}_${filePath}`;
+    const serverPrefix = source === 'server' ? (serverUrl ? serverUrl.replace(/[^a-zA-Z0-9]/g, '_') : 'default') : '';
+    const DRAFT_KEY = isFlashMode
+        ? `editor_draft_flash_${flashNoteId}`
+        : source === 'server'
+            ? `editor_draft_server_${serverPrefix}_${filePath}`
+            : `editor_draft_${source}_${filePath}`;
 
     const loadFile = useCallback(async () => {
         try {
@@ -60,6 +68,7 @@ export const EditorScreen = () => {
             } else if (source === 'server') {
                 const res = await serverFileService.readFileContent(filePath);
                 fileContent = res.content;
+                currentMtimeRef.current = res.mtime;
             } else if (source === 'webdav') {
                 fileContent = await cloudService.getCloudFileContent(filePath);
             } else {
@@ -174,7 +183,8 @@ export const EditorScreen = () => {
                 Alert.alert(t('common.success'), t('timeline.noteUpdated')); // Feedback for user
             } else if (source === 'server') {
                 // --- Server File Save Logic ---
-                await serverFileService.saveFileContent(filePath, contentToSave);
+                const saveRes = await serverFileService.saveFileContent(filePath, contentToSave, currentMtimeRef.current);
+                currentMtimeRef.current = saveRes.mtime;
                 Alert.alert(t('common.success'), t('editor.savedSuccessfully', { defaultValue: '已成功保存至服务端' }));
             } else if (source === 'webdav') {
                 // --- Pure Online WebDAV Save Logic ---
@@ -205,9 +215,17 @@ export const EditorScreen = () => {
             // Navigate back
             navigation.goBack();
 
-        } catch (error) {
+        } catch (error: unknown) {
             console.error('Save failed:', error);
-            Alert.alert(t('common.error'), t('editor.saveFailed') + String(error));
+            const serverErr = error as { code?: string; message?: string };
+            if (serverErr.code === 'PRECONDITION_FAILED') {
+                Alert.alert(
+                    t('common.conflict', { defaultValue: '保存冲突' }),
+                    t('editor.conflictMtimeMessage', { defaultValue: '服务端该文件在您编辑期间已被外部修改。为防止覆盖他人内容，本次保存已被阻止。建议先返回重新进入。' })
+                );
+            } else {
+                Alert.alert(t('common.error'), (error as Error).message || (t('editor.saveFailed') + String(error)));
+            }
         }
     }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);
 

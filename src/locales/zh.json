@@ -100,7 +100,17 @@
       "auth": "云服务认证失败，请前往“设置”检查您的密钥。",
       "bucket": "找不到指定的存储桶(Bucket)，请前往“设置”检查您的配置。",
       "network": "网络连接错误，请检查您的网络设置。",
-      "downloadFailed": "下载文件失败"
+      "downloadFailed": "下载文件失败",
+      "OUT_OF_BOUNDS": "无权限访问该路径：超出允许的根目录范围",
+      "SYMLINK_ESCAPE": "安全拦截：禁止通过符号链接访问根目录外部目标",
+      "ENOENT": "请求的文件或目录不存在",
+      "EACCES": "权限不足，服务端拒绝访问该文件",
+      "PRECONDITION_FAILED": "文件在远端已被修改，保存冲突",
+      "LIMIT_EXCEEDED": "文件大小超出允许限制",
+      "DOWNLOAD_TIMEOUT": "文件下载超时，请检查网络或稍后重试",
+      "UNAUTHORIZED": "访问令牌无效或已过期，请重新配置",
+      "TIMEOUT": "请求超时，请检查服务端连接",
+      "FS_ERROR": "服务端文件系统读写异常"
     },
     "offlineMode": "当前处于离线模式，仅显示本地缓存，数据可能不完整",
     "offlineFileNotCached": "文件未缓存，无法离线查看",
@@ -144,6 +154,7 @@
     "uploadFailedMessage": "文件已保存到本地，但云上传失败。您可以稍后重新同步。",
     "saveFailed": "保存失败: ",
     "savedSuccessfully": "已成功保存",
+    "conflictMtimeMessage": "服务端该文件在您编辑期间已被外部修改。为防止覆盖他人内容，本次保存已被阻止。建议先返回重新进入。",
     "buildMissing": "编辑器构建缺失，请运行 build:editor。",
     "placeholder": "开始写作..."
   },

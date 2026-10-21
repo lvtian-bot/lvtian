@@ -31,6 +31,8 @@ export const PreviewScreen = () => {
 
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [fileMtime, setFileMtime] = useState<number | undefined>(undefined);
     const [isWebViewReady, setIsWebViewReady] = useState(false);
     const webViewRef = useRef<WebView>(null);
 
@@ -130,11 +132,13 @@ export const PreviewScreen = () => {
     const loadFile = useCallback(async () => {
         try {
             setLoading(true);
+            setLoadFailed(false);
             let fileContent = '';
 
             if (source === 'server') {
                 const res = await serverFileService.readFileContent(filePath);
                 fileContent = res.content;
+                setFileMtime(res.mtime);
             } else if (source === 'webdav') {
                 fileContent = await cloudService.getCloudFileContent(filePath);
             } else {
@@ -149,6 +153,7 @@ export const PreviewScreen = () => {
                 await sendContentToWebView(fileContent);
             }
         } catch (err: unknown) {
+            setLoadFailed(true);
             Alert.alert(t('common.error'), (err as Error).message || t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' }));
         } finally {
             setLoading(false);
@@ -263,10 +268,19 @@ export const PreviewScreen = () => {
                     {isLocalMode && !isEffectivelySyncing && syncStatus === 'error' && fileMetadata?.uploadState !== 'failed' && <Text style={styles.syncIcon}>❌</Text>}
                 </View>
                 <TouchableOpacity
-                    onPress={() => navigation.navigate('Editor', { filePath, source, initialContent: content, title: title || filePath.split('/').pop() })}
-                    style={styles.headerButton}
+                    onPress={() => navigation.navigate('Editor', {
+                        filePath,
+                        source,
+                        initialContent: content,
+                        expectedMtime: fileMtime,
+                        title: title || filePath.split('/').pop(),
+                    })}
+                    style={[styles.headerButton, (loading || loadFailed) && styles.headerButtonDisabled]}
+                    disabled={loading || loadFailed}
                 >
-                    <Text style={styles.headerButtonText}>{t('common.edit')}</Text>
+                    <Text style={[styles.headerButtonText, (loading || loadFailed) && styles.headerButtonTextDisabled]}>
+                        {t('common.edit')}
+                    </Text>
                 </TouchableOpacity>
             </View>
 
@@ -330,10 +344,16 @@ const styles = StyleSheet.create({
     headerButton: {
         padding: theme.spacing.s,
     },
+    headerButtonDisabled: {
+        opacity: 0.4,
+    },
     headerButtonText: {
         color: theme.colors.primary,
         fontSize: 16,
         fontWeight: 'bold',
+    },
+    headerButtonTextDisabled: {
+        color: theme.colors.textSecondary,
     },
     titleContainer: {
         flex: 1,

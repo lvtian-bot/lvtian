@@ -16,7 +16,7 @@ export type MainTabParamList = {
 export type RootStackParamList = {
     MainTabs: NavigatorScreenParams<MainTabParamList>;
     Preview: { filePath: string; source?: 'server' | 'webdav' | 'local'; title?: string };
-    Editor: { filePath: string; source?: 'server' | 'webdav' | 'local'; flashNoteId?: string; initialContent?: string; title?: string };
+    Editor: { filePath: string; source?: 'server' | 'webdav' | 'local'; flashNoteId?: string; initialContent?: string; title?: string; expectedMtime?: number };
     CloudRepoConfig: undefined; // WebDAV 配置页面
     FlashNoteConfig: undefined; // 闪念笔记设置页面
     CacheManager: undefined; // 缓存管理页面

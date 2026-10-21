@@ -25,6 +25,18 @@ export interface FileSystemInfo {
     platform: string;
 }
 
+export class FileManagerError extends Error {
+    public code: string;
+    public statusCode: number;
+
+    constructor(message: string, code: string, statusCode: number = 400) {
+        super(message);
+        this.name = 'FileManagerError';
+        this.code = code;
+        this.statusCode = statusCode;
+    }
+}
+
 export class FileManager {
     private workspaceDir: string;
     private allowedRoot: string;
@@ -48,40 +60,77 @@ export class FileManager {
     }
 
     /**
-     * 规范化并解析路径，同时强制校验访问边界（防目录穿越与越权）
+     * 规范化并解析路径，同时强制校验访问边界（防目录穿越与符号链接逃逸）
      */
-    public resolvePath(inputPath?: string): string {
-        if (!inputPath || inputPath.trim() === '') {
-            return this.allowedRoot;
-        }
-
+    public async resolveAndValidatePath(inputPath?: string, checkSymlinkRealpath: boolean = true): Promise<string> {
         let resolved: string;
-        if (inputPath.startsWith('~/') || inputPath === '~') {
+        if (!inputPath || inputPath.trim() === '') {
+            resolved = this.allowedRoot;
+        } else if (inputPath.startsWith('~/') || inputPath === '~') {
             resolved = path.join(os.homedir(), inputPath.slice(1));
         } else {
-            // 保留文件名中合法的首尾空格，不对真实文件路径整体 trim
+            // 保留文件名首尾合法空格，不破坏具体文件名
             resolved = path.resolve(inputPath);
         }
 
-        // 统一小写比较在 Windows 上更可靠，POSIX 下保持大小写敏感
         const isWindows = process.platform === 'win32';
         const normTarget = isWindows ? resolved.toLowerCase() : resolved;
         const normRoot = isWindows ? this.allowedRoot.toLowerCase() : this.allowedRoot;
 
-        // 目标路径必须等于根目录或以根目录加上路径分隔符开头
         const isAllowed = normTarget === normRoot || normTarget.startsWith(normRoot + (normRoot.endsWith(path.sep) ? '' : path.sep));
         if (!isAllowed) {
-            throw new Error(`无权限访问该路径: 超出允许的访问根目录 (${this.allowedRoot})`);
+            throw new FileManagerError(`无权限访问该路径: 超出允许的访问根目录 (${this.allowedRoot})`, 'OUT_OF_BOUNDS', 403);
+        }
+
+        // 针对已存在的实体做符号链接逃逸检查
+        if (checkSymlinkRealpath) {
+            try {
+                if (fs.existsSync(resolved)) {
+                    const real = await fs.promises.realpath(resolved);
+                    const normReal = isWindows ? real.toLowerCase() : real;
+                    const isRealAllowed = normReal === normRoot || normReal.startsWith(normRoot + (normRoot.endsWith(path.sep) ? '' : path.sep));
+                    if (!isRealAllowed) {
+                        throw new FileManagerError('禁止通过符号链接访问根目录外部目标', 'SYMLINK_ESCAPE', 403);
+                    }
+                }
+            } catch (err: unknown) {
+                if (err instanceof FileManagerError) throw err;
+            }
         }
 
         return resolved;
     }
 
     /**
-     * 列出目录内容
+     * 同步快速路径解析（用于向后兼容）
+     */
+    public resolvePath(inputPath?: string): string {
+        let resolved: string;
+        if (!inputPath || inputPath.trim() === '') {
+            resolved = this.allowedRoot;
+        } else if (inputPath.startsWith('~/') || inputPath === '~') {
+            resolved = path.join(os.homedir(), inputPath.slice(1));
+        } else {
+            resolved = path.resolve(inputPath);
+        }
+
+        const isWindows = process.platform === 'win32';
+        const normTarget = isWindows ? resolved.toLowerCase() : resolved;
+        const normRoot = isWindows ? this.allowedRoot.toLowerCase() : this.allowedRoot;
+
+        const isAllowed = normTarget === normRoot || normTarget.startsWith(normRoot + (normRoot.endsWith(path.sep) ? '' : path.sep));
+        if (!isAllowed) {
+            throw new FileManagerError(`无权限访问该路径: 超出允许的访问根目录 (${this.allowedRoot})`, 'OUT_OF_BOUNDS', 403);
+        }
+
+        return resolved;
+    }
+
+    /**
+     * 列出目录内容（采用分批并发，加速大目录读取）
      */
     public async listDirectory(targetPath?: string): Promise<ServerDirectoryListing> {
-        const resolvedPath = this.resolvePath(targetPath);
+        const resolvedPath = await this.resolveAndValidatePath(targetPath);
 
         let stats: fs.Stats;
         try {
@@ -89,16 +138,16 @@ export class FileManager {
         } catch (err: unknown) {
             const nodeErr = err as NodeJS.ErrnoException;
             if (nodeErr.code === 'ENOENT') {
-                throw new Error(`目录不存在: ${resolvedPath}`);
+                throw new FileManagerError(`目录不存在: ${resolvedPath}`, 'ENOENT', 404);
             }
             if (nodeErr.code === 'EACCES' || nodeErr.code === 'EPERM') {
-                throw new Error(`无权限访问该目录: ${resolvedPath}`);
+                throw new FileManagerError(`无权限访问该目录: ${resolvedPath}`, 'EACCES', 403);
             }
-            throw new Error(`读取目录信息失败: ${nodeErr.message}`);
+            throw new FileManagerError(`读取目录信息失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
 
         if (!stats.isDirectory()) {
-            throw new Error(`指定的路径不是目录: ${resolvedPath}`);
+            throw new FileManagerError(`指定的路径不是目录: ${resolvedPath}`, 'NOT_DIRECTORY', 400);
         }
 
         let dirEntries: fs.Dirent[];
@@ -107,39 +156,43 @@ export class FileManager {
         } catch (err: unknown) {
             const nodeErr = err as NodeJS.ErrnoException;
             if (nodeErr.code === 'EACCES' || nodeErr.code === 'EPERM') {
-                throw new Error(`无权限读取目录内容: ${resolvedPath}`);
+                throw new FileManagerError(`无权限读取目录内容: ${resolvedPath}`, 'EACCES', 403);
             }
-            throw new Error(`读取目录列表失败: ${nodeErr.message}`);
+            throw new FileManagerError(`读取目录列表失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
 
+        // 分批并发处理条目 stat，提速大文件夹
+        const concurrency = 20;
         const items: ServerFileItem[] = [];
+        const validEntries = dirEntries.filter((entry) => entry.name !== '.' && entry.name !== '..');
 
-        for (const entry of dirEntries) {
-            if (entry.name === '.' || entry.name === '..') {
-                continue;
-            }
+        for (let i = 0; i < validEntries.length; i += concurrency) {
+            const batch = validEntries.slice(i, i + concurrency);
+            const batchResults = await Promise.all(
+                batch.map(async (entry) => {
+                    const itemFullPath = path.join(resolvedPath, entry.name);
+                    let itemStats: fs.Stats | null = null;
+                    let isDir = entry.isDirectory();
 
-            const itemFullPath = path.join(resolvedPath, entry.name);
-            let itemStats: fs.Stats | null = null;
-            let isDir = entry.isDirectory();
+                    try {
+                        itemStats = await fs.promises.stat(itemFullPath);
+                        isDir = itemStats.isDirectory();
+                    } catch {
+                        // 降级以 dirent 判定
+                    }
 
-            try {
-                itemStats = await fs.promises.stat(itemFullPath);
-                isDir = itemStats.isDirectory();
-            } catch {
-                // 如果 stat 失败（如损坏的软链接或无权限的特定子项），以 dirent 为准降级记录
-            }
-
-            const ext = isDir ? '' : path.extname(entry.name).toLowerCase();
-
-            items.push({
-                name: entry.name,
-                path: itemFullPath,
-                isDirectory: isDir,
-                size: itemStats ? itemStats.size : 0,
-                mtime: itemStats ? itemStats.mtimeMs : 0,
-                extension: ext,
-            });
+                    const ext = isDir ? '' : path.extname(entry.name).toLowerCase();
+                    return {
+                        name: entry.name,
+                        path: itemFullPath,
+                        isDirectory: isDir,
+                        size: itemStats ? itemStats.size : 0,
+                        mtime: itemStats ? itemStats.mtimeMs : 0,
+                        extension: ext,
+                    };
+                })
+            );
+            items.push(...batchResults);
         }
 
         // 排序：文件夹排在前，文件在后；同类按名称字母排序
@@ -150,7 +203,6 @@ export class FileManager {
         });
 
         const parsed = path.parse(resolvedPath);
-        // 如果当前路径等于 allowedRoot 或根目录，则 parentPath 为 null
         const isRootOrBoundary = resolvedPath === this.allowedRoot || resolvedPath === parsed.root;
         const parentPath = isRootOrBoundary ? null : path.dirname(resolvedPath);
 
@@ -164,8 +216,11 @@ export class FileManager {
     /**
      * 读取文件内容（支持轻度查看与文本编辑）
      */
-    public async readFileContent(targetPath: string, maxBytes: number = 5 * 1024 * 1024): Promise<{ content: string; mtime: number; size: number }> {
-        const resolvedPath = this.resolvePath(targetPath);
+    public async readFileContent(
+        targetPath: string,
+        maxBytes: number = 5 * 1024 * 1024
+    ): Promise<{ content: string; mtime: number; size: number }> {
+        const resolvedPath = await this.resolveAndValidatePath(targetPath);
 
         let stats: fs.Stats;
         try {
@@ -173,20 +228,24 @@ export class FileManager {
         } catch (err: unknown) {
             const nodeErr = err as NodeJS.ErrnoException;
             if (nodeErr.code === 'ENOENT') {
-                throw new Error(`文件不存在: ${resolvedPath}`);
+                throw new FileManagerError(`文件不存在: ${resolvedPath}`, 'ENOENT', 404);
             }
             if (nodeErr.code === 'EACCES' || nodeErr.code === 'EPERM') {
-                throw new Error(`无权限读取该文件: ${resolvedPath}`);
+                throw new FileManagerError(`无权限读取该文件: ${resolvedPath}`, 'EACCES', 403);
             }
-            throw new Error(`读取文件失败: ${nodeErr.message}`);
+            throw new FileManagerError(`读取文件失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
 
         if (stats.isDirectory()) {
-            throw new Error(`指定路径是目录而非文件: ${resolvedPath}`);
+            throw new FileManagerError(`指定路径是目录而非文件: ${resolvedPath}`, 'IS_DIRECTORY', 400);
         }
 
         if (stats.size > maxBytes) {
-            throw new Error(`文件过大（${(stats.size / 1024 / 1024).toFixed(1)}MB），超出最大支持大小（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`);
+            throw new FileManagerError(
+                `文件过大（${(stats.size / 1024 / 1024).toFixed(1)}MB），超出最大支持大小（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`,
+                'LIMIT_EXCEEDED',
+                400
+            );
         }
 
         try {
@@ -198,40 +257,53 @@ export class FileManager {
             };
         } catch (err: unknown) {
             const nodeErr = err as NodeJS.ErrnoException;
-            throw new Error(`读取文件内容失败: ${nodeErr.message}`);
+            throw new FileManagerError(`读取文件内容失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
     }
 
     /**
-     * 保存文件内容（支持轻度编辑保存，保持权限与大小限制对齐）
+     * 保存文件内容（支持 expectedMtime 乐观锁防并发覆盖、保持文件原有权限与大小统一对齐）
      */
     public async saveFileContent(
         targetPath: string,
         content: string,
+        expectedMtime?: number,
         maxBytes: number = 5 * 1024 * 1024
     ): Promise<{ success: boolean; mtime: number; size: number }> {
         const contentBytes = Buffer.byteLength(content, 'utf8');
         if (contentBytes > maxBytes) {
-            throw new Error(`保存内容过大（${(contentBytes / 1024 / 1024).toFixed(1)}MB），超出最大允许限制（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`);
+            throw new FileManagerError(
+                `保存内容过大（${(contentBytes / 1024 / 1024).toFixed(1)}MB），超出最大允许限制（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`,
+                'LIMIT_EXCEEDED',
+                400
+            );
         }
 
-        const resolvedPath = this.resolvePath(targetPath);
+        const resolvedPath = await this.resolveAndValidatePath(targetPath, false);
         const parentDir = path.dirname(resolvedPath);
 
         try {
             await fs.promises.mkdir(parentDir, { recursive: true });
         } catch (err: unknown) {
             const nodeErr = err as NodeJS.ErrnoException;
-            throw new Error(`创建父级目录失败: ${nodeErr.message}`);
+            throw new FileManagerError(`创建父级目录失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
 
-        // 如果文件已存在，记录其原有权限模式（如可执行 0755 或私有 0600）
+        // 校验现有文件的 expectedMtime 与权限 mode
         let existingMode: number | null = null;
         try {
             const existingStats = await fs.promises.stat(resolvedPath);
             existingMode = existingStats.mode;
-        } catch {
-            // 新文件使用默认权限
+
+            if (expectedMtime !== undefined && expectedMtime > 0) {
+                // 允许 100ms 误差容限
+                if (Math.abs(existingStats.mtimeMs - expectedMtime) > 100) {
+                    throw new FileManagerError('服务端文件已被外部修改，保存已被阻止 (409 Conflict)', 'PRECONDITION_FAILED', 409);
+                }
+            }
+        } catch (err: unknown) {
+            if (err instanceof FileManagerError) throw err;
+            // 文件不存在属于新建，继续
         }
 
         const defaultMode = existingMode !== null ? existingMode : 0o644;
@@ -257,8 +329,9 @@ export class FileManager {
             } catch {
                 // ignore
             }
+            if (err instanceof FileManagerError) throw err;
             const nodeErr = err as NodeJS.ErrnoException;
-            throw new Error(`保存文件失败: ${nodeErr.message}`);
+            throw new FileManagerError(`保存文件失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
     }
 
@@ -266,7 +339,7 @@ export class FileManager {
      * 获取供下载的文件信息
      */
     public async getFileDownloadInfo(targetPath: string): Promise<{ resolvedPath: string; fileName: string; size: number }> {
-        const resolvedPath = this.resolvePath(targetPath);
+        const resolvedPath = await this.resolveAndValidatePath(targetPath);
 
         let stats: fs.Stats;
         try {
@@ -274,13 +347,13 @@ export class FileManager {
         } catch (err: unknown) {
             const nodeErr = err as NodeJS.ErrnoException;
             if (nodeErr.code === 'ENOENT') {
-                throw new Error(`文件不存在: ${resolvedPath}`);
+                throw new FileManagerError(`文件不存在: ${resolvedPath}`, 'ENOENT', 404);
             }
-            throw new Error(`获取文件信息失败: ${nodeErr.message}`);
+            throw new FileManagerError(`获取文件信息失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
 
         if (stats.isDirectory()) {
-            throw new Error(`无法下载目录: ${resolvedPath}`);
+            throw new FileManagerError(`无法下载目录: ${resolvedPath}`, 'IS_DIRECTORY', 400);
         }
 
         return {

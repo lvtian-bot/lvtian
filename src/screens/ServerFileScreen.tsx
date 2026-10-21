@@ -74,12 +74,19 @@ export const ServerFileScreen = () => {
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [downloadingItem, setDownloadingItem] = useState<string | null>(null);
 
+    const currentPathRef = useRef<string>('');
+    const parentPathRef = useRef<string | null>(null);
+    const hasLoadedInitialRef = useRef<boolean>(false);
     const prevServerUrl = useRef(serverUrl);
+
     useEffect(() => {
         if (prevServerUrl.current !== serverUrl) {
             prevServerUrl.current = serverUrl;
             setCurrentPath('');
             setParentPath(null);
+            currentPathRef.current = '';
+            parentPathRef.current = null;
+            hasLoadedInitialRef.current = false;
             setSystemInfo(null);
             setItems([]);
         }
@@ -127,14 +134,22 @@ export const ServerFileScreen = () => {
                 }
 
                 // 首次进入默认打开主目录
-                const pathToLoad = targetPath !== undefined ? targetPath : currentSysInfo.homeDir;
+                const pathToLoad = targetPath !== undefined ? targetPath : (currentPathRef.current || currentSysInfo.homeDir);
                 const listing = await serverFileService.listDirectory(pathToLoad);
 
                 setCurrentPath(listing.currentPath);
                 setParentPath(listing.parentPath);
+                currentPathRef.current = listing.currentPath;
+                parentPathRef.current = listing.parentPath;
+                hasLoadedInitialRef.current = true;
                 setItems(listing.items);
             } catch (err: unknown) {
-                const message = (err as Error).message || '读取目录失败';
+                const serverErr = err as { code?: string; message?: string };
+                const code = serverErr.code;
+                let message = (err as Error).message || '读取目录失败';
+                if (code) {
+                    message = t(`browser.error.${code}`, { defaultValue: message });
+                }
                 setErrorMessage(message);
             } finally {
                 setLoading(false);
@@ -147,13 +162,15 @@ export const ServerFileScreen = () => {
     useFocusEffect(
         useCallback(() => {
             if (isConfigured) {
-                loadDirectory(currentPath || undefined);
+                if (!hasLoadedInitialRef.current) {
+                    loadDirectory(undefined);
+                }
             }
 
             // 仅在当前屏幕获焦时监听 Android 返回键：如果在子目录，先返回上级
             const backAction = () => {
-                if (parentPath !== null) {
-                    loadDirectory(parentPath);
+                if (parentPathRef.current !== null) {
+                    loadDirectory(parentPathRef.current);
                     return true;
                 }
                 return false;
@@ -161,7 +178,7 @@ export const ServerFileScreen = () => {
 
             const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
             return () => backHandler.remove();
-        }, [isConfigured, currentPath, parentPath, loadDirectory])
+        }, [isConfigured, loadDirectory])
     );
 
     /**
@@ -216,7 +233,13 @@ export const ServerFileScreen = () => {
                 Alert.alert(t('common.tip', { defaultValue: '提示' }), t('browser.shareUnavailable', { defaultValue: '当前设备不支持分享打开该文件' }));
             }
         } catch (err: unknown) {
-            Alert.alert(t('common.error', { defaultValue: '错误' }), (err as Error).message || '下载文件失败');
+            const serverErr = err as { code?: string; message?: string };
+            const code = serverErr.code;
+            let message = (err as Error).message || '下载文件失败';
+            if (code) {
+                message = t(`browser.error.${code}`, { defaultValue: message });
+            }
+            Alert.alert(t('common.error', { defaultValue: '错误' }), message);
         } finally {
             setDownloadingItem(null);
         }
@@ -348,10 +371,12 @@ export const ServerFileScreen = () => {
                         />
                     }
                     ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Icon name="folder-open" size={48} color={theme.colors.border} />
-                            <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
-                        </View>
+                        !errorMessage ? (
+                            <View style={styles.emptyContainer}>
+                                <Icon name="folder-open" size={48} color={theme.colors.border} />
+                                <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
+                            </View>
+                        ) : null
                     }
                 />
             )}

@@ -144,6 +144,23 @@ test('FileManager correctly lists, reads, saves and resolves files', async () =>
     // 验证越界访问拦截
     assert.throws(() => fm.resolvePath('/etc/passwd'), /超出允许的访问根目录/);
 
+    // 验证符号链接逃逸拦截（指向根目录外部的文件或目录）
+    if (process.platform !== 'win32') {
+        const outsideTarget = path.join(os.tmpdir(), 'lvtian-test-outside.md');
+        fs.writeFileSync(outsideTarget, '外部私密数据', 'utf8');
+        const symlinkPath = path.join(tmpDir, 'escape-symlink.md');
+        try {
+            fs.symlinkSync(outsideTarget, symlinkPath);
+            await assert.rejects(
+                async () => await fm.readFileContent(symlinkPath),
+                (err) => err.code === 'SYMLINK_ESCAPE' || err.code === 'OUT_OF_BOUNDS'
+            );
+        } finally {
+            try { fs.unlinkSync(outsideTarget); } catch {}
+            try { fs.unlinkSync(symlinkPath); } catch {}
+        }
+    }
+
     // 2. 目录列表
     const listing = await fm.listDirectory(tmpDir);
     assert.equal(listing.currentPath, tmpDir);
@@ -198,68 +215,106 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
     const port = server.httpServer.address().port;
     const baseUrl = `http://127.0.0.1:${port}`;
 
-    // 1. 无 Token 访问应返回 401
-    const unauthRes = await fetch(`${baseUrl}/api/files/info`);
-    assert.equal(unauthRes.status, 401);
+    try {
+        // 1. 无 Token 访问应返回 401
+        const unauthRes = await fetch(`${baseUrl}/api/files/info`);
+        assert.equal(unauthRes.status, 401);
 
-    // 2. 携带有效 Token 访问 /api/files/info
-    const infoRes = await fetch(`${baseUrl}/api/files/info`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(infoRes.status, 200);
-    const infoData = await infoRes.json();
-    assert.equal(infoData.workspaceDir, tmpDir);
+        // 2. 携带有效 Token 访问 /api/files/info
+        const infoRes = await fetch(`${baseUrl}/api/files/info`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        assert.equal(infoRes.status, 200);
+        const infoData = await infoRes.json();
+        assert.equal(infoData.workspaceDir, tmpDir);
 
-    // 3. 列出目录 /api/files/list
-    const listRes = await fetch(`${baseUrl}/api/files/list?path=${encodeURIComponent(tmpDir)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(listRes.status, 200);
-    const listData = await listRes.json();
-    assert.ok(listData.items.some((item) => item.name === 'report.md'));
+        // 3. 列出目录 /api/files/list
+        const listRes = await fetch(`${baseUrl}/api/files/list?path=${encodeURIComponent(tmpDir)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        assert.equal(listRes.status, 200);
+        const listData = await listRes.json();
+        assert.ok(listData.items.some((item) => item.name === 'report.md'));
 
-    // 4. 读取文件 /api/files/content
-    const contentRes = await fetch(`${baseUrl}/api/files/content?path=${encodeURIComponent(testFile)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(contentRes.status, 200);
-    const contentData = await contentRes.json();
-    assert.equal(contentData.content, '初始报告内容');
+        // 4. 读取文件 /api/files/content
+        const contentRes = await fetch(`${baseUrl}/api/files/content?path=${encodeURIComponent(testFile)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        assert.equal(contentRes.status, 200);
+        const contentData = await contentRes.json();
+        assert.equal(contentData.content, '初始报告内容');
 
-    // 5. 保存文件 /api/files/content
-    const postRes = await fetch(`${baseUrl}/api/files/content`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            path: testFile,
-            content: '更新后的报告内容',
-        }),
-    });
-    assert.equal(postRes.status, 200);
-    const postData = await postRes.json();
-    assert.equal(postData.success, true);
+        // 5. 保存文件 /api/files/content（正常保存）
+        const postRes = await fetch(`${baseUrl}/api/files/content`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                path: testFile,
+                content: '更新后的报告内容',
+            }),
+        });
+        assert.equal(postRes.status, 200);
+        const postData = await postRes.json();
+        assert.equal(postData.success, true);
+        assert.ok(postData.mtime > 0);
 
-    // 再次读取确认更新
-    const checkRes = await fetch(`${baseUrl}/api/files/content?path=${encodeURIComponent(testFile)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    const checkData = await checkRes.json();
-    assert.equal(checkData.content, '更新后的报告内容');
+        // 5.1 乐观锁冲突测试：传入陈旧的 expectedMtime 应该被拒绝并返回 409
+        const staleMtime = postData.mtime - 10000;
+        const conflictRes = await fetch(`${baseUrl}/api/files/content`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                path: testFile,
+                content: '并发冲突的内容',
+                expectedMtime: staleMtime,
+            }),
+        });
+        assert.equal(conflictRes.status, 409);
+        const conflictData = await conflictRes.json();
+        assert.equal(conflictData.code, 'PRECONDITION_FAILED');
 
-    // 6. 下载文件 /api/files/download
-    const dlRes = await fetch(`${baseUrl}/api/files/download?path=${encodeURIComponent(testFile)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(dlRes.status, 200);
-    const dlText = await dlRes.text();
-    assert.equal(dlText, '更新后的报告内容');
-    assert.ok(dlRes.headers.get('content-disposition')?.includes('report.md'));
+        // 5.2 传入正确的 expectedMtime 应该成功更新
+        const validRes = await fetch(`${baseUrl}/api/files/content`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                path: testFile,
+                content: '匹配时间戳的最终内容',
+                expectedMtime: postData.mtime,
+            }),
+        });
+        assert.equal(validRes.status, 200);
+        const validData = await validRes.json();
+        assert.equal(validData.success, true);
 
-    await server.stop();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+        // 再次读取确认更新
+        const checkRes = await fetch(`${baseUrl}/api/files/content?path=${encodeURIComponent(testFile)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        const checkData = await checkRes.json();
+        assert.equal(checkData.content, '匹配时间戳的最终内容');
+
+        // 6. 下载文件 /api/files/download
+        const dlRes = await fetch(`${baseUrl}/api/files/download?path=${encodeURIComponent(testFile)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        assert.equal(dlRes.status, 200);
+        const dlText = await dlRes.text();
+        assert.equal(dlText, '匹配时间戳的最终内容');
+        assert.ok(dlRes.headers.get('content-disposition')?.includes('report.md'));
+    } finally {
+        await server.stop();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
 });
 
 

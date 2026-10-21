@@ -100,7 +100,17 @@
       "auth": "Cloud service authentication failed. Please check your keys in Settings.",
       "bucket": "The specified bucket was not found. Please check your configuration in Settings.",
       "network": "Network error. Please check your internet connection.",
-      "downloadFailed": "Download failed"
+      "downloadFailed": "Download failed",
+      "OUT_OF_BOUNDS": "Access denied: Out of permitted root directory",
+      "SYMLINK_ESCAPE": "Security block: Symlink escape outside root directory is prohibited",
+      "ENOENT": "Requested file or directory does not exist",
+      "EACCES": "Permission denied by server",
+      "PRECONDITION_FAILED": "File has been modified on the server (409 Conflict)",
+      "LIMIT_EXCEEDED": "File size exceeds allowed limit",
+      "DOWNLOAD_TIMEOUT": "Download timed out, please check your network and retry",
+      "UNAUTHORIZED": "Access token is invalid or expired, please reconfigure",
+      "TIMEOUT": "Request timed out, please check server connectivity",
+      "FS_ERROR": "Server filesystem I/O error"
     },
     "offlineMode": "Offline mode: only locally cached content is shown, which may be incomplete",
     "offlineFileNotCached": "File is not cached and cannot be viewed offline",
@@ -144,6 +154,7 @@
     "uploadFailedMessage": "File saved locally but cloud upload failed. You can sync later.",
     "saveFailed": "Failed to save: ",
     "savedSuccessfully": "Saved successfully",
+    "conflictMtimeMessage": "This file has been modified externally on the server while you were editing. To prevent overwriting changes, this save was blocked. Please return and reload.",
     "buildMissing": "Editor build missing. Please run build:editor.",
     "placeholder": "Start writing..."
   },

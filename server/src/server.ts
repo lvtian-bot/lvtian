@@ -7,7 +7,7 @@ import { ServerConfig } from './config.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { DshRunner } from './dshRunner.js';
-import { FileManager } from './fileManager.js';
+import { FileManager, FileManagerError } from './fileManager.js';
 import {
     ClientMessage,
     ServerMessage,
@@ -103,6 +103,17 @@ export class LvtianServer {
         });
     }
 
+    private sendFileManagerError(res: http.ServerResponse, err: unknown): void {
+        if (err instanceof FileManagerError) {
+            res.writeHead(err.statusCode, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message, code: err.code }));
+            return;
+        }
+        const message = (err as Error)?.message || '服务器内部错误';
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: message, code: 'UNKNOWN_ERROR' }));
+    }
+
     private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         let urlObj: URL;
         try {
@@ -177,8 +188,7 @@ export class LvtianServer {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(listing));
             } catch (err: unknown) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: (err as Error).message }));
+                this.sendFileManagerError(res, err);
             }
             return;
         }
@@ -188,7 +198,7 @@ export class LvtianServer {
             const targetPath = urlObj.searchParams.get('path');
             if (!targetPath) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: '缺少 path 参数' }));
+                res.end(JSON.stringify({ error: '缺少 path 参数', code: 'PARAM_MISSING' }));
                 return;
             }
             try {
@@ -196,27 +206,25 @@ export class LvtianServer {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result));
             } catch (err: unknown) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: (err as Error).message }));
+                this.sendFileManagerError(res, err);
             }
             return;
         }
 
-        // 保存文件文本内容（轻度编辑）
+        // 保存文件文本内容（轻度编辑，支持 expectedMtime 乐观锁）
         if (pathname === '/api/files/content' && req.method === 'POST') {
             try {
-                const body = await this.readJsonBody<{ path?: string; content?: string }>(req);
+                const body = await this.readJsonBody<{ path?: string; content?: string; expectedMtime?: number }>(req);
                 if (!body.path || typeof body.content !== 'string') {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: '缺少 path 或 content 参数' }));
+                    res.end(JSON.stringify({ error: '缺少 path 或 content 参数', code: 'PARAM_MISSING' }));
                     return;
                 }
-                const result = await this.fileManager.saveFileContent(body.path, body.content);
+                const result = await this.fileManager.saveFileContent(body.path, body.content, body.expectedMtime);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result));
             } catch (err: unknown) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: (err as Error).message }));
+                this.sendFileManagerError(res, err);
             }
             return;
         }
@@ -226,7 +234,7 @@ export class LvtianServer {
             const targetPath = urlObj.searchParams.get('path');
             if (!targetPath) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: '缺少 path 参数' }));
+                res.end(JSON.stringify({ error: '缺少 path 参数', code: 'PARAM_MISSING' }));
                 return;
             }
             try {
@@ -241,15 +249,14 @@ export class LvtianServer {
                     console.error('[Server] 下载流传输异常:', streamErr);
                     if (!res.headersSent) {
                         res.writeHead(500, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ error: '文件传输读取失败' }));
+                        res.end(JSON.stringify({ error: '文件传输读取失败', code: 'STREAM_ERROR' }));
                     } else {
                         res.destroy();
                     }
                 });
                 stream.pipe(res);
             } catch (err: unknown) {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: (err as Error).message }));
+                this.sendFileManagerError(res, err);
             }
             return;
         }
