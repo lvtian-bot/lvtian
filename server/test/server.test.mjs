@@ -108,13 +108,12 @@ test('scripts match server absolute entrypoint as exact argv and reject sub-path
     assert.equal(isServerArgv(['cat', 'other-data']), false);
 });
 
-test('MemoryManager loads context from workspace directory including AGENTS.md and preserves existing content', () => {
+test('MemoryManager loads context from workspace directory and preserves existing content', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-mm-'));
     // 写入预置工作区文件
     fs.writeFileSync(path.join(tmpDir, 'SOUL.md'), '# 自定义灵魂准则\n忠诚敏锐');
     fs.writeFileSync(path.join(tmpDir, 'MEMORY.md'), '# 自定义长期记忆\n偏好中文交流');
     fs.writeFileSync(path.join(tmpDir, 'USER.md'), '# 主人档案\n称呼：先生');
-    fs.writeFileSync(path.join(tmpDir, 'AGENTS.md'), '# 工作规范\n先请示后执行');
 
     const mm = new MemoryManager(tmpDir);
     assert.equal(mm.getBaseDir(), tmpDir);
@@ -123,7 +122,6 @@ test('MemoryManager loads context from workspace directory including AGENTS.md a
     assert.equal(ctx.soul, '# 自定义灵魂准则\n忠诚敏锐');
     assert.equal(ctx.memory, '# 自定义长期记忆\n偏好中文交流');
     assert.equal(ctx.user, '# 主人档案\n称呼：先生');
-    assert.equal(ctx.agents, '# 工作规范\n先请示后执行');
 
     // 验证追加流水日志写入 workspace/memory/
     mm.appendDailyLog('测试标题', '测试内容流水');
@@ -135,6 +133,35 @@ test('MemoryManager loads context from workspace directory including AGENTS.md a
     assert.ok(dailyContent.includes('测试内容流水'));
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('MemoryManager automatically migrates legacy memory files from home directory when workspace targets are missing', () => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-home-'));
+    const fakeWorkspace = path.join(fakeHome, 'workspace');
+    fs.mkdirSync(fakeWorkspace, { recursive: true });
+
+    // 模拟旧版环境：在 fakeHome 下有既有记忆
+    fs.writeFileSync(path.join(fakeHome, 'SOUL.md'), '# 旧版灵魂\n敏捷果断');
+    fs.writeFileSync(path.join(fakeHome, 'MEMORY.md'), '# 旧版长期记忆\n既有项目记录');
+    fs.writeFileSync(path.join(fakeHome, 'USER.md'), '# 旧版用户档案\n习惯语音沟通');
+
+    // 将 os.homedir 临时代理指向 fakeHome 进行测试
+    const originalHomedir = os.homedir;
+    os.homedir = () => fakeHome;
+
+    try {
+        const mm = new MemoryManager(fakeWorkspace);
+        const ctx = mm.loadContext();
+
+        // 验证旧版记忆已平滑迁移到 workspace
+        assert.equal(ctx.soul, '# 旧版灵魂\n敏捷果断');
+        assert.equal(ctx.memory, '# 旧版长期记忆\n既有项目记录');
+        assert.equal(ctx.user, '# 旧版用户档案\n习惯语音沟通');
+        assert.ok(fs.existsSync(path.join(fakeWorkspace, 'SOUL.md')));
+    } finally {
+        os.homedir = originalHomedir;
+        fs.rmSync(fakeHome, { recursive: true, force: true });
+    }
 });
 
 test('composite final text preserves earlier committed segments and replaces truncated terminal segment', () => {

@@ -6,7 +6,6 @@ export interface MemoryContext {
     soul: string;
     memory: string;
     user: string;
-    agents?: string;
 }
 
 export class MemoryManager {
@@ -33,9 +32,13 @@ export class MemoryManager {
             // ignore
         }
 
-        const soulFile = path.join(this.baseDir, 'SOUL.md');
-        if (!fs.existsSync(soulFile)) {
-            const defaultSoul = `# 绿天 (Lvtian) - 个人助理准则
+        const homeDir = os.homedir();
+        const isWorkspaceSubdir = path.resolve(this.baseDir) !== path.resolve(homeDir);
+
+        const memoryFiles = [
+            {
+                name: 'SOUL.md',
+                defaultContent: `# 绿天 (Lvtian) - 个人助理准则
 
 你是主人的专属长期个人助理“绿天”。
 
@@ -43,45 +46,49 @@ export class MemoryManager {
 1. **直接务实**：就事论事，言简意赅。完成工作时给出清晰的结果汇报，不复述冗长的过程，不讲空话客套。
 2. **忠诚随身**：你常驻在主人的专属机器上，用户目录的 ~/workspace 是你的核心工作台。
 3. **安全透明**：所有长期记忆以清晰的 Markdown 形式存放在工作区；遇到敏感、高危或不可逆的操作，主动触发人工审批卡片请求主人确认。
-`;
-            fs.writeFileSync(soulFile, defaultSoul, { encoding: 'utf8', mode: 0o600 });
-        }
-        try {
-            fs.chmodSync(soulFile, 0o600);
-        } catch {
-            // ignore
-        }
-
-        const memoryFile = path.join(this.baseDir, 'MEMORY.md');
-        if (!fs.existsSync(memoryFile)) {
-            const defaultMemory = `# 绿天长期记忆
+`,
+            },
+            {
+                name: 'MEMORY.md',
+                defaultContent: `# 绿天长期记忆
 
 > 本文件记录主人的核心偏好、长期约定和最新关键状态，保持精简。
 
 - 助理初始化日期：${new Date().toISOString().slice(0, 10)}
 - 默认工作区：~/workspace/
-`;
-            fs.writeFileSync(memoryFile, defaultMemory, { encoding: 'utf8', mode: 0o600 });
-        }
-        try {
-            fs.chmodSync(memoryFile, 0o600);
-        } catch {
-            // ignore
-        }
-
-        const userFile = path.join(this.baseDir, 'USER.md');
-        if (!fs.existsSync(userFile)) {
-            const defaultUser = `# 主人档案
+`,
+            },
+            {
+                name: 'USER.md',
+                defaultContent: `# 主人档案
 
 - 称谓：主人
 - 主力设备：安卓移动端
-`;
-            fs.writeFileSync(userFile, defaultUser, { encoding: 'utf8', mode: 0o600 });
-        }
-        try {
-            fs.chmodSync(userFile, 0o600);
-        } catch {
-            // ignore
+`,
+            },
+        ];
+
+        for (const file of memoryFiles) {
+            const targetFile = path.join(this.baseDir, file.name);
+            if (!fs.existsSync(targetFile)) {
+                const legacyFile = path.join(homeDir, file.name);
+                // 平滑迁移：若工作区尚无该记忆文件但主目录有旧版本，优先复制继承，防止升级丢失既有记忆
+                if (isWorkspaceSubdir && fs.existsSync(legacyFile)) {
+                    try {
+                        fs.copyFileSync(legacyFile, targetFile);
+                        fs.chmodSync(targetFile, 0o600);
+                        continue;
+                    } catch (err) {
+                        console.warn(`[MemoryManager] 继承主目录原有 ${file.name} 失败: ${err}`);
+                    }
+                }
+                fs.writeFileSync(targetFile, file.defaultContent, { encoding: 'utf8', mode: 0o600 });
+                try {
+                    fs.chmodSync(targetFile, 0o600);
+                } catch {
+                    // ignore
+                }
+            }
         }
     }
 
@@ -89,14 +96,12 @@ export class MemoryManager {
         const soulFile = path.join(this.baseDir, 'SOUL.md');
         const memoryFile = path.join(this.baseDir, 'MEMORY.md');
         const userFile = path.join(this.baseDir, 'USER.md');
-        const agentsFile = path.join(this.baseDir, 'AGENTS.md');
 
         const soul = fs.existsSync(soulFile) ? fs.readFileSync(soulFile, 'utf8') : '';
         const memory = fs.existsSync(memoryFile) ? fs.readFileSync(memoryFile, 'utf8') : '';
         const user = fs.existsSync(userFile) ? fs.readFileSync(userFile, 'utf8') : '';
-        const agents = fs.existsSync(agentsFile) ? fs.readFileSync(agentsFile, 'utf8') : undefined;
 
-        return { soul, memory, user, agents };
+        return { soul, memory, user };
     }
 
     public appendDailyLog(title: string, content: string): void {

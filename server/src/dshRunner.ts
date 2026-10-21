@@ -180,7 +180,6 @@ export class DshRunner {
         // 加载记忆与全局人设
         const memoryContext = this.memoryManager.loadContext();
         const systemSections = [
-            memoryContext.agents ? `[工作准则与规范]\n${memoryContext.agents}` : '',
             memoryContext.soul ? `[系统背景]\n${memoryContext.soul}` : '',
             memoryContext.memory ? `[主人记忆]\n${memoryContext.memory}` : '',
             memoryContext.user ? `[主人档案]\n${memoryContext.user}` : '',
