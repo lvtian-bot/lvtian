@@ -277,7 +277,7 @@ export class AssistantClient {
             store.addOrUpdateMessage({
                 ...localMessage,
                 status: 'error',
-                errorMessage: '网络连接未就绪，消息已暂存，连上后可重试',
+                errorMessage: i18n.t('assistant.sendFailedOffline', '网络连接未就绪，消息已暂存，连上后可重试'),
             });
         }
 
@@ -404,9 +404,18 @@ export class AssistantClient {
             case 'event_chunk': {
                 store.setCurrentSeq(msg.seq);
 
-                // 仅当该助理回复占位卡片尚不存在时才初始化创建，避免流式覆写已有文本
+                // 支持全量文本校准（如终态 final 事件）与增量流式追加
                 const existing = store.messages.find((m) => m.id === msg.messageId);
-                if (!existing) {
+                if (msg.content !== undefined) {
+                    store.addOrUpdateMessage({
+                        id: msg.messageId,
+                        seq: msg.seq,
+                        role: 'assistant',
+                        content: msg.content,
+                        timestamp: existing ? existing.timestamp : Date.now(),
+                        status: 'processing',
+                    });
+                } else if (!existing) {
                     store.addOrUpdateMessage({
                         id: msg.messageId,
                         seq: msg.seq,

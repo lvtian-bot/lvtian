@@ -75,6 +75,7 @@ export type ServerMessage =
           sessionId: string;
           messageId: string;
           delta?: string;
+          content?: string;
           toolCall?: ToolCallState;
           status?: 'thinking' | 'running_tool' | 'done' | 'error';
       }

@@ -337,6 +337,7 @@
     "connectionTimeout": "Connection timed out. Please check if the service is running",
     "connectionFailed": "Network connection failed",
     "sendInterrupted": "Send interrupted, please retry",
-    "approvalFailedOffline": "Network not ready, approval request could not be delivered"
+    "approvalFailedOffline": "Network not ready, approval request could not be delivered",
+    "sendFailedOffline": "Network connection not ready; message queued and can be retried once connected"
   }
 }

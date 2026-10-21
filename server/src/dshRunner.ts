@@ -1,14 +1,51 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { ToolCallState, ApprovalRequest } from './protocol.js';
 
 export interface RunnerCallbacks {
     onDelta: (delta: string) => void;
+    onFinalText?: (fullText: string) => void;
     onToolCall: (toolCall: ToolCallState) => void;
     onApprovalRequest?: (request: ApprovalRequest) => void;
     onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error', error?: string) => void;
+}
+
+/**
+ * 定位服务端本地安装的 @deepseek-ai/dsh 二进制或 JS 入口，
+ * 避免因 childProcess cwd 设置在 workspace 目录而导致 npx 回退联网下载或查找全局缓存
+ */
+function resolveDshInvocation(): { command: string; argsPrefix: string[] } {
+    try {
+        const require = createRequire(import.meta.url);
+        const pkgJsonPath = require.resolve('@deepseek-ai/dsh/package.json');
+        const dshDir = path.dirname(pkgJsonPath);
+        const binJs = path.join(dshDir, 'lib', 'bin.js');
+        if (fs.existsSync(binJs)) {
+            return { command: process.execPath, argsPrefix: [binJs] };
+        }
+    } catch {
+        // ignore
+    }
+
+    const localBin = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../node_modules/.bin',
+        process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
+    );
+    if (fs.existsSync(localBin)) {
+        return { command: localBin, argsPrefix: [] };
+    }
+
+    return {
+        command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
+        argsPrefix: ['-y', '@deepseek-ai/dsh'],
+    };
 }
 
 export class DshRunner {
@@ -34,20 +71,13 @@ export class DshRunner {
     }
 
     public handleApproval(sessionId: string, _approvalId: string, approved: boolean): boolean {
+        // 当前底层采用 dsh --profile headless 执行，官方契约为单轮非交互执行器，不支持运行时向 stdin 注入确认；
+        // 此处保留审批状态解析器接口以符合完整协议契约，供未来接入 ACP 交互式长连接通道时无缝挂接。
         const resolver = this.pendingApprovals.get(sessionId);
-        const proc = this.activeProcesses.get(sessionId);
         if (resolver) {
             resolver(approved);
             this.pendingApprovals.delete(sessionId);
             return true;
-        }
-        if (proc && proc.stdin && !proc.stdin.destroyed) {
-            try {
-                proc.stdin.write(approved ? 'y\n' : 'n\n');
-                return true;
-            } catch {
-                // ignore
-            }
         }
         return false;
     }
@@ -168,12 +198,14 @@ ${userPrompt}`;
         // 检查当前会话是否已有持久化的 dshSessionId
         const dshSessionId = this.sessionManager.getDshSessionId(sessionId);
 
+        // 解析服务端本地安装的 @deepseek-ai/dsh，优先调用本地已编译/安装的二进制或 JS 入口
+        const { command: dshCommand, argsPrefix } = resolveDshInvocation();
+
         // 调用 dsh --profile headless 执行，
         // 若已有 dshSessionId 则传入 --session-id 接续多轮对话，若为首轮则不传由 dsh 自动新建；
         // 通过 stdin 管道以 '-' 传参，避免在命令行参数中暴露人设与提问，同时消除命令行长度限制
         const dshArgs = [
-            '-y',
-            '@deepseek-ai/dsh',
+            ...argsPrefix,
             '--profile',
             'headless',
         ];
@@ -184,11 +216,10 @@ ${userPrompt}`;
 
         dshArgs.push('--json', '-');
 
-        console.log(`[DshRunner] 在工作区 ${this.workspace} 启动任务 (会话: ${sessionId}, dshSession: ${dshSessionId || '新会话'})...`);
+        console.log(`[DshRunner] 在工作区 ${this.workspace} 启动任务 (执行命令: ${dshCommand}, 会话: ${sessionId}, dshSession: ${dshSessionId || '新会话'})...`);
 
         try {
-            const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-            const child = spawn(npxCmd, dshArgs, {
+            const child = spawn(dshCommand, dshArgs, {
                 cwd: this.workspace,
                 env: {
                     ...process.env,
@@ -221,6 +252,7 @@ ${userPrompt}`;
             let stdoutAcc = '';
             let stderrAcc = '';
             let stdoutBuffer = '';
+            let finalFullText = '';
             const stdoutDecoder = new StringDecoder('utf8');
             const stderrDecoder = new StringDecoder('utf8');
             let currentToolCall: ToolCallState | null = null;
@@ -279,7 +311,11 @@ ${userPrompt}`;
                                 callbacks.onStatusChange('thinking');
                             }
                         } else if (evt.type === 'final' && typeof evt.text === 'string' && evt.text) {
-                            // 终态文本
+                            // 捕获无损终态完整文本（长文本 >8KiB 在普通 text 事件被截断，final 事件携带完整副本）
+                            finalFullText = evt.text;
+                            if (callbacks.onFinalText) {
+                                callbacks.onFinalText(evt.text);
+                            }
                         } else if (evt.type === 'error' && typeof evt.message === 'string') {
                             callbacks.onDelta(`\n\n> ⚠️ [执行反馈]：${evt.message}`);
                             callbacks.onStatusChange('error', evt.message);
@@ -290,34 +326,6 @@ ${userPrompt}`;
                 }
 
                 if (!isJsonEvent) {
-                    // 识别审批请求提示（例如 [y/N] 或需要人工确认的特定标记）
-                    const approvalMatch = trimmedLine.match(/\[APPROVAL_REQUIRED:([^:]+):([^\]]+)\]/i);
-                    const isInteractiveConfirm = !approvalMatch && (trimmedLine.includes('确认执行') && trimmedLine.includes('[y/n]'));
-
-                    if ((approvalMatch || isInteractiveConfirm) && callbacks.onApprovalRequest) {
-                        const approvalId = `appr-${Date.now()}`;
-                        const toolName = approvalMatch ? approvalMatch[1] : '系统指令';
-                        const prompt = approvalMatch ? approvalMatch[2] : '助手请求确认执行高风险操作，是否同意？';
-
-                        callbacks.onApprovalRequest({
-                            approvalId,
-                            toolName,
-                            prompt,
-                            status: 'pending',
-                        });
-                        callbacks.onStatusChange('running_tool');
-
-                        const approved = await new Promise<boolean>((resolve) => {
-                            this.pendingApprovals.set(sessionId, resolve);
-                        });
-                        this.pendingApprovals.delete(sessionId);
-
-                        if (child.stdin && !child.stdin.destroyed) {
-                            child.stdin.write(approved ? 'y\n' : 'n\n');
-                        }
-                        return;
-                    }
-
                     // 识别常规工具调用流式标记
                     if (trimmedLine.includes('[Tool]') || trimmedLine.includes('Running tool')) {
                         if (currentToolCall && currentToolCall.status === 'running') {
@@ -396,11 +404,12 @@ ${userPrompt}`;
                     if (code === 0) {
                         callbacks.onStatusChange('done');
                         this.sessionManager.setTaskState(sessionId, 'completed');
-                        // 记录流水日志（包裹异常保护）
+                        // 记录流水日志（包裹异常保护，优先采用 final 完整终态文本）
                         try {
+                            const recordedAnswer = (finalFullText || stdoutAcc).trim().slice(0, 300);
                             this.memoryManager.appendDailyLog(
                                 '对话与任务完成',
-                                `问：${userPrompt}\n答：${stdoutAcc.trim().slice(0, 300)}...`
+                                `问：${userPrompt}\n答：${recordedAnswer}...`
                             );
                         } catch (logErr) {
                             console.warn(`[DshRunner] 写入每日流水失败 (非致命): ${logErr}`);

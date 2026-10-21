@@ -10,6 +10,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "token": "node dist/index.js --show-token",
+    "test": "tsc && node --test test/server.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

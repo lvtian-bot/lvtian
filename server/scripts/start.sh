@@ -7,12 +7,30 @@ SERVER_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PID_FILE="${SERVER_DIR}/.server.pid"
 LOG_FILE="${SERVER_DIR}/server.log"
 
+is_server_process() {
+    local pid="$1"
+    if [ -z "${pid}" ] || ! ps -p "${pid}" > /dev/null 2>&1; then
+        return 1
+    fi
+    local cmd
+    if [ -f "/proc/${pid}/cmdline" ]; then
+        cmd=$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)
+    else
+        cmd=$(ps -p "${pid}" -o args= 2>/dev/null || true)
+    fi
+    if echo "${cmd}" | grep -q "dist/index.js"; then
+        return 0
+    fi
+    return 1
+}
+
 if [ -f "${PID_FILE}" ]; then
     PID=$(cat "${PID_FILE}")
-    if ps -p "${PID}" > /dev/null 2>&1; then
+    if is_server_process "${PID}"; then
         echo "绿天服务端已在运行中 (PID: ${PID})"
         exit 0
     fi
+    echo "检测到陈旧的 PID 文件 (${PID_FILE})，其进程未运行或已非绿天服务端，正在清理..."
     rm -f "${PID_FILE}"
 fi
 

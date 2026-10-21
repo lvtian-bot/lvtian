@@ -337,6 +337,7 @@
     "connectionTimeout": "连接超时，请检查服务是否启动或网络可达性",
     "connectionFailed": "网络连接失败",
     "sendInterrupted": "发送中断，请重试",
-    "approvalFailedOffline": "当前网络未就绪，审批指令未送达"
+    "approvalFailedOffline": "当前网络未就绪，审批指令未送达",
+    "sendFailedOffline": "网络连接未就绪，消息已暂存，连上后可重试"
   }
 }
