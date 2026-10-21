@@ -57,6 +57,7 @@ export type ServerMessage =
           sessionId: string;
           messages: AssistantMessage[];
           taskState: TaskExecutionState;
+          pendingApproval?: ApprovalRequest;
           currentSeq: number;
       }
     | {
@@ -76,6 +77,7 @@ export type ServerMessage =
     | {
           type: 'approval_request';
           seq: number;
+          sessionId?: string;
           approvalId: string;
           prompt: string;
           toolName?: string;

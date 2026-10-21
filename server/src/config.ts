@@ -25,7 +25,12 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
     const configFile = path.join(configDir, 'config.json');
 
     if (!fs.existsSync(configDir)) {
-        fs.mkdirSync(configDir, { recursive: true });
+        fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    }
+    try {
+        fs.chmodSync(configDir, 0o700);
+    } catch {
+        // ignore
     }
 
     let existing: Partial<ServerConfig> = {};
@@ -56,15 +61,21 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
 
     // 确保工作区和数据目录存在
     if (!fs.existsSync(workspace)) {
-        fs.mkdirSync(workspace, { recursive: true });
+        fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
     }
     if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
+        fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    }
+    try {
+        fs.chmodSync(dataDir, 0o700);
+    } catch {
+        // ignore
     }
 
-    // 回写配置文件
+    // 回写配置文件，限制仅本用户读写 (0600)
     try {
         fs.writeFileSync(configFile, JSON.stringify(mergedConfig, null, 2), { mode: 0o600 });
+        fs.chmodSync(configFile, 0o600);
     } catch (err) {
         console.warn(`[Config] 保存配置文件失败: ${err}`);
     }

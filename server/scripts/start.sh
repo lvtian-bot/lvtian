@@ -19,11 +19,9 @@ fi
 echo "正在启动绿天服务端..."
 cd "${SERVER_DIR}"
 
-# 如果 dist 不存在先编译
-if [ ! -d "${SERVER_DIR}/dist" ]; then
-    echo "正在编译服务端代码..."
-    npx tsc
-fi
+# 启动前编译服务端代码，确保产物与最新源码严格一致
+echo "正在编译服务端代码..."
+npx tsc
 
 nohup node "${SERVER_DIR}/dist/index.js" >> "${LOG_FILE}" 2>&1 &
 NEW_PID=$!

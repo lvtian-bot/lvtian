@@ -20,7 +20,12 @@ export class SessionManager {
         this.dataDir = dataDir;
         this.sessionsDir = path.join(this.dataDir, 'sessions');
         if (!fs.existsSync(this.sessionsDir)) {
-            fs.mkdirSync(this.sessionsDir, { recursive: true });
+            fs.mkdirSync(this.sessionsDir, { recursive: true, mode: 0o700 });
+        }
+        try {
+            fs.chmodSync(this.sessionsDir, 0o700);
+        } catch {
+            // ignore
         }
         this.loadAll();
     }
@@ -33,9 +38,22 @@ export class SessionManager {
                     const filePath = path.join(this.sessionsDir, file);
                     const raw = fs.readFileSync(filePath, 'utf8');
                     const session = JSON.parse(raw) as SessionData;
-                    // 如果服务重启时处于 processing 状态，重置为 stopped 或 error 状态，防止手机端永远悬挂加载
+                    // 如果服务重启时处于 processing 状态，重置为 stopped 状态，并修补中断中的消息
                     if (session.taskState === 'processing') {
                         session.taskState = 'stopped';
+                        let modified = false;
+                        for (const m of session.messages) {
+                            if (m.status === 'processing') {
+                                m.status = 'error';
+                                m.content = m.content
+                                    ? `${m.content}\n\n⚠️ [任务中断：服务已重启]`
+                                    : '⚠️ 服务已重启，前序执行已中断';
+                                modified = true;
+                            }
+                        }
+                        if (modified) {
+                            this.persistSession(session);
+                        }
                     }
                     this.sessions.set(session.sessionId, session);
                 }
@@ -65,7 +83,8 @@ export class SessionManager {
         session.updatedAt = Date.now();
         const filePath = path.join(this.sessionsDir, `${session.sessionId}.json`);
         try {
-            fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf8');
+            fs.writeFileSync(filePath, JSON.stringify(session, null, 2), { encoding: 'utf8', mode: 0o600 });
+            fs.chmodSync(filePath, 0o600);
         } catch (err) {
             console.error(`[SessionManager] 保存会话 ${session.sessionId} 失败: ${err}`);
         }
@@ -149,9 +168,20 @@ export class SessionManager {
         return seq;
     }
 
+    public getPendingApproval(sessionId: string): ApprovalRequest | undefined {
+        const session = this.getOrCreateSession(sessionId);
+        return session.pendingApproval;
+    }
+
+    public clearPendingApproval(sessionId: string): void {
+        const session = this.getOrCreateSession(sessionId);
+        session.pendingApproval = undefined;
+        this.persistSession(session);
+    }
+
     public getReconcileData(
         sessionId: string,
-        _lastSeq: number
+        lastSeq: number
     ): {
         messages: AssistantMessage[];
         taskState: TaskExecutionState;
@@ -159,9 +189,13 @@ export class SessionManager {
         currentSeq: number;
     } {
         const session = this.getOrCreateSession(sessionId);
-        // 如果客户端是全新的（lastSeq <= 0），返回全部消息；如果客户端已有一部分，返回 seq > lastSeq 的消息或全量消息
+        // 如果客户端是初次同步（lastSeq <= 0），返回全部消息；如果增量同步，返回当前会话中大于 lastSeq 的消息
+        const messages = lastSeq > 0
+            ? session.messages.filter((m) => (m.seq ?? 0) > lastSeq)
+            : session.messages;
+
         return {
-            messages: session.messages,
+            messages,
             taskState: session.taskState,
             pendingApproval: session.pendingApproval,
             currentSeq: session.currentSeq,

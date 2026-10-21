@@ -64,7 +64,7 @@ export class LvtianServer {
             return;
         }
 
-        // 健康检查
+        // 健康检查（仅提供存活状态，不泄露工作区内部路径）
         if (pathname === '/health' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
@@ -72,7 +72,6 @@ export class LvtianServer {
                     status: 'ok',
                     version: '0.1.0',
                     assistantName: this.config.assistantName,
-                    workspace: this.config.workspace,
                 })
             );
             return;
@@ -209,6 +208,7 @@ export class LvtianServer {
                     sessionId,
                     messages: reconcile.messages,
                     taskState: reconcile.taskState,
+                    pendingApproval: reconcile.pendingApproval,
                     currentSeq: reconcile.currentSeq,
                 });
                 break;
@@ -236,13 +236,19 @@ export class LvtianServer {
             case 'approval_response': {
                 // 人工审批响应
                 const sessionId = ws.sessionId || 'main';
-                const seq = this.sessionManager.nextSeq(sessionId);
-                this.broadcastSession(sessionId, {
-                    type: 'task_status',
-                    seq,
-                    sessionId,
-                    state: msg.approved ? 'processing' : 'stopped',
-                });
+                const pending = this.sessionManager.getPendingApproval(sessionId);
+                if (pending && pending.approvalId === msg.approvalId) {
+                    this.sessionManager.clearPendingApproval(sessionId);
+                    const nextState = msg.approved ? 'processing' : 'stopped';
+                    const seq = this.sessionManager.setTaskState(sessionId, nextState);
+                    this.dshRunner.handleApproval(sessionId, msg.approvalId, msg.approved);
+                    this.broadcastSession(sessionId, {
+                        type: 'task_status',
+                        seq,
+                        sessionId,
+                        state: nextState,
+                    });
+                }
                 break;
             }
         }
@@ -254,6 +260,19 @@ export class LvtianServer {
         userMessageId: string,
         content: string
     ): void {
+        // 如果当前已有任务在执行，拒绝并发任务且不破坏当前正在执行的会话状态
+        if (this.dshRunner.isRunning(sessionId)) {
+            const currentSession = this.sessionManager.getOrCreateSession(sessionId);
+            this.send(ws, {
+                type: 'task_status',
+                seq: currentSession.currentSeq,
+                sessionId,
+                state: currentSession.taskState,
+                error: '上一个任务正在执行中，请等待其完成或点击停止',
+            });
+            return;
+        }
+
         // 1. 存入用户消息
         const userMsg = this.sessionManager.addMessage(sessionId, {
             id: userMessageId,
@@ -317,6 +336,18 @@ export class LvtianServer {
                     });
                 }
             },
+            onApprovalRequest: (request) => {
+                const seq = this.sessionManager.setTaskState(sessionId, 'awaiting_approval', request);
+                this.broadcastSession(sessionId, {
+                    type: 'approval_request',
+                    seq,
+                    sessionId,
+                    approvalId: request.approvalId,
+                    prompt: request.prompt,
+                    toolName: request.toolName,
+                    params: request.params,
+                });
+            },
             onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error', error?: string) => {
                 let taskState: TaskExecutionState = 'processing';
                 if (status === 'done') taskState = 'completed';
@@ -368,7 +399,23 @@ export class LvtianServer {
             if (this.heartbeatInterval) {
                 clearInterval(this.heartbeatInterval);
             }
+            // 终止所有存活的客户端 WebSocket，避免 wss.close() 等待未断开客户端导致关停挂起
+            this.wss.clients.forEach((client: WebSocket) => {
+                try {
+                    client.terminate();
+                } catch {
+                    // ignore
+                }
+            });
+
+            const forceTimeout = setTimeout(() => {
+                this.httpServer.close(() => {
+                    resolve();
+                });
+            }, 3000);
+
             this.wss.close(() => {
+                clearTimeout(forceTimeout);
                 this.httpServer.close(() => {
                     resolve();
                 });

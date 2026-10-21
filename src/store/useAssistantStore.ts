@@ -89,7 +89,15 @@ export const useAssistantStore = create<AssistantState>()(
                     const idx = state.messages.findIndex((m) => m.id === message.id);
                     if (idx >= 0) {
                         const updated = [...state.messages];
-                        updated[idx] = { ...updated[idx], ...message };
+                        const current = updated[idx];
+                        updated[idx] = {
+                            ...current,
+                            ...message,
+                            content:
+                                message.content !== undefined && message.content !== ''
+                                    ? message.content
+                                    : current.content,
+                        };
                         return { messages: updated };
                     }
                     return { messages: [...state.messages, message] };

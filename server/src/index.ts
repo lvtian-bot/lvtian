@@ -38,8 +38,23 @@ function getLocalIpAddresses(): string[] {
 }
 
 async function main() {
+    const isShowToken = process.argv.includes('--show-token') || process.argv.includes('token');
     const overrides = parseArgs();
     const config = loadOrCreateConfig(overrides);
+
+    const localIps = getLocalIpAddresses();
+    const primaryIp = localIps[0] || '127.0.0.1';
+
+    if (isShowToken) {
+        console.log('====================================================');
+        console.log('🔑 绿天独立服务端访问凭据');
+        console.log('====================================================');
+        console.log(`Token:      ${config.token}`);
+        console.log(`快捷连接:   http://${primaryIp}:${config.port}?token=${config.token}`);
+        console.log(`配置文件:   ~/.config/lvtian/config.json`);
+        console.log('====================================================');
+        process.exit(0);
+    }
 
     console.log('====================================================');
     console.log(`🌿 绿天个人助理独立服务端 (Lvtian Server)`);
@@ -52,20 +67,17 @@ async function main() {
     const server = new LvtianServer(config, sessionManager, memoryManager, dshRunner);
     await server.start();
 
-    const localIps = getLocalIpAddresses();
-    const primaryIp = localIps[0] || '127.0.0.1';
+    const maskedToken = `${config.token.slice(0, 4)}****${config.token.slice(-4)}`;
 
     console.log(`\n🚀 服务已成功启动并在端口 ${config.port} 监听:`);
     console.log(`   - 本地回环:  http://127.0.0.1:${config.port}`);
     for (const ip of localIps) {
         console.log(`   - 网络访问:  http://${ip}:${config.port}`);
     }
-    console.log(`\n🔑 访问令牌 (Token): ${config.token}`);
+    console.log(`\n🔑 访问令牌:         ${maskedToken} (安全脱敏，查看完整凭据: npm run token 或 node dist/index.js --show-token)`);
     console.log(`📂 工作区目录:       ${config.workspace}`);
     console.log(`🧠 记忆系统目录:     ${os.homedir()} (SOUL.md, MEMORY.md, USER.md)`);
-
-    console.log('\n📲 手机端一键连接完整配置:');
-    console.log(`   http://${primaryIp}:${config.port}?token=${config.token}`);
+    console.log(`⚙️ 配置文件路径:     ~/.config/lvtian/config.json (权限 0600)`);
     console.log('====================================================\n');
 
     const shutdown = async () => {

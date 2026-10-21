@@ -12,6 +12,8 @@ export class AssistantClient {
     private pingTimer: ReturnType<typeof setInterval> | null = null;
     private reconnectAttempts = 0;
     private isExplicitlyClosed = false;
+    private activeUrl: string | null = null;
+    private activeToken: string | null = null;
 
     public static getInstance(): AssistantClient {
         if (!AssistantClient.instance) {
@@ -48,6 +50,9 @@ export class AssistantClient {
         if (!cleanUrl) {
             return { success: false, message: '服务地址不能为空' };
         }
+        if (!token || !token.trim()) {
+            return { success: false, message: '访问令牌（Token）不能为空' };
+        }
 
         try {
             const controller = new AbortController();
@@ -65,24 +70,22 @@ export class AssistantClient {
 
             const healthData = (await healthRes.json()) as { version?: string };
 
-            // 2. 测试 Token 鉴权
-            if (token) {
-                const authController = new AbortController();
-                const authTimeout = setTimeout(() => authController.abort(), 6000);
-                const infoRes = await fetch(`${cleanUrl}/api/info`, {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                    signal: authController.signal,
-                });
-                clearTimeout(authTimeout);
+            // 2. 测试 Token 鉴权（服务端必备安全校验）
+            const authController = new AbortController();
+            const authTimeout = setTimeout(() => authController.abort(), 6000);
+            const infoRes = await fetch(`${cleanUrl}/api/info`, {
+                headers: {
+                    Authorization: `Bearer ${token.trim()}`,
+                },
+                signal: authController.signal,
+            });
+            clearTimeout(authTimeout);
 
-                if (infoRes.status === 401) {
-                    return { success: false, message: '连接成功，但访问令牌（Token）不正确' };
-                }
-                if (!infoRes.ok) {
-                    return { success: false, message: `鉴权验证失败 (${infoRes.status})` };
-                }
+            if (infoRes.status === 401) {
+                return { success: false, message: '连接成功，但访问令牌（Token）不正确' };
+            }
+            if (!infoRes.ok) {
+                return { success: false, message: `鉴权验证失败 (${infoRes.status})` };
             }
 
             return {
@@ -102,7 +105,7 @@ export class AssistantClient {
     /**
      * 启动长连接
      */
-    public async connect(): Promise<void> {
+    public async connect(forceReconnect = false): Promise<void> {
         this.isExplicitlyClosed = false;
         const store = useAssistantStore.getState();
         const { url, token } = await store.loadSavedCredentials();
@@ -112,15 +115,20 @@ export class AssistantClient {
             return;
         }
 
-        // 避免重复建立
+        // 如果未要求强制重连，且 WebSocket 已处于连接或打开状态，并且目标地址与 Token 均未变化，则不重复连接
         if (
+            !forceReconnect &&
             this.ws &&
-            (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)
+            (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) &&
+            this.activeUrl === url &&
+            this.activeToken === token
         ) {
             return;
         }
 
         this.cleanUpWs();
+        this.activeUrl = url;
+        this.activeToken = token;
         store.setConnectionState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
         try {
@@ -179,6 +187,8 @@ export class AssistantClient {
      */
     public disconnect(): void {
         this.isExplicitlyClosed = true;
+        this.activeUrl = null;
+        this.activeToken = null;
         this.stopPing();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
@@ -312,19 +322,55 @@ export class AssistantClient {
             }
 
             case 'sync_result': {
-                store.setMessages(msg.messages);
-                store.setTaskState(msg.taskState);
                 store.setCurrentSeq(msg.currentSeq);
+                store.setTaskState(msg.taskState);
+                if (msg.pendingApproval) {
+                    store.setPendingApproval({
+                        approvalId: msg.pendingApproval.approvalId,
+                        prompt: msg.pendingApproval.prompt,
+                        toolName: msg.pendingApproval.toolName,
+                        params: msg.pendingApproval.params,
+                        status: 'pending',
+                    });
+                }
+
+                // 保留本地发送失败或仍在排队发送的未决消息，防止重连后用户重试入口丢失
+                const localMessages = store.messages;
+                const localUnsent = localMessages.filter(
+                    (m) => m.status === 'error' || m.status === 'sending'
+                );
+
+                const msgMap = new Map<string, AssistantMessage>();
+                // 先写入本地已有的所有消息（支持增量同步）
+                for (const m of localMessages) {
+                    msgMap.set(m.id, m);
+                }
+                // 服务端下发的消息优先覆盖更新
+                for (const m of msg.messages) {
+                    msgMap.set(m.id, m);
+                }
+                // 确保本地未成功的消息依然保留
+                for (const m of localUnsent) {
+                    if (!msgMap.has(m.id) || msgMap.get(m.id)?.status === 'error') {
+                        msgMap.set(m.id, m);
+                    }
+                }
+
+                const merged = Array.from(msgMap.values()).sort(
+                    (a, b) => a.timestamp - b.timestamp
+                );
+                store.setMessages(merged);
                 break;
             }
 
             case 'message_ack': {
+                const existing = store.messages.find((m) => m.id === msg.messageId);
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
                     role: 'user',
-                    content: '', // 会由 addOrUpdateMessage 合并
-                    timestamp: Date.now(),
+                    content: existing ? existing.content : '',
+                    timestamp: existing ? existing.timestamp : Date.now(),
                     status: 'sent',
                 });
                 store.setCurrentSeq(msg.seq);
@@ -334,19 +380,21 @@ export class AssistantClient {
             case 'event_chunk': {
                 store.setCurrentSeq(msg.seq);
 
-                // 确保消息卡片已存在
-                store.addOrUpdateMessage({
-                    id: msg.messageId,
-                    seq: msg.seq,
-                    role: 'assistant',
-                    content: '',
-                    timestamp: Date.now(),
-                    status: 'processing',
-                });
-
-                if (msg.delta) {
+                // 仅当该助理回复占位卡片尚不存在时才初始化创建，避免流式覆写已有文本
+                const existing = store.messages.find((m) => m.id === msg.messageId);
+                if (!existing) {
+                    store.addOrUpdateMessage({
+                        id: msg.messageId,
+                        seq: msg.seq,
+                        role: 'assistant',
+                        content: msg.delta || '',
+                        timestamp: Date.now(),
+                        status: 'processing',
+                    });
+                } else if (msg.delta) {
                     store.appendDeltaToMessage(msg.messageId, msg.delta);
                 }
+
                 if (msg.toolCall) {
                     store.setToolCallForMessage(msg.messageId, msg.toolCall);
                 }

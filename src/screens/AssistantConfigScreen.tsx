@@ -83,8 +83,8 @@ export const AssistantConfigScreen = () => {
         setSaving(true);
         try {
             await setServerConfig(url, token);
-            // 重新发起长连接
-            AssistantClient.getInstance().connect();
+            // 强制重新发起长连接
+            AssistantClient.getInstance().connect(true);
             setSaving(false);
             Alert.alert(t('settings.success', '成功'), '配置已保存并开始连接', [
                 {
