@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList, Pressable } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
 import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
 import { useNavigation } from '@react-navigation/native';
@@ -24,15 +25,51 @@ export const MeScreen = () => {
         setMarkdownTheme
     } = useSettingsStore();
 
+    const {
+        serverUrl,
+        connectionState,
+    } = useAssistantStore();
 
     // Markdown主题选择模态框
     const [themeModalVisible, setThemeModalVisible] = useState(false);
     const themes = Object.keys(markdownThemes) as MarkdownThemeKey[];
 
-
-
     return (
         <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
+
+            {/* 绿天个人助理服务配置卡片 */}
+            <TouchableOpacity
+                style={styles.card}
+                onPress={() => navigation.navigate('AssistantConfig')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.cardContent}>
+                    <View style={styles.cardHeaderRow}>
+                        <View style={styles.cardTitleContainer}>
+                            <Icon name="robot" size={28} color={theme.colors.primary} style={styles.cardIcon} />
+                            <Text style={styles.cardTitle}>{t('settings.assistantTitle', '绿天助理服务')}</Text>
+                        </View>
+                        <View style={[styles.cardServiceTag, connectionState === 'connected' && styles.connectedTag]}>
+                            <Text style={[styles.cardServiceName, connectionState === 'connected' && styles.connectedName]}>
+                                {connectionState === 'connected'
+                                    ? t('settings.assistantConnected', '已连接')
+                                    : connectionState === 'connecting' || connectionState === 'reconnecting'
+                                    ? t('settings.assistantConnecting', '连接中...')
+                                    : serverUrl
+                                    ? t('settings.assistantDisconnected', '未连接')
+                                    : t('settings.notConfigured', '未配置')}
+                            </Text>
+                        </View>
+                    </View>
+
+                    <View style={styles.cardStatusRow}>
+                        <Text style={styles.cardStatusText} numberOfLines={1} ellipsizeMode="tail">
+                            {serverUrl ? serverUrl : t('settings.assistantSubtitle', '配置服务地址与访问令牌以连接助理')}
+                        </Text>
+                        <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                    </View>
+                </View>
+            </TouchableOpacity>
 
             {/* Cloud Configuration Card */}
             <TouchableOpacity
@@ -219,6 +256,12 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 4,
+    },
+    connectedTag: {
+        backgroundColor: '#e8f5e9',
+    },
+    connectedName: {
+        color: '#2e7d32',
     },
     cardServiceName: {
         fontSize: 12,

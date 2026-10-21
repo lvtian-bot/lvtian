@@ -1,0 +1,16 @@
+[Unit]
+Description=Lvtian Personal Assistant Independent Server
+After=network.target
+
+[Service]
+Type=simple
+User=%I
+WorkingDirectory=/home/%I/code/lvtian/server
+ExecStartPre=/usr/bin/env npm run build
+ExecStart=/usr/bin/node /home/%I/code/lvtian/server/dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

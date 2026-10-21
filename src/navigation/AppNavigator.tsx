@@ -9,6 +9,7 @@ import { CacheManagerScreen } from '../screens/CacheManagerScreen'; // 新增
 import { AboutScreen } from '../screens/AboutScreen'; // 新增
 import { PermissionInfoScreen } from '../screens/PermissionInfoScreen'; // 新增
 import { MeScreen } from '../screens/MeScreen'; // 新增
+import { AssistantConfigScreen } from '../screens/AssistantConfigScreen'; // 新增：助理服务配置
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next'; // 新增
 
@@ -74,6 +75,15 @@ export const AppNavigator = () => {
                 options={{
                     headerShown: true,
                     title: t('tabs.me')
+                }}
+            />
+            {/* 新增：助理服务配置页面 */}
+            <Stack.Screen
+                name="AssistantConfig"
+                component={AssistantConfigScreen}
+                options={{
+                    headerShown: true,
+                    title: t('settings.assistantConfig', '助理服务配置')
                 }}
             />
         </Stack.Navigator>
