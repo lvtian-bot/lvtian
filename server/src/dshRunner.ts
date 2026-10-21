@@ -179,15 +179,14 @@ export class DshRunner {
 
         // 加载记忆与全局人设
         const memoryContext = this.memoryManager.loadContext();
-        const systemInstructions = `[系统背景]
-${memoryContext.soul}
+        const systemSections = [
+            memoryContext.agents ? `[工作准则与规范]\n${memoryContext.agents}` : '',
+            memoryContext.soul ? `[系统背景]\n${memoryContext.soul}` : '',
+            memoryContext.memory ? `[主人记忆]\n${memoryContext.memory}` : '',
+            memoryContext.user ? `[主人档案]\n${memoryContext.user}` : '',
+        ].filter(Boolean).join('\n\n');
 
-[主人记忆]
-${memoryContext.memory}
-
-[主人档案]
-${memoryContext.user}
-`;
+        const systemInstructions = systemSections;
 
         const fullPrompt = `[系统人设与主人记忆背景]
 ${systemInstructions}

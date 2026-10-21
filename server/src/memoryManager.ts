@@ -6,16 +6,21 @@ export interface MemoryContext {
     soul: string;
     memory: string;
     user: string;
+    agents?: string;
 }
 
 export class MemoryManager {
-    private homeDir: string;
+    private baseDir: string;
     private memoryDir: string;
 
-    constructor(homeDir?: string) {
-        this.homeDir = homeDir || os.homedir();
-        this.memoryDir = path.join(this.homeDir, 'memory');
+    constructor(baseDir?: string) {
+        this.baseDir = baseDir || os.homedir();
+        this.memoryDir = path.join(this.baseDir, 'memory');
         this.ensureInit();
+    }
+
+    public getBaseDir(): string {
+        return this.baseDir;
     }
 
     private ensureInit(): void {
@@ -28,7 +33,7 @@ export class MemoryManager {
             // ignore
         }
 
-        const soulFile = path.join(this.homeDir, 'SOUL.md');
+        const soulFile = path.join(this.baseDir, 'SOUL.md');
         if (!fs.existsSync(soulFile)) {
             const defaultSoul = `# 绿天 (Lvtian) - 个人助理准则
 
@@ -37,7 +42,7 @@ export class MemoryManager {
 ## 行为哲学
 1. **直接务实**：就事论事，言简意赅。完成工作时给出清晰的结果汇报，不复述冗长的过程，不讲空话客套。
 2. **忠诚随身**：你常驻在主人的专属机器上，用户目录的 ~/workspace 是你的核心工作台。
-3. **安全透明**：所有长期记忆以清晰的 Markdown 形式存放在主目录；遇到敏感、高危或不可逆的操作，主动触发人工审批卡片请求主人确认。
+3. **安全透明**：所有长期记忆以清晰的 Markdown 形式存放在工作区；遇到敏感、高危或不可逆的操作，主动触发人工审批卡片请求主人确认。
 `;
             fs.writeFileSync(soulFile, defaultSoul, { encoding: 'utf8', mode: 0o600 });
         }
@@ -47,7 +52,7 @@ export class MemoryManager {
             // ignore
         }
 
-        const memoryFile = path.join(this.homeDir, 'MEMORY.md');
+        const memoryFile = path.join(this.baseDir, 'MEMORY.md');
         if (!fs.existsSync(memoryFile)) {
             const defaultMemory = `# 绿天长期记忆
 
@@ -64,7 +69,7 @@ export class MemoryManager {
             // ignore
         }
 
-        const userFile = path.join(this.homeDir, 'USER.md');
+        const userFile = path.join(this.baseDir, 'USER.md');
         if (!fs.existsSync(userFile)) {
             const defaultUser = `# 主人档案
 
@@ -81,15 +86,17 @@ export class MemoryManager {
     }
 
     public loadContext(): MemoryContext {
-        const soulFile = path.join(this.homeDir, 'SOUL.md');
-        const memoryFile = path.join(this.homeDir, 'MEMORY.md');
-        const userFile = path.join(this.homeDir, 'USER.md');
+        const soulFile = path.join(this.baseDir, 'SOUL.md');
+        const memoryFile = path.join(this.baseDir, 'MEMORY.md');
+        const userFile = path.join(this.baseDir, 'USER.md');
+        const agentsFile = path.join(this.baseDir, 'AGENTS.md');
 
         const soul = fs.existsSync(soulFile) ? fs.readFileSync(soulFile, 'utf8') : '';
         const memory = fs.existsSync(memoryFile) ? fs.readFileSync(memoryFile, 'utf8') : '';
         const user = fs.existsSync(userFile) ? fs.readFileSync(userFile, 'utf8') : '';
+        const agents = fs.existsSync(agentsFile) ? fs.readFileSync(agentsFile, 'utf8') : undefined;
 
-        return { soul, memory, user };
+        return { soul, memory, user, agents };
     }
 
     public appendDailyLog(title: string, content: string): void {
