@@ -45,7 +45,10 @@ export class LvtianServer {
             this.handleHttpRequest(req, res);
         });
 
-        this.wss = new WS.Server({ server: this.httpServer });
+        this.wss = new WS.Server({
+            server: this.httpServer,
+            maxPayload: 1024 * 1024, // 限制单条报文 1MB 上限，防止超大报文消耗内存或阻塞事件循环
+        });
         this.setupWebSocket();
     }
 
@@ -115,32 +118,10 @@ export class LvtianServer {
     }
 
     private setupWebSocket(): void {
-        this.wss.on('connection', (ws: AuthenticatedSocket, req: http.IncomingMessage) => {
+        this.wss.on('connection', (ws: AuthenticatedSocket) => {
             ws.isAlive = true;
             ws.isAuthenticated = false;
             ws.sessionId = 'main';
-
-            let queryToken: string | null = null;
-            try {
-                const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-                queryToken = urlObj.searchParams.get('token');
-            } catch {
-                // 忽略异常主机头
-            }
-
-            // 如果 URL 参数中包含正确 token，直接视为认证通过
-            if (queryToken && queryToken === this.config.token) {
-                ws.isAuthenticated = true;
-                this.send(ws, {
-                    type: 'auth_result',
-                    success: true,
-                    serverInfo: {
-                        version: '0.1.0',
-                        workspace: this.config.workspace,
-                        assistantName: this.config.assistantName,
-                    },
-                });
-            }
 
             ws.on('pong', () => {
                 ws.isAlive = true;
@@ -303,8 +284,8 @@ export class LvtianServer {
             status: 'sent',
         });
 
-        // 2. 确认已受理
-        this.send(ws, {
+        // 2. 向该会话所有活跃连接广播用户消息受理确认，确保多端时间线完全同步
+        this.broadcastSession(sessionId, {
             type: 'message_ack',
             messageId: userMessageId,
             seq: userMsg.seq,

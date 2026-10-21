@@ -67,7 +67,10 @@ export const ChatScreen = () => {
     };
 
     const handleStop = () => {
-        AssistantClient.getInstance().stopExecution();
+        const sent = AssistantClient.getInstance().stopExecution();
+        if (!sent) {
+            Alert.alert(t('common.notice', '提示'), t('assistant.stopFailedOffline', '当前网络未就绪，停止指令未送达'));
+        }
     };
 
     const handleApproval = (approved: boolean) => {
@@ -83,10 +86,12 @@ export const ChatScreen = () => {
                 return;
             }
             const parsed = AssistantClient.parseConnectionUrl(text);
-            if (parsed.url) {
+            if (parsed.url && parsed.token) {
                 await setServerConfig(parsed.url, parsed.token);
                 AssistantClient.getInstance().connect();
                 Alert.alert(t('common.success', '成功'), t('assistant.configApplied', '已成功解析并应用配置'));
+            } else if (parsed.url && !parsed.token) {
+                Alert.alert(t('common.error', '错误'), t('assistant.tokenMissingInClip', '剪贴板链接缺少访问令牌（Token）'));
             } else {
                 Alert.alert(t('common.error', '错误'), t('assistant.configInvalid', '未能在剪贴板中识别出有效服务地址'));
             }

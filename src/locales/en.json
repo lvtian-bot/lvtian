@@ -327,6 +327,8 @@
     "serviceRestartInterrupted": "⚠️ Server restarted, previous task was interrupted",
     "configApplied": "Configuration successfully applied",
     "configInvalid": "Could not identify a valid server URL from clipboard",
-    "thinkingText": "Lvtian is thinking..."
+    "thinkingText": "Lvtian is thinking...",
+    "stopFailedOffline": "Network not ready, stop request could not be delivered",
+    "tokenMissingInClip": "Clipboard link is missing access token"
   }
 }

@@ -44,41 +44,47 @@ export class SessionManager {
     }
 
     private loadAll(): void {
+        let files: string[] = [];
         try {
-            const files = fs.readdirSync(this.sessionsDir);
-            for (const file of files) {
-                if (file.endsWith('.json')) {
-                    const filePath = path.join(this.sessionsDir, file);
-                    const raw = fs.readFileSync(filePath, 'utf8');
-                    const session = JSON.parse(raw) as SessionData;
-                    // 如果服务重启时处于 processing 或 awaiting_approval 状态，重置为 stopped 状态，并修补中断中的消息
-                    let modified = false;
-                    if (session.taskState === 'processing' || session.taskState === 'awaiting_approval') {
-                        session.taskState = 'stopped';
-                        session.pendingApproval = undefined;
+            files = fs.readdirSync(this.sessionsDir);
+        } catch (err) {
+            console.warn(`[SessionManager] 读取会话目录失败: ${err}`);
+            return;
+        }
+
+        for (const file of files) {
+            if (!file.endsWith('.json')) continue;
+            try {
+                const filePath = path.join(this.sessionsDir, file);
+                const raw = fs.readFileSync(filePath, 'utf8');
+                const session = JSON.parse(raw) as SessionData;
+                // 如果服务重启时处于 processing 或 awaiting_approval 状态，重置为 stopped 状态，并修补中断中的消息
+                let modified = false;
+                if (session.taskState === 'processing' || session.taskState === 'awaiting_approval') {
+                    session.taskState = 'stopped';
+                    session.pendingApproval = undefined;
+                    modified = true;
+                }
+
+                for (const m of session.messages) {
+                    if (m.status === 'processing') {
+                        m.status = 'error';
+                        m.content = m.content
+                            ? `${m.content}\n\n⚠️ [任务中断：服务已重启]`
+                            : '⚠️ 服务已重启，前序执行已中断';
+                        // 同步推进 seq 与 currentSeq，确保客户端重连增量同步能感知此修补
+                        session.currentSeq += 1;
+                        m.seq = session.currentSeq;
                         modified = true;
                     }
-
-                    for (const m of session.messages) {
-                        if (m.status === 'processing') {
-                            m.status = 'error';
-                            m.content = m.content
-                                ? `${m.content}\n\n⚠️ [任务中断：服务已重启]`
-                                : '⚠️ 服务已重启，前序执行已中断';
-                            // 同步推进 seq 与 currentSeq，确保客户端重连增量同步能感知此修补
-                            session.currentSeq += 1;
-                            m.seq = session.currentSeq;
-                            modified = true;
-                        }
-                    }
-                    if (modified) {
-                        this.persistSession(session, true);
-                    }
-                    this.sessions.set(session.sessionId, session);
                 }
+                if (modified) {
+                    this.persistSession(session, true);
+                }
+                this.sessions.set(session.sessionId, session);
+            } catch (fileErr) {
+                console.warn(`[SessionManager] 加载单个会话文件 ${file} 失败 (已跳过以保护其余正常会话): ${fileErr}`);
             }
-        } catch (err) {
-            console.warn(`[SessionManager] 加载持久化会话失败: ${err}`);
         }
     }
 

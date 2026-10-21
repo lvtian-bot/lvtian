@@ -132,13 +132,9 @@ export class AssistantClient {
         store.setConnectionState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
         try {
-            // 将 http/https 转换为 ws/wss
+            // 将 http/https 转换为 ws/wss，不再在 URL 查询参数中携带 token，避免在反向代理等访问日志中泄露长效凭据
             const wsUrl = url.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://');
-            const targetUrl = token
-                ? `${wsUrl}?token=${encodeURIComponent(token)}`
-                : wsUrl;
-
-            this.ws = new WebSocket(targetUrl);
+            this.ws = new WebSocket(wsUrl);
 
             this.ws.onopen = () => {
                 this.reconnectAttempts = 0;
@@ -299,12 +295,16 @@ export class AssistantClient {
     /**
      * 停止当前执行
      */
-    public stopExecution(): void {
-        this.sendRaw({
+    public stopExecution(): boolean {
+        const sent = this.sendRaw({
             type: 'stop',
             sessionId: 'main',
         });
-        useAssistantStore.getState().setTaskState('stopped');
+        if (sent) {
+            useAssistantStore.getState().setTaskState('stopped');
+            return true;
+        }
+        return false;
     }
 
     /**

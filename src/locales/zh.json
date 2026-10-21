@@ -327,6 +327,8 @@
     "serviceRestartInterrupted": "⚠️ 服务已重启，前序执行已中断",
     "configApplied": "已成功解析并应用配置",
     "configInvalid": "未能在剪贴板中识别出有效服务地址",
-    "thinkingText": "绿天正在思考中..."
+    "thinkingText": "绿天正在思考中...",
+    "stopFailedOffline": "当前网络未就绪，停止指令未送达",
+    "tokenMissingInClip": "剪贴板链接缺少访问令牌（Token）"
   }
 }

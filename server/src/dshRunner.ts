@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { ToolCallState, ApprovalRequest } from './protocol.js';
@@ -158,15 +159,28 @@ ${userPrompt}`;
 
             this.activeProcesses.set(sessionId, child);
 
-            // 将提示词与记忆通过 stdin 写入，不在 argv 中暴露私密指令，解除命令行参数长度限制
-            if (child.stdin && !child.stdin.destroyed) {
-                child.stdin.write(fullPrompt);
-                child.stdin.end();
+            // 监听 child.stdin 错误事件，防止子进程秒退导致主进程抛出未捕获的 EPIPE 异常闪退
+            if (child.stdin) {
+                child.stdin.on('error', (stdinErr) => {
+                    console.warn(`[DshRunner] stdin 管道发生异常 (子进程可能已提前退出): ${stdinErr}`);
+                });
+
+                // 将提示词与记忆通过 stdin 写入，不在 argv 中暴露私密指令，解除命令行参数长度限制
+                if (!child.stdin.destroyed) {
+                    try {
+                        child.stdin.write(fullPrompt);
+                        child.stdin.end();
+                    } catch (writeErr) {
+                        console.warn(`[DshRunner] 写入 stdin 失败: ${writeErr}`);
+                    }
+                }
             }
 
             let stdoutAcc = '';
             let stderrAcc = '';
             let stdoutBuffer = '';
+            const stdoutDecoder = new StringDecoder('utf8');
+            const stderrDecoder = new StringDecoder('utf8');
             let currentToolCall: ToolCallState | null = null;
             let toolSeq = 0;
 
@@ -286,7 +300,8 @@ ${userPrompt}`;
             };
 
             child.stdout?.on('data', async (chunk: Buffer) => {
-                const text = chunk.toString('utf8');
+                // 使用 StringDecoder 解码，避免汉字等 UTF-8 多字节字符被 chunk 边界截断导致乱码
+                const text = stdoutDecoder.write(chunk);
                 stdoutAcc += text;
                 stdoutBuffer += text;
 
@@ -300,13 +315,20 @@ ${userPrompt}`;
             });
 
             child.stderr?.on('data', (chunk: Buffer) => {
-                const text = chunk.toString('utf8');
+                const text = stderrDecoder.write(chunk);
                 stderrAcc += text;
                 console.log(`[DshRunner:stderr] ${text.trim()}`);
             });
 
             await new Promise<void>((resolve) => {
                 child.on('close', async (code: number | null) => {
+                    const remainingStdout = stdoutDecoder.end();
+                    if (remainingStdout) {
+                        stdoutAcc += remainingStdout;
+                        stdoutBuffer += remainingStdout;
+                    }
+                    stderrDecoder.end();
+
                     if (stdoutBuffer.trim()) {
                         await processLine(stdoutBuffer);
                         stdoutBuffer = '';
