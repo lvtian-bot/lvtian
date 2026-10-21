@@ -276,8 +276,10 @@ export class LvtianServer {
             return;
         }
 
-        // 1. 存入用户消息 (包裹磁盘写入异常保护)
+        // 1. 存入用户消息与助理回复占位 (包裹磁盘写入异常保护)
         let userMsg;
+        let asstMsg;
+        const assistantMessageId = `asst-${Date.now()}`;
         try {
             userMsg = this.sessionManager.addMessage(sessionId, {
                 id: userMessageId,
@@ -286,9 +288,16 @@ export class LvtianServer {
                 timestamp: Date.now(),
                 status: 'sent',
             });
+            asstMsg = this.sessionManager.addMessage(sessionId, {
+                id: assistantMessageId,
+                role: 'assistant',
+                content: '',
+                timestamp: Date.now(),
+                status: 'processing',
+            });
         } catch (addErr) {
             const errStr = addErr instanceof Error ? addErr.message : String(addErr);
-            console.error(`[Server] 保存用户消息失败:`, addErr);
+            console.error(`[Server] 保存消息失败:`, addErr);
             this.send(ws, {
                 type: 'message_ack',
                 messageId: userMessageId,
@@ -308,17 +317,7 @@ export class LvtianServer {
             content,
         });
 
-        // 3. 创建助理回复消息占位
-        const assistantMessageId = `asst-${Date.now()}`;
-        const asstMsg = this.sessionManager.addMessage(sessionId, {
-            id: assistantMessageId,
-            role: 'assistant',
-            content: '',
-            timestamp: Date.now(),
-            status: 'processing',
-        });
-
-        // 广播助理消息占位
+        // 3. 广播助理消息占位
         this.broadcastSession(sessionId, {
             type: 'event_chunk',
             seq: asstMsg.seq,

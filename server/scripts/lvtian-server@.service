@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=%I
 WorkingDirectory=/home/%I/code/lvtian/server
+ExecStartPre=/usr/bin/env npm run build
 ExecStart=/usr/bin/node /home/%I/code/lvtian/server/dist/index.js
 Restart=always
 RestartSec=5

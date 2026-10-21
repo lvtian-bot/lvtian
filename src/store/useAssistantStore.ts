@@ -174,7 +174,8 @@ export const useAssistantStore = create<AssistantState>()(
             partialize: (state) => ({
                 serverUrl: state.serverUrl,
                 // serverToken 不在此序列化，走 SecureStore
-                messages: state.messages,
+                // 仅持久化非 processing 状态的已确认消息，避免流式打字期间每个 chunk 触发全量 AsyncStorage 序列化导致 UI 卡顿
+                messages: state.messages.filter((m) => m.status !== 'processing'),
                 currentSeq: state.currentSeq,
             }),
             onRehydrateStorage: () => (state) => {

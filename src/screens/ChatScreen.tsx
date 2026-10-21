@@ -75,7 +75,10 @@ export const ChatScreen = () => {
 
     const handleApproval = (approved: boolean) => {
         if (!pendingApproval) return;
-        AssistantClient.getInstance().respondApproval(pendingApproval.approvalId, approved);
+        const sent = AssistantClient.getInstance().respondApproval(pendingApproval.approvalId, approved);
+        if (!sent) {
+            Alert.alert(t('common.notice', '提示'), t('assistant.approvalFailedOffline', '当前网络未就绪，审批指令未送达'));
+        }
     };
 
     const handlePasteQuickConnect = async () => {

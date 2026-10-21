@@ -336,6 +336,7 @@
     "serverError": "Server responded with an error",
     "connectionTimeout": "Connection timed out. Please check if the service is running",
     "connectionFailed": "Network connection failed",
-    "sendInterrupted": "Send interrupted, please retry"
+    "sendInterrupted": "Send interrupted, please retry",
+    "approvalFailedOffline": "Network not ready, approval request could not be delivered"
   }
 }

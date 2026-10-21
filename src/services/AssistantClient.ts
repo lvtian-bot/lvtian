@@ -52,7 +52,9 @@ export class AssistantClient {
         token: string
     ): Promise<{ success: boolean; message: string; version?: string }> {
         const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
-        if (!cleanUrl) {
+        // 自动将 ws/wss 协议头转换为 fetch 支持的 http/https 协议头
+        const httpUrl = cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+        if (!httpUrl) {
             return { success: false, message: i18n.t('assistant.urlRequired', '服务地址不能为空') };
         }
         if (!token || !token.trim()) {
@@ -64,7 +66,7 @@ export class AssistantClient {
             const timeoutId = setTimeout(() => controller.abort(), 6000);
 
             // 1. 测试健康检查
-            const healthRes = await fetch(`${cleanUrl}/health`, {
+            const healthRes = await fetch(`${httpUrl}/health`, {
                 signal: controller.signal,
             });
             clearTimeout(timeoutId);
@@ -78,7 +80,7 @@ export class AssistantClient {
             // 2. 测试 Token 鉴权（服务端必备安全校验）
             const authController = new AbortController();
             const authTimeout = setTimeout(() => authController.abort(), 6000);
-            const infoRes = await fetch(`${cleanUrl}/api/info`, {
+            const infoRes = await fetch(`${httpUrl}/api/info`, {
                 headers: {
                     Authorization: `Bearer ${token.trim()}`,
                 },
@@ -285,15 +287,19 @@ export class AssistantClient {
     /**
      * 响应人工审批
      */
-    public respondApproval(approvalId: string, approved: boolean, reason?: string): void {
+    public respondApproval(approvalId: string, approved: boolean, reason?: string): boolean {
         const store = useAssistantStore.getState();
-        this.sendRaw({
+        const sent = this.sendRaw({
             type: 'approval_response',
             approvalId,
             approved,
             reason,
         });
-        store.setPendingApproval(null);
+        if (sent) {
+            store.setPendingApproval(null);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -436,11 +442,14 @@ export class AssistantClient {
                 store.setCurrentSeq(msg.seq);
                 store.setTaskState(msg.state);
                 if (msg.state === 'completed' || msg.state === 'stopped' || msg.state === 'error') {
-                    // 更新最后一条处理中消息的状态
-                    const lastMsg = store.messages[store.messages.length - 1];
-                    if (lastMsg && lastMsg.role === 'assistant') {
+                    // 精准定位会话中最新一条处于 processing 的助理消息，避免被并发或被拦截的用户气泡干扰
+                    const messages = store.messages;
+                    const asstMsg = [...messages].reverse().find(
+                        (m) => m.role === 'assistant' && m.status === 'processing'
+                    );
+                    if (asstMsg) {
                         store.addOrUpdateMessage({
-                            ...lastMsg,
+                            ...asstMsg,
                             status: msg.state === 'completed' ? 'done' : msg.state === 'error' ? 'error' : 'done',
                             errorMessage: msg.error,
                         });
