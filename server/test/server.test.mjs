@@ -154,9 +154,11 @@ test('MemoryManager preserves existing Git-cloned workspace files and normalizes
     assert.equal(ctx.memory, '# 历史沉淀长期记忆\n偏好自然语言');
     assert.equal(ctx.user, '# 历史主人档案\n称呼：先生');
 
-    // 验证权限已安全收紧为 0600
-    const stat = fs.statSync(soulPath);
-    assert.equal((stat.mode & 0o777), 0o600);
+    // 验证权限已安全收紧为 0600（Windows 不支持 POSIX 三段权限位，做跨平台兼容判断）
+    if (process.platform !== 'win32') {
+        const stat = fs.statSync(soulPath);
+        assert.equal((stat.mode & 0o777), 0o600);
+    }
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
