@@ -171,13 +171,24 @@ export const useAssistantStore = create<AssistantState>()(
         {
             name: 'lvtian-assistant-storage',
             storage: createJSONStorage(() => AsyncStorage),
-            partialize: (state) => ({
-                serverUrl: state.serverUrl,
-                // serverToken 不在此序列化，走 SecureStore
-                // 仅持久化非 processing 状态的已确认消息，避免流式打字期间每个 chunk 触发全量 AsyncStorage 序列化导致 UI 卡顿
-                messages: state.messages.filter((m) => m.status !== 'processing'),
-                currentSeq: state.currentSeq,
-            }),
+            partialize: (state) => {
+                const persistedMessages = state.messages.filter((m) => m.status !== 'processing');
+                // 持久化的游标必须与持久化的消息快照严格绑定：
+                // 若直接持久化已被流式 chunk 推高的 state.currentSeq，而进行中的消息被排除，
+                // 应用冷启动重连时向服务端发送 sync(lastSeq = currentSeq)，服务端会判定客户端已拥有该消息并跳过返回，
+                // 导致正在流式输出的消息永久丢失；因此持久化的 currentSeq 必须锚定已持久化消息的最大 seq（无消息时为 0）。
+                const durableSeq = persistedMessages.reduce(
+                    (max, m) => Math.max(max, m.seq ?? 0),
+                    0
+                );
+                return {
+                    serverUrl: state.serverUrl,
+                    // serverToken 不在此序列化，走 SecureStore
+                    // 仅持久化非 processing 状态的已确认消息，避免流式打字期间每个 chunk 触发全量 AsyncStorage 序列化导致 UI 卡顿
+                    messages: persistedMessages,
+                    currentSeq: durableSeq,
+                };
+            },
             onRehydrateStorage: () => (state) => {
                 if (state) {
                     state.setHasHydrated(true);

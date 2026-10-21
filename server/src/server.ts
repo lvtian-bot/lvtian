@@ -119,10 +119,19 @@ export class LvtianServer {
     }
 
     private setupWebSocket(): void {
+        this.wss.on('error', (err: Error) => {
+            console.warn(`[Server] WebSocketServer 错误: ${err.message}`);
+        });
+
         this.wss.on('connection', (ws: AuthenticatedSocket) => {
             ws.isAlive = true;
             ws.isAuthenticated = false;
             ws.sessionId = 'main';
+
+            // 监听每个连接的 error 事件，防止非法帧或超限 payload 触发未捕获异常导致服务崩溃
+            ws.on('error', (err: Error) => {
+                console.warn(`[Server] WebSocket 客户端连接错误: ${err.message}`);
+            });
 
             ws.on('pong', () => {
                 ws.isAlive = true;
@@ -385,6 +394,31 @@ export class LvtianServer {
                     error,
                 });
             },
+            onFinalText: (fullText: string) => {
+                const session = this.sessionManager.getOrCreateSession(sessionId);
+                const currentMsg = session.messages.find((m) => m.id === assistantMessageId);
+                const currentContent = currentMsg ? currentMsg.content : '';
+                if (fullText && fullText !== currentContent) {
+                    const updated = this.sessionManager.updateMessage(
+                        sessionId,
+                        assistantMessageId,
+                        (m) => {
+                            m.content = fullText;
+                        },
+                        true,
+                        true
+                    );
+                    if (updated) {
+                        this.broadcastSession(sessionId, {
+                            type: 'event_chunk',
+                            seq: updated.seq,
+                            sessionId,
+                            messageId: assistantMessageId,
+                            content: fullText,
+                        });
+                    }
+                }
+            },
         }).catch((err: unknown) => {
             const errorMsg = err instanceof Error ? err.message : String(err);
             console.error(`[Server] 执行任务发生未捕获异常:`, err);
@@ -405,7 +439,15 @@ export class LvtianServer {
 
     private send(ws: WebSocket, msg: ServerMessage): void {
         if (ws.readyState === WS.OPEN) {
-            ws.send(JSON.stringify(msg));
+            try {
+                ws.send(JSON.stringify(msg), (err) => {
+                    if (err) {
+                        console.warn(`[Server] 发送客户端消息失败: ${err.message}`);
+                    }
+                });
+            } catch (err) {
+                console.warn(`[Server] 调用 send 抛出异常: ${err}`);
+            }
         }
     }
 
@@ -414,7 +456,15 @@ export class LvtianServer {
         this.wss.clients.forEach((client: WebSocket) => {
             const ws = client as AuthenticatedSocket;
             if (ws.isAuthenticated && ws.sessionId === sessionId && ws.readyState === WS.OPEN) {
-                ws.send(payload);
+                try {
+                    ws.send(payload, (err) => {
+                        if (err) {
+                            console.warn(`[Server] 广播消息失败: ${err.message}`);
+                        }
+                    });
+                } catch (err) {
+                    console.warn(`[Server] 调用 broadcastSession send 抛出异常: ${err}`);
+                }
             }
         });
     }
