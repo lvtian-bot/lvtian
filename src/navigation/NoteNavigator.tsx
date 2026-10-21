@@ -1,6 +1,7 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { NoteScreen } from '../screens/NoteScreen';
+import { ServerFileScreen } from '../screens/ServerFileScreen';
+import { CloudNoteScreen } from '../screens/CloudNoteScreen';
 import { NoteStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next';
 import { theme } from '../utils/theme';
@@ -21,10 +22,17 @@ export const NoteNavigator = () => {
             }}
         >
             <Stack.Screen
-                name="NoteList"
-                component={NoteScreen}
+                name="ServerFileList"
+                component={ServerFileScreen}
                 options={{
                     title: t('tabs.files'),
+                }}
+            />
+            <Stack.Screen
+                name="CloudFileList"
+                component={CloudNoteScreen}
+                options={{
+                    title: t('browser.cloudFiles', { defaultValue: '云盘文件' }),
                 }}
             />
         </Stack.Navigator>

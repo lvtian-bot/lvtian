@@ -114,7 +114,15 @@
     "selectTargetDir": "Select Target Directory",
     "currentDir": "Current Directory",
     "emptyDir": "No subdirectories found",
-    "imageNotFound": "Image not found"
+    "imageNotFound": "Image not found",
+    "cloudRepo": "Cloud Drive",
+    "cloudFiles": "Cloud Files",
+    "parentDir": "Up",
+    "emptyDirectory": "No files in this directory",
+    "unsupportedPreviewPrompt": "Text preview is not available for this file type. Download and open with system app?",
+    "shareUnavailable": "Sharing is not available on this device",
+    "unconfiguredDesc": "WebDAV cloud storage is not configured. Configure it to view historical notes online.",
+    "goToConfig": "Configure Cloud Drive"
   },
   "timeline": {
     "add": "Add",
@@ -135,6 +143,7 @@
     "uploadFailedTitle": "Upload Failed",
     "uploadFailedMessage": "File saved locally but cloud upload failed. You can sync later.",
     "saveFailed": "Failed to save: ",
+    "savedSuccessfully": "Saved successfully",
     "buildMissing": "Editor build missing. Please run build:editor.",
     "placeholder": "Start writing..."
   },
@@ -305,6 +314,8 @@
     "saveFailed": "Failed to save configuration",
     "urlRequired": "Server URL cannot be empty",
     "tokenRequired": "Access token cannot be empty",
+    "unconfiguredTitle": "Assistant Not Connected",
+    "unconfiguredDesc": "Connect to your Lvtian assistant server to browse and download files on your VPS.",
     "notConnectedTitle": "Assistant Service Not Connected",
     "notConnectedDesc": "Assistant runs on your PC or VPS, offering persistent tasks, long-term memory, and continuous chat.",
     "goToConfig": "Configure Service",

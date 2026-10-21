@@ -1,4 +1,5 @@
 import http from 'node:http';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import type { WebSocketServer } from 'ws';
@@ -6,6 +7,7 @@ import { ServerConfig } from './config.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { DshRunner } from './dshRunner.js';
+import { FileManager } from './fileManager.js';
 import {
     ClientMessage,
     ServerMessage,
@@ -27,6 +29,7 @@ export class LvtianServer {
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;
     private dshRunner: DshRunner;
+    private fileManager: FileManager;
     private httpServer: http.Server;
     private wss: WebSocketServer;
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -35,15 +38,23 @@ export class LvtianServer {
         config: ServerConfig,
         sessionManager: SessionManager,
         memoryManager: MemoryManager,
-        dshRunner: DshRunner
+        dshRunner: DshRunner,
+        fileManager?: FileManager
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
         this.memoryManager = memoryManager;
         this.dshRunner = dshRunner;
+        this.fileManager = fileManager || new FileManager(config.workspace);
 
         this.httpServer = http.createServer((req, res) => {
-            this.handleHttpRequest(req, res);
+            this.handleHttpRequest(req, res).catch((err) => {
+                console.error('[Server] 处理 HTTP 请求未捕获异常:', err);
+                if (!res.headersSent) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: '服务端内部错误' }));
+                }
+            });
         });
 
         this.wss = new WS.Server({
@@ -53,7 +64,46 @@ export class LvtianServer {
         this.setupWebSocket();
     }
 
-    private handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+    private isAuthorized(req: http.IncomingMessage, urlObj: URL): boolean {
+        const authHeader = req.headers.authorization;
+        const token = authHeader?.startsWith('Bearer ')
+            ? authHeader.slice(7)
+            : urlObj.searchParams.get('token');
+        return token === this.config.token;
+    }
+
+    private async readJsonBody<T>(req: http.IncomingMessage, maxBytes = 10 * 1024 * 1024): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+            let totalBytes = 0;
+            const chunks: Buffer[] = [];
+
+            req.on('data', (chunk: Buffer) => {
+                totalBytes += chunk.length;
+                if (totalBytes > maxBytes) {
+                    req.destroy();
+                    reject(new Error(`请求体超出限制（最大允许 ${(maxBytes / 1024 / 1024).toFixed(1)}MB）`));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+
+            req.on('end', () => {
+                try {
+                    const raw = Buffer.concat(chunks).toString('utf8');
+                    const parsed = JSON.parse(raw) as T;
+                    resolve(parsed);
+                } catch (err: unknown) {
+                    reject(new Error(`无效的 JSON 格式: ${(err as Error).message}`));
+                }
+            });
+
+            req.on('error', (err) => {
+                reject(err);
+            });
+        });
+    }
+
+    private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         let urlObj: URL;
         try {
             urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -89,19 +139,17 @@ export class LvtianServer {
             return;
         }
 
-        // 实例连接信息验证（需要 Bearer Token）
-        if (pathname === '/api/info' && req.method === 'GET') {
-            const authHeader = req.headers.authorization;
-            const token = authHeader?.startsWith('Bearer ')
-                ? authHeader.slice(7)
-                : urlObj.searchParams.get('token');
-
-            if (token !== this.config.token) {
+        // 统一鉴权拦截：所有 /api/* 均需要 Bearer Token
+        if (pathname.startsWith('/api/')) {
+            if (!this.isAuthorized(req, urlObj)) {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: '无效的访问令牌（Unauthorized）' }));
                 return;
             }
+        }
 
+        // 实例连接信息验证
+        if (pathname === '/api/info' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
                 JSON.stringify({
@@ -111,6 +159,89 @@ export class LvtianServer {
                     workspace: this.config.workspace,
                 })
             );
+            return;
+        }
+
+        // 获取文件系统与环境信息
+        if (pathname === '/api/files/info' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(this.fileManager.getSystemInfo()));
+            return;
+        }
+
+        // 列出目录内容
+        if (pathname === '/api/files/list' && req.method === 'GET') {
+            const targetPath = urlObj.searchParams.get('path') || undefined;
+            try {
+                const listing = await this.fileManager.listDirectory(targetPath);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(listing));
+            } catch (err: unknown) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: (err as Error).message }));
+            }
+            return;
+        }
+
+        // 获取文件文本内容
+        if (pathname === '/api/files/content' && req.method === 'GET') {
+            const targetPath = urlObj.searchParams.get('path');
+            if (!targetPath) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: '缺少 path 参数' }));
+                return;
+            }
+            try {
+                const result = await this.fileManager.readFileContent(targetPath);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (err: unknown) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: (err as Error).message }));
+            }
+            return;
+        }
+
+        // 保存文件文本内容（轻度编辑）
+        if (pathname === '/api/files/content' && req.method === 'POST') {
+            try {
+                const body = await this.readJsonBody<{ path?: string; content?: string }>(req);
+                if (!body.path || typeof body.content !== 'string') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: '缺少 path 或 content 参数' }));
+                    return;
+                }
+                const result = await this.fileManager.saveFileContent(body.path, body.content);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (err: unknown) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: (err as Error).message }));
+            }
+            return;
+        }
+
+        // 下载文件流
+        if (pathname === '/api/files/download' && req.method === 'GET') {
+            const targetPath = urlObj.searchParams.get('path');
+            if (!targetPath) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: '缺少 path 参数' }));
+                return;
+            }
+            try {
+                const downloadInfo = await this.fileManager.getFileDownloadInfo(targetPath);
+                res.writeHead(200, {
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Length': downloadInfo.size,
+                    'Content-Disposition': `attachment; filename="${encodeURIComponent(downloadInfo.fileName)}"`,
+                });
+                const stream = fs.createReadStream(downloadInfo.resolvedPath);
+                stream.pipe(res);
+            } catch (err: unknown) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: (err as Error).message }));
+            }
             return;
         }
 

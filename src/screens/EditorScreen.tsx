@@ -15,6 +15,8 @@ import { theme } from '../utils/theme';
 import { normalizePath } from '../utils/pathUtils';
 import { syncService } from '../services/SyncService';
 import { flashNoteService } from '../services/FlashNoteService';
+import { serverFileService } from '../services/ServerFileService';
+import { cloudService } from '../services/CloudService';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -29,8 +31,8 @@ export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
-    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent } = route.params; // Get flash params
-    const filePath = normalizePath(rawFilePath);
+    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent, source = 'local', title } = route.params; // Get params
+    const filePath = source === 'server' ? rawFilePath : normalizePath(rawFilePath);
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [isDirty, setIsDirty] = useState(false);
@@ -42,17 +44,24 @@ export const EditorScreen = () => {
     const { markFileAsModified } = useFileMetadataStore();
 
     const isFlashMode = !!flashNoteId;
-    const DRAFT_KEY = isFlashMode ? `editor_draft_flash_${flashNoteId}` : `editor_draft_${filePath}`;
+    const DRAFT_KEY = isFlashMode ? `editor_draft_flash_${flashNoteId}` : `editor_draft_${source}_${filePath}`;
 
     const loadFile = useCallback(async () => {
         try {
-            console.log('[EditorScreen] Loading...', isFlashMode ? `FlashNote: ${flashNoteId}` : `File: ${filePath}`);
+            console.log('[EditorScreen] Loading...', isFlashMode ? `FlashNote: ${flashNoteId}` : `File: ${filePath} (${source})`);
 
             let fileContent = '';
 
             if (isFlashMode) {
                 // Flash Note Mode: Use passed content directly
                 fileContent = paramInitialContent || '';
+            } else if (paramInitialContent !== undefined) {
+                fileContent = paramInitialContent;
+            } else if (source === 'server') {
+                const res = await serverFileService.readFileContent(filePath);
+                fileContent = res.content;
+            } else if (source === 'webdav') {
+                fileContent = await cloudService.getCloudFileContent(filePath);
             } else {
                 // File Mode: Read from FS
                 const exists = await fsService.exists(filePath);
@@ -163,6 +172,14 @@ export const EditorScreen = () => {
                     await flashNoteService.updateNote(flashNoteId, contentToSave);
                 }
                 Alert.alert(t('common.success'), t('timeline.noteUpdated')); // Feedback for user
+            } else if (source === 'server') {
+                // --- Server File Save Logic ---
+                await serverFileService.saveFileContent(filePath, contentToSave);
+                Alert.alert(t('common.success'), t('editor.savedSuccessfully', { defaultValue: '已成功保存至服务端' }));
+            } else if (source === 'webdav') {
+                // --- Pure Online WebDAV Save Logic ---
+                await cloudService.uploadContent(filePath, contentToSave);
+                Alert.alert(t('common.success'), t('editor.savedSuccessfully', { defaultValue: '已成功保存至网盘' }));
             } else {
                 // --- Standard File Save Logic ---
                 // 手动保存：写本地 + 触发云同步
@@ -170,7 +187,6 @@ export const EditorScreen = () => {
                 markFileAsModified(filePath);
 
                 // Upload to cloud if configured (wait for upload to complete before navigating back)
-                // syncService.uploadFile handles cloud configuration check internally
                 const success = await syncService.uploadFile(filePath, { withLock: true });
                 if (!success) {
                     const metadata = useFileMetadataStore.getState().getMetadata(filePath);
@@ -193,7 +209,7 @@ export const EditorScreen = () => {
             console.error('Save failed:', error);
             Alert.alert(t('common.error'), t('editor.saveFailed') + String(error));
         }
-    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, t]);
+    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);
 
     const handleBackPress = useCallback(() => {
         if (isDirty) {
@@ -309,7 +325,7 @@ export const EditorScreen = () => {
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
                     <Text style={styles.title} numberOfLines={2}>
-                        {isFlashMode ? (t('timeline.editTitle') || 'Edit Note') : filePath.split('/').pop()}
+                        {isFlashMode ? (t('timeline.editTitle') || 'Edit Note') : (title || filePath.split('/').pop() || filePath)}
                     </Text>
                 </View>
                 <TouchableOpacity

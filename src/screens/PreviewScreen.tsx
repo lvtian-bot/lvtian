@@ -15,6 +15,7 @@ import { theme } from '../utils/theme';
 import { useCloudSync } from '../hooks/useCloudSync';
 import { StatusBannerContainer } from '../components/StatusBannerContainer';
 import { previewHtml } from '../preview-web/previewHtml';
+import { serverFileService } from '../services/ServerFileService';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -23,7 +24,7 @@ export const PreviewScreen = () => {
     const route = useRoute<PreviewScreenRouteProp>();
     const navigation = useNavigation<NavigationProp>();
     const { t } = useTranslation();
-    const { filePath } = route.params;
+    const { filePath, source = 'local', title } = route.params;
     const { markdownTheme } = useSettingsStore();
     const fileMetadata = useFileMetadataStore(state => state.metadata[filePath]);
     const insets = useSafeAreaInsets();
@@ -33,8 +34,9 @@ export const PreviewScreen = () => {
     const [isWebViewReady, setIsWebViewReady] = useState(false);
     const webViewRef = useRef<WebView>(null);
 
-    // Use the cloud sync hook
-    const { syncStatus, conflictType, isSyncing, checkSync, performAutoSync, resolveConflict } = useCloudSync(filePath);
+    // 仅在 local 模式使用本地云同步 hook
+    const isLocalMode = source === 'local';
+    const { syncStatus, conflictType, isSyncing, checkSync, performAutoSync, resolveConflict } = useCloudSync(isLocalMode ? filePath : '');
 
     // Helper to determine if we should show the conflict banner
     const shouldShowConflictBanner = syncStatus === 'conflict' && (
@@ -115,7 +117,7 @@ export const PreviewScreen = () => {
 
     const sendContentToWebView = useCallback(async (rawText: string) => {
         if (!webViewRef.current) return;
-        const resolved = await resolveMarkdownImages(rawText);
+        const resolved = isLocalMode ? await resolveMarkdownImages(rawText) : rawText;
         webViewRef.current.postMessage(JSON.stringify({
             type: 'SET_CONTENT',
             payload: {
@@ -123,24 +125,35 @@ export const PreviewScreen = () => {
                 theme: markdownTheme,
             },
         }));
-    }, [resolveMarkdownImages, markdownTheme]);
+    }, [isLocalMode, resolveMarkdownImages, markdownTheme]);
 
     const loadFile = useCallback(async () => {
         try {
-            const exists = await fsService.exists(filePath);
-            if (exists) {
-                const fileContent = await fsService.readFile(filePath);
-                setContent(fileContent);
-                if (isWebViewReady) {
-                    await sendContentToWebView(fileContent);
+            setLoading(true);
+            let fileContent = '';
+
+            if (source === 'server') {
+                const res = await serverFileService.readFileContent(filePath);
+                fileContent = res.content;
+            } else if (source === 'webdav') {
+                fileContent = await cloudService.getCloudFileContent(filePath);
+            } else {
+                const exists = await fsService.exists(filePath);
+                if (exists) {
+                    fileContent = await fsService.readFile(filePath);
                 }
             }
-        } catch (_) {
-            Alert.alert(t('common.error'), t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' }));
+
+            setContent(fileContent);
+            if (isWebViewReady) {
+                await sendContentToWebView(fileContent);
+            }
+        } catch (err: unknown) {
+            Alert.alert(t('common.error'), (err as Error).message || t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' }));
         } finally {
             setLoading(false);
         }
-    }, [filePath, isWebViewReady, sendContentToWebView, t]);
+    }, [filePath, source, isWebViewReady, sendContentToWebView, t]);
 
     // Push content when WebView is ready
     useEffect(() => {
@@ -191,8 +204,10 @@ export const PreviewScreen = () => {
     useFocusEffect(
         useCallback(() => {
             loadFile();
-            performAutoSync();
-        }, [loadFile, performAutoSync])
+            if (isLocalMode) {
+                performAutoSync();
+            }
+        }, [loadFile, isLocalMode, performAutoSync])
     );
 
     const handleLinkClick = async (url: string) => {
@@ -240,15 +255,15 @@ export const PreviewScreen = () => {
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
                     <Text style={styles.title} numberOfLines={2}>
-                        {filePath.split('/').pop()}
+                        {title || filePath.split('/').pop() || filePath}
                     </Text>
-                    {isEffectivelySyncing && <ActivityIndicator size="small" color={theme.colors.primary} />}
-                    {!isEffectivelySyncing && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
-                    {!isEffectivelySyncing && (syncStatus === 'conflict' || syncStatus === 'offline' || syncStatus === 'not-configured' || (syncStatus === 'error' && fileMetadata?.uploadState === 'failed')) && <Text style={styles.syncIcon}>⚠️</Text>}
-                    {!isEffectivelySyncing && syncStatus === 'error' && fileMetadata?.uploadState !== 'failed' && <Text style={styles.syncIcon}>❌</Text>}
+                    {isLocalMode && isEffectivelySyncing && <ActivityIndicator size="small" color={theme.colors.primary} />}
+                    {isLocalMode && !isEffectivelySyncing && syncStatus === 'synced' && <Text style={styles.syncIcon}>✅</Text>}
+                    {isLocalMode && !isEffectivelySyncing && (syncStatus === 'conflict' || syncStatus === 'offline' || syncStatus === 'not-configured' || (syncStatus === 'error' && fileMetadata?.uploadState === 'failed')) && <Text style={styles.syncIcon}>⚠️</Text>}
+                    {isLocalMode && !isEffectivelySyncing && syncStatus === 'error' && fileMetadata?.uploadState !== 'failed' && <Text style={styles.syncIcon}>❌</Text>}
                 </View>
                 <TouchableOpacity
-                    onPress={() => navigation.navigate('Editor', { filePath })}
+                    onPress={() => navigation.navigate('Editor', { filePath, source, initialContent: content, title: title || filePath.split('/').pop() })}
                     style={styles.headerButton}
                 >
                     <Text style={styles.headerButtonText}>{t('common.edit')}</Text>
@@ -261,26 +276,28 @@ export const PreviewScreen = () => {
                 </View>
             ) : (
                 <>
-                    <StatusBannerContainer
-                        syncStatus={syncStatus}
-                        conflictType={conflictType}
-                        checkSync={checkSync}
-                        hasFailedUpload={fileMetadata?.uploadState === 'failed'}
-                        uploadErrorFiles={fileMetadata?.uploadState === 'failed' ? [filePath] : []}
-                        conflictedFiles={shouldShowConflictBanner ? [filePath] : []}
-                        onResolveUseCloud={handleOverwriteLocal}
-                        onResolveUseLocal={handleUploadOverwrite}
-                        onResolveSaveCopy={handleSaveCopy}
-                    />
+                    {isLocalMode && (
+                        <StatusBannerContainer
+                            syncStatus={syncStatus}
+                            conflictType={conflictType}
+                            checkSync={checkSync}
+                            hasFailedUpload={fileMetadata?.uploadState === 'failed'}
+                            uploadErrorFiles={fileMetadata?.uploadState === 'failed' ? [filePath] : []}
+                            conflictedFiles={shouldShowConflictBanner ? [filePath] : []}
+                            onResolveUseCloud={handleOverwriteLocal}
+                            onResolveUseLocal={handleUploadOverwrite}
+                            onResolveSaveCopy={handleSaveCopy}
+                        />
+                    )}
 
                     <WebView
                         ref={webViewRef}
-                        source={{ html: previewHtml, baseUrl: fsService.getRootPath() }}
+                        source={{ html: previewHtml, baseUrl: isLocalMode ? fsService.getRootPath() : undefined }}
                         originWhitelist={['*']}
                         allowFileAccess={true}
                         allowFileAccessFromFileURLs={true}
                         allowUniversalAccessFromFileURLs={true}
-                        allowingReadAccessToURL={fsService.getRootPath()}
+                        allowingReadAccessToURL={isLocalMode ? fsService.getRootPath() : undefined}
                         onMessage={onWebViewMessage}
                         style={styles.webview}
                     />

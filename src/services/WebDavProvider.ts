@@ -85,6 +85,16 @@ export class WebDavProvider implements ICloudProvider {
     }
 
 
+    async uploadContent(key: string, content: string): Promise<void> {
+        const headers: Record<string, string> = {
+            'Content-Type': 'text/markdown; charset=utf-8',
+        };
+        const response = await this.request('PUT', key, headers, content);
+        if (!response.ok && response.status !== 201 && response.status !== 204) {
+            throw new Error(`WebDav 上传内容失败: ${response.status} ${response.statusText}`);
+        }
+    }
+
     async uploadFile(key: string, filePath: string, expectedEtag?: string): Promise<{ etag: string; lastModified: string } | void> {
         const content = await fsService.readFile(filePath);
 
