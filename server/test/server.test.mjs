@@ -135,33 +135,30 @@ test('MemoryManager loads context from workspace directory and preserves existin
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('MemoryManager automatically migrates legacy memory files from home directory when workspace targets are missing', () => {
-    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-home-'));
-    const fakeWorkspace = path.join(fakeHome, 'workspace');
-    fs.mkdirSync(fakeWorkspace, { recursive: true });
+test('MemoryManager preserves existing Git-cloned workspace files and normalizes permissions', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-git-workspace-'));
+    // 模拟用户通过 Git 将已有仓库克隆到工作区，生成普通 0644 权限文件
+    const soulPath = path.join(tmpDir, 'SOUL.md');
+    const memoryPath = path.join(tmpDir, 'MEMORY.md');
+    const userPath = path.join(tmpDir, 'USER.md');
 
-    // 模拟旧版环境：在 fakeHome 下有既有记忆
-    fs.writeFileSync(path.join(fakeHome, 'SOUL.md'), '# 旧版灵魂\n敏捷果断');
-    fs.writeFileSync(path.join(fakeHome, 'MEMORY.md'), '# 旧版长期记忆\n既有项目记录');
-    fs.writeFileSync(path.join(fakeHome, 'USER.md'), '# 旧版用户档案\n习惯语音沟通');
+    fs.writeFileSync(soulPath, '# 历史积累灵魂\n忠诚果断', { mode: 0o644 });
+    fs.writeFileSync(memoryPath, '# 历史沉淀长期记忆\n偏好自然语言', { mode: 0o644 });
+    fs.writeFileSync(userPath, '# 历史主人档案\n称呼：先生', { mode: 0o644 });
 
-    // 将 os.homedir 临时代理指向 fakeHome 进行测试
-    const originalHomedir = os.homedir;
-    os.homedir = () => fakeHome;
+    const mm = new MemoryManager(tmpDir);
+    const ctx = mm.loadContext();
 
-    try {
-        const mm = new MemoryManager(fakeWorkspace);
-        const ctx = mm.loadContext();
+    // 验证完全直接使用 Git 检出的老机器人记忆，未被默认模板覆盖
+    assert.equal(ctx.soul, '# 历史积累灵魂\n忠诚果断');
+    assert.equal(ctx.memory, '# 历史沉淀长期记忆\n偏好自然语言');
+    assert.equal(ctx.user, '# 历史主人档案\n称呼：先生');
 
-        // 验证旧版记忆已平滑迁移到 workspace
-        assert.equal(ctx.soul, '# 旧版灵魂\n敏捷果断');
-        assert.equal(ctx.memory, '# 旧版长期记忆\n既有项目记录');
-        assert.equal(ctx.user, '# 旧版用户档案\n习惯语音沟通');
-        assert.ok(fs.existsSync(path.join(fakeWorkspace, 'SOUL.md')));
-    } finally {
-        os.homedir = originalHomedir;
-        fs.rmSync(fakeHome, { recursive: true, force: true });
-    }
+    // 验证权限已安全收紧为 0600
+    const stat = fs.statSync(soulPath);
+    assert.equal((stat.mode & 0o777), 0o600);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('composite final text preserves earlier committed segments and replaces truncated terminal segment', () => {

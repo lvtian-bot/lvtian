@@ -13,7 +13,7 @@ export class MemoryManager {
     private memoryDir: string;
 
     constructor(baseDir?: string) {
-        this.baseDir = baseDir || os.homedir();
+        this.baseDir = baseDir || path.join(os.homedir(), 'workspace');
         this.memoryDir = path.join(this.baseDir, 'memory');
         this.ensureInit();
     }
@@ -31,9 +31,6 @@ export class MemoryManager {
         } catch {
             // ignore
         }
-
-        const homeDir = os.homedir();
-        const isWorkspaceSubdir = path.resolve(this.baseDir) !== path.resolve(homeDir);
 
         const memoryFiles = [
             {
@@ -71,23 +68,13 @@ export class MemoryManager {
         for (const file of memoryFiles) {
             const targetFile = path.join(this.baseDir, file.name);
             if (!fs.existsSync(targetFile)) {
-                const legacyFile = path.join(homeDir, file.name);
-                // 平滑迁移：若工作区尚无该记忆文件但主目录有旧版本，优先复制继承，防止升级丢失既有记忆
-                if (isWorkspaceSubdir && fs.existsSync(legacyFile)) {
-                    try {
-                        fs.copyFileSync(legacyFile, targetFile);
-                        fs.chmodSync(targetFile, 0o600);
-                        continue;
-                    } catch (err) {
-                        console.warn(`[MemoryManager] 继承主目录原有 ${file.name} 失败: ${err}`);
-                    }
-                }
                 fs.writeFileSync(targetFile, file.defaultContent, { encoding: 'utf8', mode: 0o600 });
-                try {
-                    fs.chmodSync(targetFile, 0o600);
-                } catch {
-                    // ignore
-                }
+            }
+            // 无论是 Git 检出的既有仓库文件还是新初始化的模板，尽力收紧为仅本用户读写
+            try {
+                fs.chmodSync(targetFile, 0o600);
+            } catch {
+                // ignore
             }
         }
     }
