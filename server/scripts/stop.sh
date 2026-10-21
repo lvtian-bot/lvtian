@@ -17,8 +17,15 @@ is_server_process() {
     else
         cmd=$(ps -p "${pid}" -o args= 2>/dev/null || true)
     fi
-    if echo "${cmd}" | grep -q "dist/index.js"; then
+    # 严格匹配当前服务端的绝对入口文件路径，防止仅凭通用的 "dist/index.js" 误伤其他 Node 进程
+    if echo "${cmd}" | grep -F -q "${SERVER_DIR}/dist/index.js"; then
         return 0
+    fi
+    # 兼容在 SERVER_DIR 目录下相对路径启动的同实例进程
+    if [ -d "/proc/${pid}" ] && [ "$(readlink -f "/proc/${pid}/cwd" 2>/dev/null)" = "${SERVER_DIR}" ]; then
+        if echo "${cmd}" | grep -E -q "(^|[[:space:]])(\./)?dist/index\.js([[:space:]]|$)"; then
+            return 0
+        fi
     fi
     return 1
 }

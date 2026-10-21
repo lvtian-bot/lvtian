@@ -87,3 +87,12 @@ test('LvtianServer handles WebSocket connection error without crash', async () =
     await server.stop();
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('scripts match server absolute entrypoint and reject unrelated dist/index.js', () => {
+    const serverDir = '/home/claw/code/lvtian/server';
+    const isServerCmd = (cmd) => cmd.includes(`${serverDir}/dist/index.js`);
+
+    assert.equal(isServerCmd(`node ${serverDir}/dist/index.js`), true);
+    assert.equal(isServerCmd('node /home/other/project/dist/index.js'), false);
+    assert.equal(isServerCmd('node /var/app/dist/index.js'), false);
+});
