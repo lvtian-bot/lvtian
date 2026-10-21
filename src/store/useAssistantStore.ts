@@ -55,16 +55,34 @@ export const useAssistantStore = create<AssistantState>()(
 
             setServerConfig: async (url, token) => {
                 const cleanUrl = url.trim().replace(/\/+$/, '');
+                const cleanToken = token.trim();
+                const currentUrl = get().serverUrl;
+
+                // 持久化 Token 到 SecureStore，如失败则向外抛错以便界面捕获
                 try {
-                    if (token) {
-                        await SecureStore.setItemAsync(ASSISTANT_TOKEN_KEY, token);
+                    if (cleanToken) {
+                        await SecureStore.setItemAsync(ASSISTANT_TOKEN_KEY, cleanToken);
                     } else {
                         await SecureStore.deleteItemAsync(ASSISTANT_TOKEN_KEY);
                     }
                 } catch (err) {
-                    console.warn('[useAssistantStore] 保存 Token 到 SecureStore 失败:', err);
+                    console.error('[useAssistantStore] 写入 SecureStore 失败:', err);
+                    throw new Error('安全凭据存储失败，请检查系统安全存储或权限');
                 }
-                set({ serverUrl: cleanUrl, serverToken: token });
+
+                // 如果切换了不同的服务器地址，重置本地旧服务器的对话与对账序列状态
+                if (currentUrl && currentUrl !== cleanUrl) {
+                    set({
+                        serverUrl: cleanUrl,
+                        serverToken: cleanToken,
+                        messages: [],
+                        currentSeq: 0,
+                        taskState: 'idle',
+                        pendingApproval: null,
+                    });
+                } else {
+                    set({ serverUrl: cleanUrl, serverToken: cleanToken });
+                }
             },
 
             loadSavedCredentials: async () => {

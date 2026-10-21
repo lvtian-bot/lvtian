@@ -16,6 +16,7 @@ export class DshRunner {
     private sessionManager: SessionManager;
     private activeProcesses: Map<string, ChildProcess> = new Map();
     private pendingApprovals: Map<string, (approved: boolean) => void> = new Map();
+    private stoppedSessions: Set<string> = new Set();
 
     constructor(
         workspace: string,
@@ -49,6 +50,7 @@ export class DshRunner {
     public stop(sessionId: string): boolean {
         const proc = this.activeProcesses.get(sessionId);
         if (proc) {
+            this.stoppedSessions.add(sessionId);
             this.sessionManager.setTaskState(sessionId, 'stopped');
             try {
                 proc.kill('SIGINT');
@@ -101,17 +103,26 @@ ${memoryContext.memory}
 ${memoryContext.user}
 `;
 
-        // 尝试调用 npx @deepseek-ai/dsh --profile headless 执行，
-        // 如当前环境缺失 API Key 或外部模型连接，提供优雅的降级与清晰提示
+        const fullPrompt = `[系统人设与主人记忆背景]
+${systemInstructions}
+
+[主人当前提问与指令]
+${userPrompt}`;
+
+        // 调用 npx @deepseek-ai/dsh --profile headless --session-id <sessionId> --json 执行，
+        // 保持多轮会话上下文接续，并通过 JSON 事件流与前置上下文无损传递人设记忆
         const dshArgs = [
             '-y',
             '@deepseek-ai/dsh',
             '--profile',
             'headless',
-            userPrompt,
+            '--session-id',
+            sessionId,
+            '--json',
+            fullPrompt,
         ];
 
-        console.log(`[DshRunner] 在工作区 ${this.workspace} 启动任务...`);
+        console.log(`[DshRunner] 在工作区 ${this.workspace} 启动任务 (会话: ${sessionId})...`);
 
         try {
             const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
@@ -120,7 +131,8 @@ ${memoryContext.user}
                 env: {
                     ...process.env,
                     DSH_WORKSPACE: this.workspace,
-                    LVIAN_SYSTEM_PROMPT: systemInstructions,
+                    DSH_SYSTEM_PROMPT: systemInstructions,
+                    DEEPSEEK_SYSTEM_PROMPT: systemInstructions,
                 },
                 shell: false,
             });
@@ -144,53 +156,86 @@ ${memoryContext.user}
                 const text = chunk.toString('utf8');
                 stdoutAcc += text;
 
-                // 识别审批请求提示（例如 [y/N] 或需要人工确认的特定标记）
-                const approvalMatch = text.match(/\[APPROVAL_REQUIRED:([^:]+):([^\]]+)\]/i);
-                const isInteractiveConfirm = !approvalMatch && (text.includes('确认执行') && text.includes('[y/n]'));
+                // 尝试解析是否为 JSON 事件流（dsh --json 输出）
+                const lines = text.split('\n');
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine) continue;
 
-                if ((approvalMatch || isInteractiveConfirm) && callbacks.onApprovalRequest) {
-                    const approvalId = `appr-${Date.now()}`;
-                    const toolName = approvalMatch ? approvalMatch[1] : '系统指令';
-                    const prompt = approvalMatch ? approvalMatch[2] : '助手请求确认执行高风险操作，是否同意？';
-
-                    callbacks.onApprovalRequest({
-                        approvalId,
-                        toolName,
-                        prompt,
-                        status: 'pending',
-                    });
-                    callbacks.onStatusChange('running_tool');
-
-                    const approved = await new Promise<boolean>((resolve) => {
-                        this.pendingApprovals.set(sessionId, resolve);
-                    });
-                    this.pendingApprovals.delete(sessionId);
-
-                    if (child.stdin && !child.stdin.destroyed) {
-                        child.stdin.write(approved ? 'y\n' : 'n\n');
+                    let isJsonEvent = false;
+                    if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
+                        try {
+                            const evt = JSON.parse(trimmedLine) as Record<string, unknown>;
+                            if (evt.type === 'delta' && typeof evt.text === 'string') {
+                                isJsonEvent = true;
+                                callbacks.onDelta(evt.text);
+                            } else if (evt.type === 'tool_call' || evt.tool) {
+                                isJsonEvent = true;
+                                toolSeq++;
+                                currentToolCall = {
+                                    id: `tool-${sessionId}-${toolSeq}`,
+                                    name: String(evt.name || evt.tool || '系统工具'),
+                                    status: 'running',
+                                    summary: String(evt.summary || evt.description || ''),
+                                };
+                                callbacks.onToolCall({ ...currentToolCall });
+                                callbacks.onStatusChange('running_tool');
+                            }
+                        } catch {
+                            // 非合法 JSON 则走下方普通文本流式匹配
+                        }
                     }
-                    return;
-                }
 
-                // 识别工具调用流式标记
-                if (text.includes('[Tool]') || text.includes('Running tool')) {
-                    if (currentToolCall && currentToolCall.status === 'running') {
-                        finalizeCurrentTool('done');
+                    if (!isJsonEvent) {
+                        // 识别审批请求提示（例如 [y/N] 或需要人工确认的特定标记）
+                        const approvalMatch = trimmedLine.match(/\[APPROVAL_REQUIRED:([^:]+):([^\]]+)\]/i);
+                        const isInteractiveConfirm = !approvalMatch && (trimmedLine.includes('确认执行') && trimmedLine.includes('[y/n]'));
+
+                        if ((approvalMatch || isInteractiveConfirm) && callbacks.onApprovalRequest) {
+                            const approvalId = `appr-${Date.now()}`;
+                            const toolName = approvalMatch ? approvalMatch[1] : '系统指令';
+                            const prompt = approvalMatch ? approvalMatch[2] : '助手请求确认执行高风险操作，是否同意？';
+
+                            callbacks.onApprovalRequest({
+                                approvalId,
+                                toolName,
+                                prompt,
+                                status: 'pending',
+                            });
+                            callbacks.onStatusChange('running_tool');
+
+                            const approved = await new Promise<boolean>((resolve) => {
+                                this.pendingApprovals.set(sessionId, resolve);
+                            });
+                            this.pendingApprovals.delete(sessionId);
+
+                            if (child.stdin && !child.stdin.destroyed) {
+                                child.stdin.write(approved ? 'y\n' : 'n\n');
+                            }
+                            return;
+                        }
+
+                        // 识别常规工具调用流式标记
+                        if (trimmedLine.includes('[Tool]') || trimmedLine.includes('Running tool')) {
+                            if (currentToolCall && currentToolCall.status === 'running') {
+                                finalizeCurrentTool('done');
+                            }
+                            toolSeq++;
+                            currentToolCall = {
+                                id: `tool-${sessionId}-${toolSeq}`,
+                                name: '系统工具',
+                                status: 'running',
+                                summary: trimmedLine.slice(0, 100),
+                            };
+                            callbacks.onToolCall({ ...currentToolCall });
+                            callbacks.onStatusChange('running_tool');
+                        } else {
+                            if (currentToolCall && currentToolCall.status === 'running') {
+                                finalizeCurrentTool('done');
+                            }
+                            callbacks.onDelta(trimmedLine + '\n');
+                        }
                     }
-                    toolSeq++;
-                    currentToolCall = {
-                        id: `tool-${sessionId}-${toolSeq}`,
-                        name: '系统工具',
-                        status: 'running',
-                        summary: text.trim().slice(0, 100),
-                    };
-                    callbacks.onToolCall({ ...currentToolCall });
-                    callbacks.onStatusChange('running_tool');
-                } else {
-                    if (currentToolCall && currentToolCall.status === 'running') {
-                        finalizeCurrentTool('done');
-                    }
-                    callbacks.onDelta(text);
                 }
             });
 
@@ -206,16 +251,27 @@ ${memoryContext.user}
                     this.activeProcesses.delete(sessionId);
                     console.log(`[DshRunner] 进程退出，退出码: ${code}`);
 
+                    // 如果是用户主动停止，保持 stopped 状态，不覆盖为 error
+                    if (this.stoppedSessions.has(sessionId)) {
+                        this.stoppedSessions.delete(sessionId);
+                        this.sessionManager.setTaskState(sessionId, 'stopped');
+                        resolve();
+                        return;
+                    }
+
                     if (code === 0) {
                         callbacks.onStatusChange('done');
                         this.sessionManager.setTaskState(sessionId, 'completed');
-                        // 记录流水日志
-                        this.memoryManager.appendDailyLog(
-                            '对话与任务完成',
-                            `问：${userPrompt}\n答：${stdoutAcc.trim().slice(0, 300)}...`
-                        );
+                        // 记录流水日志（包裹异常保护）
+                        try {
+                            this.memoryManager.appendDailyLog(
+                                '对话与任务完成',
+                                `问：${userPrompt}\n答：${stdoutAcc.trim().slice(0, 300)}...`
+                            );
+                        } catch (logErr) {
+                            console.warn(`[DshRunner] 写入每日流水失败 (非致命): ${logErr}`);
+                        }
                     } else if (code === null || child.killed) {
-                        callbacks.onStatusChange('error', '任务已被用户停止');
                         this.sessionManager.setTaskState(sessionId, 'stopped');
                     } else {
                         // 进程非零退出（例如缺失 API Key 等）
@@ -232,6 +288,12 @@ ${memoryContext.user}
                 child.on('error', (err: Error) => {
                     finalizeCurrentTool('failed');
                     this.activeProcesses.delete(sessionId);
+                    if (this.stoppedSessions.has(sessionId)) {
+                        this.stoppedSessions.delete(sessionId);
+                        this.sessionManager.setTaskState(sessionId, 'stopped');
+                        resolve();
+                        return;
+                    }
                     console.error(`[DshRunner] 子进程发生错误:`, err);
                     callbacks.onStatusChange('error', err.message);
                     this.sessionManager.setTaskState(sessionId, 'error');

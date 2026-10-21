@@ -50,7 +50,15 @@ export class LvtianServer {
     }
 
     private handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-        const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+        let urlObj: URL;
+        try {
+            urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+        } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: '无效请求或主机头格式错误 (Bad Request)' }));
+            return;
+        }
+
         const pathname = urlObj.pathname;
 
         // 设置 CORS
@@ -112,8 +120,13 @@ export class LvtianServer {
             ws.isAuthenticated = false;
             ws.sessionId = 'main';
 
-            const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-            const queryToken = urlObj.searchParams.get('token');
+            let queryToken: string | null = null;
+            try {
+                const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+                queryToken = urlObj.searchParams.get('token');
+            } catch {
+                // 忽略异常主机头
+            }
 
             // 如果 URL 参数中包含正确 token，直接视为认证通过
             if (queryToken && queryToken === this.config.token) {
@@ -260,15 +273,23 @@ export class LvtianServer {
         userMessageId: string,
         content: string
     ): void {
-        // 如果当前已有任务在执行，拒绝并发任务且不破坏当前正在执行的会话状态
+        // 如果当前已有任务在执行，拒绝并发任务且通知客户端该消息发送失败
         if (this.dshRunner.isRunning(sessionId)) {
             const currentSession = this.sessionManager.getOrCreateSession(sessionId);
+            const errMsg = '上一个任务正在执行中，请等待其完成或点击停止';
             this.send(ws, {
                 type: 'task_status',
                 seq: currentSession.currentSeq,
                 sessionId,
                 state: currentSession.taskState,
-                error: '上一个任务正在执行中，请等待其完成或点击停止',
+                error: errMsg,
+            });
+            this.send(ws, {
+                type: 'message_ack',
+                messageId: userMessageId,
+                seq: currentSession.currentSeq,
+                status: 'error',
+                error: errMsg,
             });
             return;
         }

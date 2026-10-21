@@ -40,7 +40,7 @@ export const AssistantConfigScreen = () => {
         try {
             const text = await Clipboard.getStringAsync();
             if (!text.trim()) {
-                Alert.alert(t('settings.notice', '提示'), '剪贴板内容为空');
+                Alert.alert(t('settings.notice', '提示'), t('assistant.clipboardEmpty', '剪贴板内容为空'));
                 return;
             }
             const parsed = AssistantClient.parseConnectionUrl(text);
@@ -51,15 +51,15 @@ export const AssistantConfigScreen = () => {
                 setToken(parsed.token);
             }
             setTestResult(null);
-            Alert.alert(t('settings.success', '成功'), '已从剪贴板自动提取服务配置');
+            Alert.alert(t('settings.success', '成功'), t('assistant.clipboardExtracted', '已从剪贴板自动提取服务配置'));
         } catch (_err) {
-            Alert.alert(t('settings.failure', '失败'), '读取剪贴板失败');
+            Alert.alert(t('settings.failure', '失败'), t('assistant.clipboardFail', '读取剪贴板失败'));
         }
     };
 
     const handleTestConnection = async () => {
         if (!url.trim()) {
-            Alert.alert(t('settings.failure', '失败'), '请先输入服务地址');
+            Alert.alert(t('settings.failure', '失败'), t('assistant.urlRequired', '服务地址不能为空'));
             return;
         }
 
@@ -76,7 +76,7 @@ export const AssistantConfigScreen = () => {
 
     const handleSave = async () => {
         if (!url.trim()) {
-            Alert.alert(t('settings.failure', '失败'), '服务地址不能为空');
+            Alert.alert(t('settings.failure', '失败'), t('assistant.urlRequired', '服务地址不能为空'));
             return;
         }
 
@@ -86,16 +86,16 @@ export const AssistantConfigScreen = () => {
             // 强制重新发起长连接
             AssistantClient.getInstance().connect(true);
             setSaving(false);
-            Alert.alert(t('settings.success', '成功'), '配置已保存并开始连接', [
+            Alert.alert(t('settings.success', '成功'), t('assistant.saveSuccess', '配置已保存并开始连接'), [
                 {
-                    text: '确定',
+                    text: t('common.confirm', '确定'),
                     onPress: () => navigation.goBack(),
                 },
             ]);
         } catch (err: unknown) {
             setSaving(false);
             const msg = err instanceof Error ? err.message : String(err);
-            Alert.alert(t('settings.failure', '失败'), `保存配置失败: ${msg}`);
+            Alert.alert(t('settings.failure', '失败'), `${t('assistant.saveFailed', '保存配置失败')}: ${msg}`);
         }
     };
 
@@ -108,9 +108,9 @@ export const AssistantConfigScreen = () => {
                 <View style={styles.headerCard}>
                     <Icon name="smart-toy" size={32} color={theme.colors.primary} />
                     <View style={styles.headerTextWrap}>
-                        <Text style={styles.headerTitle}>绿天个人助理服务</Text>
+                        <Text style={styles.headerTitle}>{t('assistant.title', '绿天个人助理服务')}</Text>
                         <Text style={styles.headerDesc}>
-                            连接运行在您的电脑或 VPS 上的独立助理服务
+                            {t('assistant.desc', '连接运行在您的电脑或 VPS 上的独立助理服务')}
                         </Text>
                     </View>
                 </View>
@@ -122,15 +122,15 @@ export const AssistantConfigScreen = () => {
                     activeOpacity={0.7}
                 >
                     <Icon name="content-paste" size={20} color={theme.colors.primary} />
-                    <Text style={styles.clipboardBtnText}>一键粘贴完整配置链接</Text>
+                    <Text style={styles.clipboardBtnText}>{t('assistant.pasteConfig', '一键粘贴完整配置链接')}</Text>
                 </TouchableOpacity>
 
                 {/* 表单项 */}
                 <View style={styles.formCard}>
-                    <Text style={styles.label}>服务地址 (URL)</Text>
+                    <Text style={styles.label}>{t('assistant.serverUrl', '服务地址 (URL)')}</Text>
                     <TextInput
                         style={styles.input}
-                        placeholder="例如 http://192.168.1.100:3000 或域名"
+                        placeholder={t('assistant.serverUrlPlaceholder', '例如 http://192.168.1.100:3000 或域名')}
                         placeholderTextColor={theme.colors.textSecondary}
                         value={url}
                         onChangeText={(val) => {
@@ -142,14 +142,14 @@ export const AssistantConfigScreen = () => {
                         keyboardType="url"
                     />
                     <Text style={styles.hint}>
-                        支持局域网 IP、Tailscale 虚拟内网或公网反代域名
+                        {t('assistant.serverUrlHint', '支持局域网 IP、Tailscale 虚拟内网或公网反代域名')}
                     </Text>
 
-                    <Text style={[styles.label, styles.tokenLabel]}>访问密钥 (Token)</Text>
+                    <Text style={[styles.label, styles.tokenLabel]}>{t('assistant.token', '访问令牌 (Token)')}</Text>
                     <View style={styles.tokenInputWrap}>
                         <TextInput
                             style={[styles.input, styles.tokenInput]}
-                            placeholder="服务启动时生成的安全访问令牌"
+                            placeholder={t('assistant.tokenPlaceholder', '服务端生成的 32 位访问令牌')}
                             placeholderTextColor={theme.colors.textSecondary}
                             value={token}
                             onChangeText={(val) => {
@@ -172,7 +172,7 @@ export const AssistantConfigScreen = () => {
                         </TouchableOpacity>
                     </View>
                     <Text style={styles.hint}>
-                        令牌将加密保存在手机安全存储（SecureStore）中
+                        {t('assistant.tokenHint', '令牌将加密保存在手机安全存储（SecureStore）中')}
                     </Text>
                 </View>
 
@@ -210,7 +210,7 @@ export const AssistantConfigScreen = () => {
                         {testing ? (
                             <ActivityIndicator size="small" color={theme.colors.primary} />
                         ) : (
-                            <Text style={styles.testBtnText}>测试连接</Text>
+                            <Text style={styles.testBtnText}>{t('assistant.testConnection', '测试连接')}</Text>
                         )}
                     </TouchableOpacity>
 
@@ -222,7 +222,7 @@ export const AssistantConfigScreen = () => {
                         {saving ? (
                             <ActivityIndicator size="small" color="#fff" />
                         ) : (
-                            <Text style={styles.saveBtnText}>保存并连接</Text>
+                            <Text style={styles.saveBtnText}>{t('assistant.save', '保存并连接')}</Text>
                         )}
                     </TouchableOpacity>
                 </View>

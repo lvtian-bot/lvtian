@@ -332,6 +332,8 @@ export class AssistantClient {
                         params: msg.pendingApproval.params,
                         status: 'pending',
                     });
+                } else {
+                    store.setPendingApproval(null);
                 }
 
                 // 保留本地发送失败或仍在排队发送的未决消息，防止重连后用户重试入口丢失
@@ -365,13 +367,15 @@ export class AssistantClient {
 
             case 'message_ack': {
                 const existing = store.messages.find((m) => m.id === msg.messageId);
+                const isError = msg.status === 'error';
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
                     role: 'user',
                     content: existing ? existing.content : '',
                     timestamp: existing ? existing.timestamp : Date.now(),
-                    status: 'sent',
+                    status: isError ? 'error' : 'sent',
+                    errorMessage: isError ? (msg.error || '发送失败') : undefined,
                 });
                 store.setCurrentSeq(msg.seq);
                 break;

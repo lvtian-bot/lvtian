@@ -15,6 +15,7 @@ export class SessionManager {
     private dataDir: string;
     private sessionsDir: string;
     private sessions: Map<string, SessionData> = new Map();
+    private writeTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
     constructor(dataDir: string) {
         this.dataDir = dataDir;
@@ -28,6 +29,17 @@ export class SessionManager {
             // ignore
         }
         this.loadAll();
+    }
+
+    private getSafeSessionPath(sessionId: string): string {
+        if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+            throw new Error(`非法会话 ID: ${sessionId}`);
+        }
+        const resolved = path.resolve(this.sessionsDir, `${sessionId}.json`);
+        if (!resolved.startsWith(path.resolve(this.sessionsDir))) {
+            throw new Error(`非法路径穿越: ${sessionId}`);
+        }
+        return resolved;
     }
 
     private loadAll(): void {
@@ -52,7 +64,7 @@ export class SessionManager {
                             }
                         }
                         if (modified) {
-                            this.persistSession(session);
+                            this.persistSession(session, true);
                         }
                     }
                     this.sessions.set(session.sessionId, session);
@@ -64,36 +76,64 @@ export class SessionManager {
     }
 
     public getOrCreateSession(sessionId = 'main'): SessionData {
-        let session = this.sessions.get(sessionId);
+        const safeSessionId = /^[a-zA-Z0-9_-]+$/.test(sessionId) ? sessionId : 'main';
+        let session = this.sessions.get(safeSessionId);
         if (!session) {
             session = {
-                sessionId,
+                sessionId: safeSessionId,
                 currentSeq: 0,
                 messages: [],
                 taskState: 'idle',
                 updatedAt: Date.now(),
             };
-            this.sessions.set(sessionId, session);
-            this.persistSession(session);
+            this.sessions.set(safeSessionId, session);
+            this.persistSession(session, true);
         }
         return session;
     }
 
-    public persistSession(session: SessionData): void {
+    public persistSession(session: SessionData, immediate = true): void {
         session.updatedAt = Date.now();
-        const filePath = path.join(this.sessionsDir, `${session.sessionId}.json`);
-        try {
-            fs.writeFileSync(filePath, JSON.stringify(session, null, 2), { encoding: 'utf8', mode: 0o600 });
-            fs.chmodSync(filePath, 0o600);
-        } catch (err) {
-            console.error(`[SessionManager] 保存会话 ${session.sessionId} 失败: ${err}`);
+
+        const writeNow = () => {
+            try {
+                const filePath = this.getSafeSessionPath(session.sessionId);
+                const tmpPath = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+                fs.writeFileSync(tmpPath, JSON.stringify(session, null, 2), { encoding: 'utf8', mode: 0o600 });
+                try {
+                    fs.chmodSync(tmpPath, 0o600);
+                } catch {
+                    // ignore
+                }
+                fs.renameSync(tmpPath, filePath);
+            } catch (err) {
+                console.error(`[SessionManager] 保存会话 ${session.sessionId} 失败: ${err}`);
+            }
+        };
+
+        if (immediate) {
+            const timer = this.writeTimers.get(session.sessionId);
+            if (timer) {
+                clearTimeout(timer);
+                this.writeTimers.delete(session.sessionId);
+            }
+            writeNow();
+        } else {
+            // 防抖落盘，避免高频流式 chunk 频繁同步阻塞事件循环
+            if (!this.writeTimers.has(session.sessionId)) {
+                const timer = setTimeout(() => {
+                    this.writeTimers.delete(session.sessionId);
+                    writeNow();
+                }, 300);
+                this.writeTimers.set(session.sessionId, timer);
+            }
         }
     }
 
     public nextSeq(sessionId: string): number {
         const session = this.getOrCreateSession(sessionId);
         session.currentSeq += 1;
-        this.persistSession(session);
+        this.persistSession(session, true);
         return session.currentSeq;
     }
 
@@ -108,20 +148,26 @@ export class SessionManager {
             seq,
         };
         session.messages.push(fullMsg);
-        this.persistSession(session);
+        this.persistSession(session, true);
         return fullMsg;
     }
 
     public updateMessage(
         sessionId: string,
         messageId: string,
-        updater: (msg: AssistantMessage) => void
+        updater: (msg: AssistantMessage) => void,
+        advanceSeq = true,
+        immediatePersist = true
     ): AssistantMessage | undefined {
         const session = this.getOrCreateSession(sessionId);
         const msg = session.messages.find((m) => m.id === messageId);
         if (msg) {
             updater(msg);
-            this.persistSession(session);
+            if (advanceSeq) {
+                session.currentSeq += 1;
+                msg.seq = session.currentSeq;
+            }
+            this.persistSession(session, immediatePersist);
         }
         return msg;
     }
@@ -131,10 +177,17 @@ export class SessionManager {
         messageId: string,
         delta: string
     ): AssistantMessage | undefined {
-        return this.updateMessage(sessionId, messageId, (msg) => {
-            msg.content += delta;
-            msg.status = 'processing';
-        });
+        // 流式追加时递增 seq 保证断网重连能拉到最新消息，同时使用防抖落盘
+        return this.updateMessage(
+            sessionId,
+            messageId,
+            (msg) => {
+                msg.content += delta;
+                msg.status = 'processing';
+            },
+            true,
+            false
+        );
     }
 
     public setToolCall(
@@ -142,17 +195,23 @@ export class SessionManager {
         messageId: string,
         toolCall: ToolCallState
     ): AssistantMessage | undefined {
-        return this.updateMessage(sessionId, messageId, (msg) => {
-            if (!msg.toolCalls) {
-                msg.toolCalls = [];
-            }
-            const existingIdx = msg.toolCalls.findIndex((t) => t.id === toolCall.id);
-            if (existingIdx >= 0) {
-                msg.toolCalls[existingIdx] = toolCall;
-            } else {
-                msg.toolCalls.push(toolCall);
-            }
-        });
+        return this.updateMessage(
+            sessionId,
+            messageId,
+            (msg) => {
+                if (!msg.toolCalls) {
+                    msg.toolCalls = [];
+                }
+                const existingIdx = msg.toolCalls.findIndex((t) => t.id === toolCall.id);
+                if (existingIdx >= 0) {
+                    msg.toolCalls[existingIdx] = toolCall;
+                } else {
+                    msg.toolCalls.push(toolCall);
+                }
+            },
+            true,
+            true
+        );
     }
 
     public setTaskState(

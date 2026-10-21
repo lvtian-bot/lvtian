@@ -64,6 +64,8 @@ export type ServerMessage =
           type: 'message_ack';
           messageId: string;
           seq: number;
+          status?: 'sent' | 'error';
+          error?: string;
       }
     | {
           type: 'event_chunk';

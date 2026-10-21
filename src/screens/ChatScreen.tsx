@@ -103,9 +103,9 @@ export const ChatScreen = () => {
                     <View style={styles.iconWrapper}>
                         <Icon name="smart-toy" size={44} color={theme.colors.primary} />
                     </View>
-                    <Text style={styles.guideTitle}>尚未连接绿天助理服务</Text>
+                    <Text style={styles.guideTitle}>{t('assistant.notConnectedTitle', '尚未连接绿天助理服务')}</Text>
                     <Text style={styles.guideDesc}>
-                        在电脑或 VPS 启动助理服务后，配置服务地址与访问令牌即可开始对话。
+                        {t('assistant.notConnectedDesc', '助理服务运行在您的电脑或 VPS 上，提供常驻后台任务、记忆系统与长连接对话。')}
                     </Text>
 
                     <TouchableOpacity
@@ -114,7 +114,7 @@ export const ChatScreen = () => {
                         activeOpacity={0.8}
                     >
                         <Icon name="settings" size={20} color="#fff" />
-                        <Text style={styles.primaryBtnText}>配置服务连接</Text>
+                        <Text style={styles.primaryBtnText}>{t('assistant.goToConfig', '前往配置服务')}</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -123,7 +123,7 @@ export const ChatScreen = () => {
                         activeOpacity={0.8}
                     >
                         <Icon name="content-paste" size={18} color={theme.colors.primary} />
-                        <Text style={styles.secondaryBtnText}>一键粘贴完整配置链接</Text>
+                        <Text style={styles.secondaryBtnText}>{t('assistant.pasteConfig', '一键粘贴完整配置链接')}</Text>
                     </TouchableOpacity>
                 </View>
             </View>
@@ -151,10 +151,10 @@ export const ChatScreen = () => {
                 />
                 <Text style={styles.statusText}>
                     {connectionState === 'connected'
-                        ? '绿天助理 · 在线常驻'
+                        ? t('assistant.statusConnected', '已连接服务')
                         : connectionState === 'connecting' || connectionState === 'reconnecting'
-                        ? '正在连接助理服务...'
-                        : connectionError || '连接已断开'}
+                        ? t('assistant.statusConnecting', '正在连接...')
+                        : connectionError || t('assistant.statusDisconnected', '服务未连接')}
                 </Text>
 
                 {connectionState !== 'connected' && (
@@ -162,7 +162,7 @@ export const ChatScreen = () => {
                         style={styles.reconnectBtn}
                         onPress={() => AssistantClient.getInstance().connect()}
                     >
-                        <Text style={styles.reconnectBtnText}>重试</Text>
+                        <Text style={styles.reconnectBtnText}>{t('browser.retry', '重试')}</Text>
                     </TouchableOpacity>
                 )}
             </View>
@@ -298,12 +298,12 @@ export const ChatScreen = () => {
                 <View style={styles.approvalCard}>
                     <View style={styles.approvalHeader}>
                         <Icon name="warning" size={20} color="#f57c00" />
-                        <Text style={styles.approvalTitle}>助理申请人工审批</Text>
+                        <Text style={styles.approvalTitle}>{t('assistant.approvalRequired', '需要人工审批')}</Text>
                     </View>
                     <Text style={styles.approvalPrompt}>{pendingApproval.prompt}</Text>
                     {pendingApproval.toolName && (
                         <Text style={styles.approvalSub}>
-                            请求调用的工具: {pendingApproval.toolName}
+                            {t('assistant.toolRequested', '请求调用的工具')}: {pendingApproval.toolName}
                         </Text>
                     )}
                     <View style={styles.approvalBtnRow}>
@@ -311,13 +311,13 @@ export const ChatScreen = () => {
                             style={[styles.approvalBtn, styles.rejectBtn]}
                             onPress={() => handleApproval(false)}
                         >
-                            <Text style={styles.rejectBtnText}>拒绝</Text>
+                            <Text style={styles.rejectBtnText}>{t('assistant.reject', '拒绝')}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={[styles.approvalBtn, styles.approveBtn]}
                             onPress={() => handleApproval(true)}
                         >
-                            <Text style={styles.approveBtnText}>同意执行</Text>
+                            <Text style={styles.approveBtnText}>{t('assistant.approve', '同意执行')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -326,10 +326,10 @@ export const ChatScreen = () => {
             {/* 停止执行悬浮条 */}
             {(taskState === 'processing' || taskState === 'awaiting_approval') && (
                 <View style={styles.stopBar}>
-                    <Text style={styles.stopBarText}>助理正在执行任务...</Text>
+                    <Text style={styles.stopBarText}>{t('assistant.taskRunning', '助理正在执行任务...')}</Text>
                     <TouchableOpacity style={styles.stopBtn} onPress={handleStop}>
                         <Icon name="stop" size={16} color="#fff" />
-                        <Text style={styles.stopBtnText}>停止</Text>
+                        <Text style={styles.stopBtnText}>{t('assistant.stop', '停止执行')}</Text>
                     </TouchableOpacity>
                 </View>
             )}
@@ -338,7 +338,7 @@ export const ChatScreen = () => {
             <View style={styles.inputArea}>
                 <TextInput
                     style={styles.chatInput}
-                    placeholder="向绿天助理发消息..."
+                    placeholder={t('assistant.inputPlaceholder', '向绿天助理输入想法或指令...')}
                     placeholderTextColor={theme.colors.textSecondary}
                     value={inputContent}
                     onChangeText={setInputContent}
