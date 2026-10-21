@@ -97,11 +97,13 @@ test('LvtianServer handles WebSocket connection error without crash', async () =
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('scripts match server absolute entrypoint and reject unrelated dist/index.js', () => {
+test('scripts match server absolute entrypoint as exact argv and reject sub-path or backup names', () => {
     const serverDir = '/home/claw/code/lvtian/server';
-    const isServerCmd = (cmd) => cmd.includes(`${serverDir}/dist/index.js`);
+    const target = `${serverDir}/dist/index.js`;
+    const isServerArgv = (argvList) => argvList.some((arg) => arg === target);
 
-    assert.equal(isServerCmd(`node ${serverDir}/dist/index.js`), true);
-    assert.equal(isServerCmd('node /home/other/project/dist/index.js'), false);
-    assert.equal(isServerCmd('node /var/app/dist/index.js'), false);
+    assert.equal(isServerArgv(['node', `${serverDir}/dist/index.js`]), true);
+    assert.equal(isServerArgv(['node', `${serverDir}/dist/index.js.backup`]), false);
+    assert.equal(isServerArgv(['node', '/home/other/server/dist/index.js']), false);
+    assert.equal(isServerArgv(['cat', 'other-data']), false);
 });

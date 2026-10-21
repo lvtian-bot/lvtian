@@ -12,23 +12,32 @@ is_server_process() {
     if [ -z "${pid}" ] || ! ps -p "${pid}" > /dev/null 2>&1; then
         return 1
     fi
-    local cmd
+
+    local target="${SERVER_DIR}/dist/index.js"
+
+    # 在 Linux 环境下按 NUL 字符边界严格逐项比对完整 argv 参数，杜绝子串包含误判
     if [ -f "/proc/${pid}/cmdline" ]; then
-        cmd=$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)
+        while IFS= read -r -d '' arg; do
+            if [ "${arg}" = "${target}" ]; then
+                return 0
+            fi
+            # 兼容在 SERVER_DIR 目录下相对路径启动的同实例进程
+            if [ -d "/proc/${pid}" ] && [ "$(readlink -f "/proc/${pid}/cwd" 2>/dev/null)" = "${SERVER_DIR}" ]; then
+                if [ "${arg}" = "dist/index.js" ] || [ "${arg}" = "./dist/index.js" ]; then
+                    return 0
+                fi
+            fi
+        done < "/proc/${pid}/cmdline"
+        return 1
     else
-        cmd=$(ps -p "${pid}" -o args= 2>/dev/null || true)
+        # 非 Linux 系统兜底逐项比对
+        for arg in $(ps -p "${pid}" -o args= 2>/dev/null); do
+            if [ "${arg}" = "${target}" ] || [ "${arg}" = "dist/index.js" ] || [ "${arg}" = "./dist/index.js" ]; then
+                return 0
+            fi
+        done
+        return 1
     fi
-    # 严格匹配当前服务端的绝对入口文件路径，防止仅凭通用的 "dist/index.js" 误伤其他 Node 进程
-    if echo "${cmd}" | grep -F -q "${SERVER_DIR}/dist/index.js"; then
-        return 0
-    fi
-    # 兼容在 SERVER_DIR 目录下相对路径启动的同实例进程
-    if [ -d "/proc/${pid}" ] && [ "$(readlink -f "/proc/${pid}/cwd" 2>/dev/null)" = "${SERVER_DIR}" ]; then
-        if echo "${cmd}" | grep -E -q "(^|[[:space:]])(\./)?dist/index\.js([[:space:]]|$)"; then
-            return 0
-        fi
-    fi
-    return 1
 }
 
 if [ -f "${PID_FILE}" ]; then
