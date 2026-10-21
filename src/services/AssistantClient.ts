@@ -1,0 +1,392 @@
+import { useAssistantStore } from '../store/useAssistantStore';
+import {
+    ClientMessage,
+    ServerMessage,
+    AssistantMessage,
+} from '../types/assistantProtocol';
+
+export class AssistantClient {
+    private static instance: AssistantClient | null = null;
+    private ws: WebSocket | null = null;
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private pingTimer: ReturnType<typeof setInterval> | null = null;
+    private reconnectAttempts = 0;
+    private isExplicitlyClosed = false;
+
+    public static getInstance(): AssistantClient {
+        if (!AssistantClient.instance) {
+            AssistantClient.instance = new AssistantClient();
+        }
+        return AssistantClient.instance;
+    }
+
+    /**
+     * 解析一键配置链接，提取服务地址与 Token
+     */
+    public static parseConnectionUrl(input: string): { url: string; token: string } {
+        const trimmed = input.trim();
+        try {
+            const parsed = new URL(trimmed);
+            const token = parsed.searchParams.get('token') || '';
+            parsed.search = '';
+            parsed.hash = '';
+            let cleanUrl = parsed.toString().replace(/\/+$/, '');
+            return { url: cleanUrl, token };
+        } catch {
+            return { url: trimmed, token: '' };
+        }
+    }
+
+    /**
+     * 联通性测试 (HTTP)
+     */
+    public static async testConnection(
+        serverUrl: string,
+        token: string
+    ): Promise<{ success: boolean; message: string; version?: string }> {
+        const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
+        if (!cleanUrl) {
+            return { success: false, message: '服务地址不能为空' };
+        }
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+            // 1. 测试健康检查
+            const healthRes = await fetch(`${cleanUrl}/health`, {
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            if (!healthRes.ok) {
+                return { success: false, message: `服务响应异常 (${healthRes.status})` };
+            }
+
+            const healthData = (await healthRes.json()) as { version?: string };
+
+            // 2. 测试 Token 鉴权
+            if (token) {
+                const authController = new AbortController();
+                const authTimeout = setTimeout(() => authController.abort(), 6000);
+                const infoRes = await fetch(`${cleanUrl}/api/info`, {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                    signal: authController.signal,
+                });
+                clearTimeout(authTimeout);
+
+                if (infoRes.status === 401) {
+                    return { success: false, message: '连接成功，但访问令牌（Token）不正确' };
+                }
+                if (!infoRes.ok) {
+                    return { success: false, message: `鉴权验证失败 (${infoRes.status})` };
+                }
+            }
+
+            return {
+                success: true,
+                message: '连接成功',
+                version: healthData.version,
+            };
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('aborted') || msg.includes('timeout')) {
+                return { success: false, message: '连接超时，请检查服务是否启动或网络可达性' };
+            }
+            return { success: false, message: `网络连接失败: ${msg}` };
+        }
+    }
+
+    /**
+     * 启动长连接
+     */
+    public async connect(): Promise<void> {
+        this.isExplicitlyClosed = false;
+        const store = useAssistantStore.getState();
+        const { url, token } = await store.loadSavedCredentials();
+
+        if (!url) {
+            store.setConnectionState('disconnected', null);
+            return;
+        }
+
+        // 避免重复建立
+        if (
+            this.ws &&
+            (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)
+        ) {
+            return;
+        }
+
+        this.cleanUpWs();
+        store.setConnectionState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+
+        try {
+            // 将 http/https 转换为 ws/wss
+            const wsUrl = url.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://');
+            const targetUrl = token
+                ? `${wsUrl}?token=${encodeURIComponent(token)}`
+                : wsUrl;
+
+            this.ws = new WebSocket(targetUrl);
+
+            this.ws.onopen = () => {
+                this.reconnectAttempts = 0;
+                store.setConnectionState('connected');
+                this.startPing();
+
+                // 认证 & 增量对账
+                if (token) {
+                    this.sendRaw({ type: 'auth', token });
+                }
+                const lastSeq = store.currentSeq;
+                this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq });
+            };
+
+            this.ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data as string) as ServerMessage;
+                    this.handleServerMessage(data);
+                } catch (err) {
+                    console.warn('[AssistantClient] 解析下发数据失败:', err);
+                }
+            };
+
+            this.ws.onerror = (_event) => {
+                console.warn('[AssistantClient] WebSocket 发生异常');
+            };
+
+            this.ws.onclose = (_event) => {
+                this.stopPing();
+                if (!this.isExplicitlyClosed) {
+                    store.setConnectionState('disconnected', '连接已断开，正在准备重连...');
+                    this.scheduleReconnect();
+                } else {
+                    store.setConnectionState('disconnected', null);
+                }
+            };
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            store.setConnectionState('error', msg);
+            this.scheduleReconnect();
+        }
+    }
+
+    /**
+     * 断开连接
+     */
+    public disconnect(): void {
+        this.isExplicitlyClosed = true;
+        this.stopPing();
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        this.cleanUpWs();
+        useAssistantStore.getState().setConnectionState('disconnected');
+    }
+
+    private cleanUpWs(): void {
+        if (this.ws) {
+            try {
+                this.ws.onopen = null;
+                this.ws.onmessage = null;
+                this.ws.onerror = null;
+                this.ws.onclose = null;
+                this.ws.close();
+            } catch {}
+            this.ws = null;
+        }
+    }
+
+    private scheduleReconnect(): void {
+        if (this.isExplicitlyClosed || this.reconnectTimer) return;
+
+        this.reconnectAttempts += 1;
+        // 指数退避: 1s, 2s, 4s, 最大 10s
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
+
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connect();
+        }, delay);
+    }
+
+    private startPing(): void {
+        this.stopPing();
+        this.pingTimer = setInterval(() => {
+            this.sendRaw({ type: 'ping' });
+        }, 15000);
+    }
+
+    private stopPing(): void {
+        if (this.pingTimer) {
+            clearInterval(this.pingTimer);
+            this.pingTimer = null;
+        }
+    }
+
+    private sendRaw(msg: ClientMessage): boolean {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(msg));
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 发送聊天消息
+     */
+    public sendMessage(content: string): string {
+        const store = useAssistantStore.getState();
+        const messageId = `msg-${Date.now()}`;
+
+        const localMessage: AssistantMessage = {
+            id: messageId,
+            seq: store.currentSeq,
+            role: 'user',
+            content,
+            timestamp: Date.now(),
+            status: 'sending',
+        };
+
+        store.addOrUpdateMessage(localMessage);
+
+        const sent = this.sendRaw({
+            type: 'chat',
+            sessionId: 'main',
+            messageId,
+            content,
+        });
+
+        if (!sent) {
+            store.addOrUpdateMessage({
+                ...localMessage,
+                status: 'error',
+                errorMessage: '网络连接未就绪，消息已暂存，连上后可重试',
+            });
+        }
+
+        return messageId;
+    }
+
+    /**
+     * 响应人工审批
+     */
+    public respondApproval(approvalId: string, approved: boolean, reason?: string): void {
+        const store = useAssistantStore.getState();
+        this.sendRaw({
+            type: 'approval_response',
+            approvalId,
+            approved,
+            reason,
+        });
+        store.setPendingApproval(null);
+    }
+
+    /**
+     * 停止当前执行
+     */
+    public stopExecution(): void {
+        this.sendRaw({
+            type: 'stop',
+            sessionId: 'main',
+        });
+        useAssistantStore.getState().setTaskState('stopped');
+    }
+
+    /**
+     * 处理服务端下发的事件报文
+     */
+    private handleServerMessage(msg: ServerMessage): void {
+        const store = useAssistantStore.getState();
+
+        switch (msg.type) {
+            case 'auth_result': {
+                if (!msg.success) {
+                    store.setConnectionState('error', msg.error || '认证失败，请检查访问令牌');
+                }
+                break;
+            }
+
+            case 'sync_result': {
+                store.setMessages(msg.messages);
+                store.setTaskState(msg.taskState);
+                store.setCurrentSeq(msg.currentSeq);
+                break;
+            }
+
+            case 'message_ack': {
+                store.addOrUpdateMessage({
+                    id: msg.messageId,
+                    seq: msg.seq,
+                    role: 'user',
+                    content: '', // 会由 addOrUpdateMessage 合并
+                    timestamp: Date.now(),
+                    status: 'sent',
+                });
+                store.setCurrentSeq(msg.seq);
+                break;
+            }
+
+            case 'event_chunk': {
+                store.setCurrentSeq(msg.seq);
+
+                // 确保消息卡片已存在
+                store.addOrUpdateMessage({
+                    id: msg.messageId,
+                    seq: msg.seq,
+                    role: 'assistant',
+                    content: '',
+                    timestamp: Date.now(),
+                    status: 'processing',
+                });
+
+                if (msg.delta) {
+                    store.appendDeltaToMessage(msg.messageId, msg.delta);
+                }
+                if (msg.toolCall) {
+                    store.setToolCallForMessage(msg.messageId, msg.toolCall);
+                }
+                break;
+            }
+
+            case 'approval_request': {
+                store.setCurrentSeq(msg.seq);
+                store.setPendingApproval({
+                    approvalId: msg.approvalId,
+                    prompt: msg.prompt,
+                    toolName: msg.toolName,
+                    params: msg.params,
+                    status: 'pending',
+                });
+                store.setTaskState('awaiting_approval');
+                break;
+            }
+
+            case 'task_status': {
+                store.setCurrentSeq(msg.seq);
+                store.setTaskState(msg.state);
+                if (msg.state === 'completed' || msg.state === 'stopped' || msg.state === 'error') {
+                    // 更新最后一条处理中消息的状态
+                    const lastMsg = store.messages[store.messages.length - 1];
+                    if (lastMsg && lastMsg.role === 'assistant') {
+                        store.addOrUpdateMessage({
+                            ...lastMsg,
+                            status: msg.state === 'completed' ? 'done' : msg.state === 'error' ? 'error' : 'done',
+                            errorMessage: msg.error,
+                        });
+                    }
+                }
+                break;
+            }
+
+            case 'pong': {
+                // 心跳回执
+                break;
+            }
+        }
+    }
+}

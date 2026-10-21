@@ -202,6 +202,12 @@
       "none": "无"
     },
     "markdownStyle": "Markdown样式",
+    "assistantTitle": "绿天助理服务",
+    "assistantConfig": "助理服务配置",
+    "assistantConnected": "已连接",
+    "assistantConnecting": "连接中...",
+    "assistantDisconnected": "未连接",
+    "assistantSubtitle": "配置服务地址与访问令牌以连接助理",
     "cloudRepoConfig": "WebDAV 设置",
     "configured": "已配置",
     "flashNoteConfig": "闪念笔记设置",

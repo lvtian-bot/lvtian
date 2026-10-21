@@ -202,6 +202,12 @@
       "none": "None"
     },
     "markdownStyle": "Markdown Style",
+    "assistantTitle": "Lvtian Assistant",
+    "assistantConfig": "Assistant Connection",
+    "assistantConnected": "Connected",
+    "assistantConnecting": "Connecting...",
+    "assistantDisconnected": "Disconnected",
+    "assistantSubtitle": "Configure address and token to connect",
     "cloudRepoConfig": "WebDAV Settings",
     "configured": "Configured",
     "flashNoteConfig": "Flash Note Configuration",

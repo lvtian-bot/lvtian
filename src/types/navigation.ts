@@ -21,5 +21,6 @@ export type RootStackParamList = {
     CacheManager: undefined; // 缓存管理页面
     About: undefined; // 关于页面
     PermissionInfo: undefined; // 权限说明页面
+    AssistantConfig: undefined; // 助理服务配置页面
     Me: undefined; // 设置页面
 };

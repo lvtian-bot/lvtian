@@ -1,0 +1,73 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
+
+export interface ServerConfig {
+    host: string;
+    port: number;
+    token: string;
+    workspace: string;
+    dataDir: string;
+    assistantName: string;
+}
+
+export function resolveUserPath(p: string): string {
+    if (p.startsWith('~/') || p === '~') {
+        return path.join(os.homedir(), p.slice(1));
+    }
+    return path.resolve(p);
+}
+
+export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerConfig {
+    const homeDir = os.homedir();
+    const configDir = path.join(homeDir, '.config', 'lvtian');
+    const configFile = path.join(configDir, 'config.json');
+
+    if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    let existing: Partial<ServerConfig> = {};
+    if (fs.existsSync(configFile)) {
+        try {
+            const raw = fs.readFileSync(configFile, 'utf8');
+            existing = JSON.parse(raw);
+        } catch (err) {
+            console.warn(`[Config] 读取已有配置文件失败，将使用默认配置: ${err}`);
+        }
+    }
+
+    const host = overrides?.host || existing.host || '0.0.0.0';
+    const port = overrides?.port || existing.port || 3000;
+    const token = overrides?.token || existing.token || crypto.randomBytes(16).toString('hex');
+    const workspace = resolveUserPath(overrides?.workspace || existing.workspace || '~/workspace');
+    const dataDir = resolveUserPath(overrides?.dataDir || existing.dataDir || path.join(configDir, 'data'));
+    const assistantName = overrides?.assistantName || existing.assistantName || '绿天';
+
+    const mergedConfig: ServerConfig = {
+        host,
+        port,
+        token,
+        workspace,
+        dataDir,
+        assistantName,
+    };
+
+    // 确保工作区和数据目录存在
+    if (!fs.existsSync(workspace)) {
+        fs.mkdirSync(workspace, { recursive: true });
+    }
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    // 回写配置文件
+    try {
+        fs.writeFileSync(configFile, JSON.stringify(mergedConfig, null, 2), { mode: 0o600 });
+    } catch (err) {
+        console.warn(`[Config] 保存配置文件失败: ${err}`);
+    }
+
+    return mergedConfig;
+}
