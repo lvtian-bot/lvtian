@@ -252,7 +252,9 @@ export const ServerFileScreen = () => {
             const cacheDir = FileSystem.cacheDirectory || '';
             // 文件名可能含 #、? 等 URI 保留字符，直接拼接会被解析为片段或查询符，
             // 用名称哈希构造缓存目标，保留扩展名便于系统分享识别类型
-            const ext = item.name.lastIndexOf('.') !== -1 ? item.name.substring(item.name.lastIndexOf('.')) : '';
+            // 扩展名同样过滤 URI 保留字符（如 data.v?2 的 ?），保留供分享识别类型的后缀
+            const rawExt = item.name.lastIndexOf('.') !== -1 ? item.name.substring(item.name.lastIndexOf('.')) : '';
+            const ext = rawExt.replace(/[^a-zA-Z0-9._-]/g, '');
             const tempLocalUri = `${cacheDir}server_${Date.now()}_${stableHash(item.name)}${ext}`;
 
             await serverFileService.downloadFile(item.path, tempLocalUri);

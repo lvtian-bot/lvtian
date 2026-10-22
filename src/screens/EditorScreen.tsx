@@ -20,6 +20,7 @@ import { serverFileService } from '../services/ServerFileService';
 import { cloudService } from '../services/CloudService';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { useSettingsStore } from '../store/useSettingsStore';
+import * as Clipboard from 'expo-clipboard';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -33,8 +34,9 @@ const parseDraft = (raw: string | null): { content: string; baselineMtime: numbe
     if (raw === null) return null;
     try {
         const parsed = JSON.parse(raw) as DraftPayload;
-        if (typeof parsed.c === 'string') {
-            return { content: parsed.c, baselineMtime: typeof parsed.m === 'number' ? parsed.m : 0 };
+        // 内容与基线字段同时齐备才按新格式解析，避免旧纯文本草稿恰好是 JSON 对象时被误读
+        if (typeof parsed.c === 'string' && typeof parsed.m === 'number') {
+            return { content: parsed.c, baselineMtime: parsed.m > 0 ? parsed.m : 0 };
         }
     } catch {
         // 旧版以纯文本存储内容：可用但缺少基线
@@ -158,11 +160,27 @@ export const EditorScreen = () => {
                 };
 
                 if (source === 'server' && !(draft.baselineMtime > 0)) {
-                    // 旧版 server 草稿缺少版本基线：恢复后保存会绕过乐观锁直接覆盖服务端内容，不提供恢复
+                    // 旧版 server 草稿缺少版本基线：恢复后保存会绕过乐观锁直接覆盖服务端内容，不提供恢复；
+                    // 草稿内容当前界面不可见，先提供「复制到剪贴板」再丢弃，避免内容无处保留即被销毁
+                    const legacyDraftContent = draft.content;
                     Alert.alert(
                         t('common.draftFound'),
-                        t('editor.legacyDraftNoBaseline', { defaultValue: '检测到旧版本保存的草稿。为防止覆盖服务端最新内容，该草稿不支持一键恢复；如需保留其中内容，请先复制后再丢弃。' }),
-                        [{ text: t('common.confirm'), onPress: discardDraft }]
+                        t('common.legacyDraftNoBaseline'),
+                        [
+                            {
+                                text: t('common.copyThenDiscard', { defaultValue: '复制后丢弃' }),
+                                onPress: async () => {
+                                    await Clipboard.setStringAsync(legacyDraftContent);
+                                    await discardDraft();
+                                    Alert.alert(t('common.tip'), t('common.draftCopied', { defaultValue: '草稿内容已复制到剪贴板' }));
+                                },
+                            },
+                            {
+                                text: t('common.discard'),
+                                style: 'destructive',
+                                onPress: discardDraft,
+                            },
+                        ]
                     );
                 } else {
                     Alert.alert(

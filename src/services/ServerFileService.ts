@@ -120,7 +120,7 @@ export class ServerFileService {
             }
             // 传输层立即失败（连接拒绝、服务器离线等）：包装为结构化错误码，供前端按语言映射
             if (!(err instanceof ServerFileError)) {
-                const wrapped: any = new Error(errObj.message || 'Network request failed');
+                const wrapped = new Error(errObj.message || 'Network request failed') as Error & { code?: string };
                 wrapped.code = 'network';
                 throw wrapped;
             }
