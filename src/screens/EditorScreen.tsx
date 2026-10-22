@@ -23,6 +23,25 @@ import { useSettingsStore } from '../store/useSettingsStore';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
+// 草稿载荷：内容与基线 mtime 以单键 JSON 原子存储，避免分开写入中断产生无基线草稿
+interface DraftPayload {
+    c: string;
+    m: number;
+}
+
+const parseDraft = (raw: string | null): { content: string; baselineMtime: number } | null => {
+    if (raw === null) return null;
+    try {
+        const parsed = JSON.parse(raw) as DraftPayload;
+        if (typeof parsed.c === 'string') {
+            return { content: parsed.c, baselineMtime: typeof parsed.m === 'number' ? parsed.m : 0 };
+        }
+    } catch {
+        // 旧版以纯文本存储内容：可用但缺少基线
+    }
+    return { content: raw, baselineMtime: 0 };
+};
+
 // Helper Component for Header Button
 const HeaderBackButton = ({ onPress, text }: { onPress: () => void, text: string }) => (
     <TouchableOpacity onPress={onPress} style={styles.headerButton}>
@@ -65,9 +84,6 @@ export const EditorScreen = () => {
             : source === 'webdav'
                 ? `editor_draft_webdav_${webdavPrefix}_${filePath}`
                 : `editor_draft_${source}_${filePath}`;
-    // 草稿的基线 mtime 与内容分开存储：恢复草稿时还原基线，文件若已被外部修改，
-    // 保存将触发乐观锁冲突而非静默用旧草稿覆盖新内容
-    const DRAFT_MTIME_KEY = `${DRAFT_KEY}_mtime`;
 
     const loadFile = useCallback(async () => {
         try {
@@ -96,74 +112,88 @@ export const EditorScreen = () => {
             }
 
             // Check for draft (Both modes support drafts)
-            let draftContent = await AsyncStorage.getItem(DRAFT_KEY);
-            if (draftContent === null && source === 'local' && !isFlashMode) {
+            let draft = parseDraft(await AsyncStorage.getItem(DRAFT_KEY));
+            if (draft === null && source === 'local' && !isFlashMode) {
                 // 兼容旧版本地草稿键名，若存在则自动平滑迁移
                 const legacyDraftKey = `editor_draft_${filePath}`;
-                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
-                if (legacyDraft !== null) {
-                    draftContent = legacyDraft;
-                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                draft = parseDraft(await AsyncStorage.getItem(legacyDraftKey));
+                if (draft !== null) {
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: draft.content, m: 0 } as DraftPayload));
                     await AsyncStorage.removeItem(legacyDraftKey);
                 }
-            } else if (draftContent === null && source === 'webdav') {
+            } else if (draft === null && source === 'webdav') {
                 // 兼容旧版未带账号前缀的 WebDAV 草稿键名，若存在则自动平滑迁移
                 const legacyDraftKey = `editor_draft_webdav_${filePath}`;
-                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
-                if (legacyDraft !== null) {
-                    draftContent = legacyDraft;
-                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                draft = parseDraft(await AsyncStorage.getItem(legacyDraftKey));
+                if (draft !== null) {
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: draft.content, m: 0 } as DraftPayload));
                     await AsyncStorage.removeItem(legacyDraftKey);
+                }
+            } else if (draft === null && source === 'server' && serverUrl) {
+                // 兼容旧版仅按服务地址哈希的 server 草稿键名（不含令牌维度），自动迁移
+                const legacyServerKey = `editor_draft_server_${stableHash(serverUrl)}_${filePath}`;
+                draft = parseDraft(await AsyncStorage.getItem(legacyServerKey));
+                if (draft !== null) {
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: draft.content, m: 0 } as DraftPayload));
+                    await AsyncStorage.removeItem(legacyServerKey);
                 }
             }
 
-            if (draftContent !== null && draftContent !== fileContent) {
-                Alert.alert(
-                    t('common.draftFound'),
-                    t('common.restoreDraftPrompt'),
-                    [
-                        {
-                            text: t('common.discard'),
-                            style: 'destructive',
-                            onPress: async () => {
-                                await AsyncStorage.removeItem(DRAFT_KEY);
-                                await AsyncStorage.removeItem(DRAFT_MTIME_KEY);
-                                if (source === 'local' && !isFlashMode) {
-                                    await AsyncStorage.removeItem(`editor_draft_${filePath}`);
-                                }
-                                if (source === 'webdav') {
-                                    await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
-                                }
-                                setContent(fileContent);
-                                initialContentRef.current = fileContent;
-                                isDraftLoaded.current = true;
-                                webViewRef.current?.postMessage(JSON.stringify({
-                                    type: 'SET_CONTENT',
-                                    payload: fileContent,
-                                }));
+            if (draft !== null && draft.content !== fileContent) {
+                const discardDraft = async () => {
+                    await AsyncStorage.removeItem(DRAFT_KEY);
+                    if (source === 'local' && !isFlashMode) {
+                        await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                    }
+                    if (source === 'webdav') {
+                        await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
+                    }
+                    setContent(fileContent);
+                    initialContentRef.current = fileContent;
+                    isDraftLoaded.current = true;
+                    webViewRef.current?.postMessage(JSON.stringify({
+                        type: 'SET_CONTENT',
+                        payload: fileContent,
+                    }));
+                };
+
+                if (source === 'server' && !(draft.baselineMtime > 0)) {
+                    // 旧版 server 草稿缺少版本基线：恢复后保存会绕过乐观锁直接覆盖服务端内容，不提供恢复
+                    Alert.alert(
+                        t('common.draftFound'),
+                        t('editor.legacyDraftNoBaseline', { defaultValue: '检测到旧版本保存的草稿。为防止覆盖服务端最新内容，该草稿不支持一键恢复；如需保留其中内容，请先复制后再丢弃。' }),
+                        [{ text: t('common.confirm'), onPress: discardDraft }]
+                    );
+                } else {
+                    Alert.alert(
+                        t('common.draftFound'),
+                        t('common.restoreDraftPrompt'),
+                        [
+                            {
+                                text: t('common.discard'),
+                                style: 'destructive',
+                                onPress: discardDraft,
                             },
-                        },
-                        {
-                            text: t('common.restore'),
-                            onPress: async () => {
-                                // 还原草稿的基线 mtime：草稿之后文件若被外部修改，保存会触发乐观锁冲突
-                                const draftMtimeStr = await AsyncStorage.getItem(DRAFT_MTIME_KEY);
-                                const draftMtime = draftMtimeStr ? Number(draftMtimeStr) : NaN;
-                                if (!isNaN(draftMtime) && draftMtime > 0) {
-                                    currentMtimeRef.current = draftMtime;
-                                }
-                                setContent(draftContent);
-                                initialContentRef.current = fileContent; // Initial is still origin content
-                                setIsDirty(true); // Draft implies dirty
-                                isDraftLoaded.current = true;
-                                webViewRef.current?.postMessage(JSON.stringify({
-                                    type: 'SET_CONTENT',
-                                    payload: draftContent,
-                                }));
+                            {
+                                text: t('common.restore'),
+                                onPress: () => {
+                                    // 还原草稿的基线 mtime：草稿之后文件若被外部修改，保存会触发乐观锁冲突
+                                    if (draft && source === 'server' && draft.baselineMtime > 0) {
+                                        currentMtimeRef.current = draft.baselineMtime;
+                                    }
+                                    setContent(draft ? draft.content : fileContent);
+                                    initialContentRef.current = fileContent; // Initial is still origin content
+                                    setIsDirty(true); // Draft implies dirty
+                                    isDraftLoaded.current = true;
+                                    webViewRef.current?.postMessage(JSON.stringify({
+                                        type: 'SET_CONTENT',
+                                        payload: draft ? draft.content : fileContent,
+                                    }));
+                                },
                             },
-                        },
-                    ]
-                );
+                        ]
+                    );
+                }
             } else {
                 setContent(fileContent);
                 initialContentRef.current = fileContent;
@@ -179,7 +209,7 @@ export const EditorScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [filePath, DRAFT_KEY, DRAFT_MTIME_KEY, t, isFlashMode, flashNoteId, paramInitialContent, source]);
+    }, [filePath, DRAFT_KEY, serverUrl, t, isFlashMode, flashNoteId, paramInitialContent, source]);
 
     useEffect(() => {
         loadFile();
@@ -209,8 +239,8 @@ export const EditorScreen = () => {
             try {
                 // Only save draft if dirty
                 if (isDirty) {
-                    await AsyncStorage.setItem(DRAFT_KEY, content);
-                    await AsyncStorage.setItem(DRAFT_MTIME_KEY, String(currentMtimeRef.current ?? ''));
+                    // 内容与基线 mtime 以单键 JSON 原子写入，避免分开写入中断产生无基线草稿
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: content, m: currentMtimeRef.current ?? 0 } as DraftPayload));
                 }
             } catch (error) {
                 console.error('Failed to save draft:', error);
@@ -219,7 +249,7 @@ export const EditorScreen = () => {
 
         const timeoutId = setTimeout(saveDraft, 500);
         return () => clearTimeout(timeoutId);
-    }, [content, isDirty, DRAFT_KEY, DRAFT_MTIME_KEY]);
+    }, [content, isDirty, DRAFT_KEY]);
 
     const handleAutoSave = (newContent: string) => {
         // Update state, trigger effect to save to cache
@@ -269,7 +299,6 @@ export const EditorScreen = () => {
 
             // Common Post-Save Cleanup
             await AsyncStorage.removeItem(DRAFT_KEY);
-            await AsyncStorage.removeItem(DRAFT_MTIME_KEY);
             if (source === 'local' && !isFlashMode) {
                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
             }
@@ -303,7 +332,7 @@ export const EditorScreen = () => {
             saveInFlightRef.current = false;
             setIsSaving(false);
         }
-    }, [filePath, markFileAsModified, DRAFT_KEY, DRAFT_MTIME_KEY, navigation, isFlashMode, flashNoteId, source, t]);
+    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);
 
     const handleBackPress = useCallback(() => {
         if (isDirty) {
@@ -316,7 +345,6 @@ export const EditorScreen = () => {
                         style: 'destructive',
                         onPress: async () => {
                             await AsyncStorage.removeItem(DRAFT_KEY);
-                            await AsyncStorage.removeItem(DRAFT_MTIME_KEY);
                             if (source === 'local' && !isFlashMode) {
                                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
                             }
@@ -339,7 +367,7 @@ export const EditorScreen = () => {
             return true; // Prevent default behavior
         }
         return false; // Allow default behavior
-    }, [isDirty, content, DRAFT_KEY, DRAFT_MTIME_KEY, navigation, t, handleManualSave, filePath, isFlashMode, source]);
+    }, [isDirty, content, DRAFT_KEY, navigation, t, handleManualSave, filePath, isFlashMode, source]);
 
     // Handle hardware back button
     useEffect(() => {

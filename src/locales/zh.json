@@ -181,6 +181,7 @@
     "notice": "提示",
     "create": "创建",
     "draftFound": "发现未保存的草稿",
+    "legacyDraftNoBaseline": "检测到旧版本保存的草稿。为防止覆盖服务端最新内容，该草稿不支持一键恢复；如需保留其中内容，请先复制后再丢弃。",
     "restoreDraftPrompt": "是否恢复上次未保存的内容？",
     "discard": "丢弃",
     "restore": "恢复",

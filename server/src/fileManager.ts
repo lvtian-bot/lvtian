@@ -42,12 +42,15 @@ export class FileManagerError extends Error {
 export class FileManager {
     private workspaceDir: string;
     private allowedRoot: string;
+    /** 家目录的物理真实路径：与 allowedRoot 同一命名空间，`~` 展开与系统信息广播保持一致 */
+    private homeDirReal: string;
     /** 按目标路径串行化保存操作：乐观锁检查与临时文件替换必须独占执行，防止并发保存互相覆盖 */
     private saveQueues = new Map<string, Promise<unknown>>();
 
     constructor(workspaceDir?: string, allowedRoot?: string) {
         // 根目录自身可能包含符号链接段（如 /home -> /var/home）：
         // 统一规范化为物理真实路径，后续 realpath 边界比较才不会把界内文件误判为逃逸
+        this.homeDirReal = this.canonicalizeRoot(os.homedir());
         this.workspaceDir = this.canonicalizeRoot(workspaceDir ? path.resolve(workspaceDir) : path.join(os.homedir(), 'workspace'));
         this.allowedRoot = this.canonicalizeRoot(allowedRoot ? path.resolve(allowedRoot) : os.homedir());
     }
@@ -65,7 +68,7 @@ export class FileManager {
      */
     public getSystemInfo(): FileSystemInfo {
         return {
-            homeDir: os.homedir(),
+            homeDir: this.homeDirReal,
             workspaceDir: this.workspaceDir,
             allowedRoot: this.allowedRoot,
             separator: path.sep,
@@ -81,11 +84,14 @@ export class FileManager {
         if (!inputPath || inputPath.trim() === '') {
             resolved = this.allowedRoot;
         } else if (inputPath.startsWith('~/') || inputPath === '~') {
-            resolved = path.join(os.homedir(), inputPath.slice(1));
+            resolved = path.join(this.homeDirReal, inputPath.slice(1));
         } else {
             // 保留文件名首尾合法空格，不破坏具体文件名
             resolved = path.resolve(inputPath);
         }
+        // 统一拉入物理命名空间（最近存在祖先物理化 + 剩余段拼接），
+        // 与物理 allowedRoot 前缀比较才不会因输入路径含符号链接段而误判
+        resolved = this.canonicalizePath(resolved);
 
         const isWindows = process.platform === 'win32';
         const normTarget = isWindows ? resolved.toLowerCase() : resolved;
@@ -123,10 +129,11 @@ export class FileManager {
         if (!inputPath || inputPath.trim() === '') {
             resolved = this.allowedRoot;
         } else if (inputPath.startsWith('~/') || inputPath === '~') {
-            resolved = path.join(os.homedir(), inputPath.slice(1));
+            resolved = path.join(this.homeDirReal, inputPath.slice(1));
         } else {
             resolved = path.resolve(inputPath);
         }
+        resolved = this.canonicalizePath(resolved);
 
         const isWindows = process.platform === 'win32';
         const normTarget = isWindows ? resolved.toLowerCase() : resolved;
@@ -330,7 +337,7 @@ export class FileManager {
         // 防止并发保存双双通过检查后，后一次 rename 静默覆盖前一次的修改。
         // 锁键基于最近已存在祖先的物理真实路径规范化，使根内符号链接别名（如 /allowed/link/a.md
         // 与 /allowed/real/a.md 指向同一文件）进入同一队列串行
-        const lockKey = this.canonicalLockKey(resolvedPath);
+        const lockKey = this.canonicalizePath(resolvedPath);
         const previous = this.saveQueues.get(lockKey) ?? Promise.resolve();
         let releaseSaveLock!: () => void;
         const gate = new Promise<void>((resolve) => { releaseSaveLock = resolve; });
@@ -476,10 +483,11 @@ export class FileManager {
     }
 
     /**
-     * 规范化保存锁键：以最近已存在祖先的物理真实路径为锚点拼接剩余路径段，
-     * 使经根内符号链接访问的同一物理文件共享同一把锁
+     * 统一路径命名空间：以最近已存在祖先的物理真实路径为锚点拼接剩余路径段。
+     * 用于路径边界校验（词法输入与物理 allowedRoot 可比）与保存锁键
+     * （经根内符号链接访问的同一物理文件共享同一把锁）
      */
-    private canonicalLockKey(resolvedPath: string): string {
+    private canonicalizePath(resolvedPath: string): string {
         const anchor = this.findExistingAncestor(resolvedPath);
         try {
             const realAnchor = fs.realpathSync(anchor);

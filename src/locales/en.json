@@ -182,6 +182,7 @@
     "delete": "Delete",
     "create": "Create",
     "draftFound": "Draft Found",
+    "legacyDraftNoBaseline": "A legacy draft was found. To avoid overwriting the latest server content, one-tap restore is unavailable; copy the text first if you want to keep it.",
     "restoreDraftPrompt": "Do you want to restore the unsaved content?",
     "discard": "Discard",
     "restore": "Restore",

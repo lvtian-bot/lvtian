@@ -133,7 +133,7 @@ export const PreviewScreen = () => {
                     }
                     cacheInfo = await FileSystem.getInfoAsync(localUri);
                     if (cacheInfo.exists) {
-                        result = result.replace(full, full.replace(src, localUri));
+                        result = result.replace(full, full.replace(rawSrc, localUri));
                     }
                 } else if (source === 'webdav') {
                     // 纯在线网盘模式：下载到沙盒临时目录
@@ -158,7 +158,7 @@ export const PreviewScreen = () => {
                     }
                     cacheInfo = await FileSystem.getInfoAsync(localUri);
                     if (cacheInfo.exists) {
-                        result = result.replace(full, full.replace(src, localUri));
+                        result = result.replace(full, full.replace(rawSrc, localUri));
                     }
                 } else {
                     // 本地模式
