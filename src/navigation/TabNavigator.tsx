@@ -1,59 +1,42 @@
-import React from 'react';
-import { TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Keyboard, KeyboardEvent, Platform } from 'react-native';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
 
 import { ChatScreen } from '../screens/ChatScreen';
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
 import { MomentsScreen } from '../screens/MomentsScreen';
-import { NoteNavigator } from './NoteNavigator';
+import { MeScreen } from '../screens/MeScreen';
 import { MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
 
 const styles = StyleSheet.create({
-    settingsButton: {
-        marginRight: 16,
+    hiddenTabBar: {
+        display: 'none',
     },
 });
-
-const SettingsButton = () => {
-    const navigation = useNavigation<any>();
-    return (
-        <TouchableOpacity
-            onPress={() => navigation.navigate('Me')}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            style={styles.settingsButton}
-            activeOpacity={0.7}
-        >
-            <Icon name="settings" size={22} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
-    );
-};
-
-const renderSettingsButton = () => <SettingsButton />;
 
 const ChatStack = createNativeStackNavigator();
 const FlashStack = createNativeStackNavigator();
 const TodoStack = createNativeStackNavigator();
 const MomentsStack = createNativeStackNavigator();
+const MeStack = createNativeStackNavigator();
+
+const baseStackScreenOptions = {
+    headerTitleAlign: 'center' as const,
+    headerShadowVisible: false,
+    headerStyle: { backgroundColor: theme.colors.background },
+};
 
 const ChatStackScreen = () => {
     const { t } = useTranslation();
     return (
-        <ChatStack.Navigator
-            screenOptions={{
-                headerTitleAlign: 'center',
-                headerShadowVisible: false,
-                headerStyle: { backgroundColor: theme.colors.background },
-                headerRight: renderSettingsButton,
-            }}
-        >
+        <ChatStack.Navigator screenOptions={baseStackScreenOptions}>
             <ChatStack.Screen
                 name="ChatScreen"
                 component={ChatScreen}
@@ -66,13 +49,7 @@ const ChatStackScreen = () => {
 const FlashStackScreen = () => {
     const { t } = useTranslation();
     return (
-        <FlashStack.Navigator
-            screenOptions={{
-                headerTitleAlign: 'center',
-                headerShadowVisible: false,
-                headerStyle: { backgroundColor: theme.colors.background },
-            }}
-        >
+        <FlashStack.Navigator screenOptions={baseStackScreenOptions}>
             <FlashStack.Screen
                 name="FlashScreen"
                 component={FlashScreen}
@@ -85,14 +62,7 @@ const FlashStackScreen = () => {
 const TodoStackScreen = () => {
     const { t } = useTranslation();
     return (
-        <TodoStack.Navigator
-            screenOptions={{
-                headerTitleAlign: 'center',
-                headerShadowVisible: false,
-                headerStyle: { backgroundColor: theme.colors.background },
-                headerRight: renderSettingsButton,
-            }}
-        >
+        <TodoStack.Navigator screenOptions={baseStackScreenOptions}>
             <TodoStack.Screen
                 name="TodoScreen"
                 component={TodoScreen}
@@ -105,20 +75,26 @@ const TodoStackScreen = () => {
 const MomentsStackScreen = () => {
     const { t } = useTranslation();
     return (
-        <MomentsStack.Navigator
-            screenOptions={{
-                headerTitleAlign: 'center',
-                headerShadowVisible: false,
-                headerStyle: { backgroundColor: theme.colors.background },
-                headerRight: renderSettingsButton,
-            }}
-        >
+        <MomentsStack.Navigator screenOptions={baseStackScreenOptions}>
             <MomentsStack.Screen
                 name="MomentsScreen"
                 component={MomentsScreen}
                 options={{ title: t('tabs.moments') }}
             />
         </MomentsStack.Navigator>
+    );
+};
+
+const MeStackScreen = () => {
+    const { t } = useTranslation();
+    return (
+        <MeStack.Navigator screenOptions={baseStackScreenOptions}>
+            <MeStack.Screen
+                name="MeScreen"
+                component={MeScreen}
+                options={{ title: t('tabs.me') }}
+            />
+        </MeStack.Navigator>
     );
 };
 
@@ -140,13 +116,48 @@ const MomentsIcon = ({ color }: { color: string }) => (
     <Icon name="dynamic-feed" color={color} size={24} />
 );
 
-const FilesIcon = ({ color }: { color: string }) => (
-    <Icon name="folder" color={color} size={24} />
+const MeIcon = ({ color }: { color: string }) => (
+    <Icon name="person" color={color} size={24} />
 );
 
 export const TabNavigator = () => {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
+
+    // 聊天页键盘弹起时隐藏底部 Tab 栏，让输入框紧贴键盘
+    const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+    useEffect(() => {
+        const onKeyboardShow = (_e: KeyboardEvent) => {
+            setKeyboardVisible(true);
+        };
+        const onKeyboardHide = () => {
+            setKeyboardVisible(false);
+        };
+
+        const showSubscription = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            onKeyboardShow
+        );
+        const hideSubscription = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            onKeyboardHide
+        );
+
+        return () => {
+            showSubscription.remove();
+            hideSubscription.remove();
+        };
+    }, []);
+
+    const defaultTabBarStyle = {
+        backgroundColor: theme.colors.surface,
+        borderTopWidth: 1,
+        borderTopColor: theme.colors.border,
+        elevation: 8,
+        paddingBottom: insets.bottom,
+        paddingTop: 0,
+    };
 
     return (
         <Tab.Navigator
@@ -154,20 +165,16 @@ export const TabNavigator = () => {
             initialRouteName="Flash"
             backBehavior="initialRoute"
             initialLayout={{ width: 0 }}
-            screenOptions={{
+            screenOptions={({ route }) => ({
                 swipeEnabled: false,
                 animationEnabled: false,
                 tabBarShowIcon: true,
                 tabBarShowLabel: true,
                 tabBarIndicatorStyle: { height: 0 },
-                tabBarStyle: {
-                    backgroundColor: theme.colors.surface,
-                    borderTopWidth: 1,
-                    borderTopColor: '#e0e0e0',
-                    elevation: 8,
-                    paddingBottom: insets.bottom,
-                    paddingTop: 0,
-                },
+                tabBarStyle:
+                    route.name === 'Chat' && keyboardVisible
+                        ? styles.hiddenTabBar
+                        : defaultTabBarStyle,
                 tabBarActiveTintColor: theme.colors.primary,
                 tabBarInactiveTintColor: 'gray',
                 tabBarItemStyle: {
@@ -178,7 +185,7 @@ export const TabNavigator = () => {
                     textTransform: 'none',
                     margin: 0,
                 },
-            }}
+            })}
         >
             <Tab.Screen
                 name="Chat"
@@ -213,11 +220,11 @@ export const TabNavigator = () => {
                 }}
             />
             <Tab.Screen
-                name="Files"
-                component={NoteNavigator}
+                name="Me"
+                component={MeStackScreen}
                 options={{
-                    title: t('tabs.files'),
-                    tabBarIcon: FilesIcon,
+                    title: t('tabs.me'),
+                    tabBarIcon: MeIcon,
                 }}
             />
         </Tab.Navigator>

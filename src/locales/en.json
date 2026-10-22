@@ -7,7 +7,7 @@
     "files": "Files",
     "browser": "Notes",
     "settings": "Settings",
-    "me": "Settings"
+    "me": "Me"
   },
   "chat": {
     "placeholderTitle": "Lvtian AI Assistant",
@@ -153,7 +153,8 @@
     "saveError": "Failed to save flash note",
     "emptyNoteError": "Note content cannot be empty!",
     "deleteError": "Failed to delete flash note",
-    "noteUpdated": "Note updated"
+    "noteUpdated": "Note updated",
+    "yesterday": "Yesterday"
   },
   "editor": {
     "loadFileFailed": "Failed to load file",

@@ -7,7 +7,7 @@
     "files": "系统文件",
     "browser": "笔记",
     "settings": "设置",
-    "me": "设置"
+    "me": "我"
   },
   "chat": {
     "placeholderTitle": "绿天个人助理",
@@ -153,7 +153,8 @@
     "saveError": "保存闪念笔记失败",
     "emptyNoteError": "笔记内容不能为空！",
     "deleteError": "删除闪念笔记失败",
-    "noteUpdated": "笔记已更新"
+    "noteUpdated": "笔记已更新",
+    "yesterday": "昨天"
   },
   "editor": {
     "loadFileFailed": "加载文件失败",

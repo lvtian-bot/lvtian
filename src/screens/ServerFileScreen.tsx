@@ -19,12 +19,12 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { theme } from '../utils/theme';
 import { stableHash } from '../utils/identityHash';
-import { RootStackParamList, NoteStackParamList } from '../types/navigation';
+import { RootStackParamList } from '../types/navigation';
 import { serverFileService } from '../services/ServerFileService';
 import { ServerFileItem, FileSystemInfo } from '../types/assistantProtocol';
 import { useAssistantStore } from '../store/useAssistantStore';
 
-type NavigationProp = NativeStackNavigationProp<RootStackParamList & NoteStackParamList>;
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const TEXT_EXTENSIONS = new Set([
     '.md',

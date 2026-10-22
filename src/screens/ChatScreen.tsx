@@ -139,41 +139,39 @@ export const ChatScreen = () => {
     }
 
     // 2. 正常聊天界面
+    // 键盘避让：iOS 用 padding 模式；Android 依赖 windowSoftInputMode=resize
+    // （app.config.js softwareKeyboardLayoutMode）+ 键盘弹起时 TabNavigator 自动隐藏底部 Tab 栏
     return (
         <KeyboardAvoidingView
             style={styles.chatContainer}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
         >
-            {/* 顶栏连接状态指示条 */}
-            <View style={styles.statusBar}>
-                <View
-                    style={[
-                        styles.statusDot,
-                        connectionState === 'connected'
-                            ? styles.dotConnected
-                            : connectionState === 'connecting' || connectionState === 'reconnecting'
-                            ? styles.dotConnecting
-                            : styles.dotDisconnected,
-                    ]}
-                />
-                <Text style={styles.statusText}>
-                    {connectionState === 'connected'
-                        ? t('assistant.statusConnected', '已连接服务')
-                        : connectionState === 'connecting' || connectionState === 'reconnecting'
-                        ? t('assistant.statusConnecting', '正在连接...')
-                        : connectionError || t('assistant.statusDisconnected', '服务未连接')}
-                </Text>
+            {/* 连接异常时才显示状态提示条；已连接时保持界面干净 */}
+            {connectionState !== 'connected' && (
+                <View style={styles.statusBar}>
+                    <View
+                        style={[
+                            styles.statusDot,
+                            connectionState === 'connecting' || connectionState === 'reconnecting'
+                                ? styles.dotConnecting
+                                : styles.dotDisconnected,
+                        ]}
+                    />
+                    <Text style={styles.statusText}>
+                        {connectionState === 'connecting' || connectionState === 'reconnecting'
+                            ? t('assistant.statusConnecting', '正在连接...')
+                            : connectionError || t('assistant.statusDisconnected', '服务未连接')}
+                    </Text>
 
-                {connectionState !== 'connected' && (
                     <TouchableOpacity
                         style={styles.reconnectBtn}
                         onPress={() => AssistantClient.getInstance().connect()}
                     >
                         <Text style={styles.reconnectBtnText}>{t('browser.retry', '重试')}</Text>
                     </TouchableOpacity>
-                )}
-            </View>
+                </View>
+            )}
 
             {/* 消息流列表 */}
             <FlatList
@@ -181,6 +179,7 @@ export const ChatScreen = () => {
                 data={messages}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
+                keyboardShouldPersistTaps="handled"
                 renderItem={({ item }) => {
                     const isUser = item.role === 'user';
                     return (
@@ -221,10 +220,10 @@ export const ChatScreen = () => {
                                                             size={14}
                                                             color={
                                                                 tool.status === 'running'
-                                                                    ? '#1976d2'
+                                                                    ? theme.colors.primaryDark
                                                                     : tool.status === 'done'
-                                                                    ? '#2e7d32'
-                                                                    : '#c62828'
+                                                                    ? theme.colors.successText
+                                                                    : theme.colors.dangerText
                                                             }
                                                         />
                                                         <Text style={styles.toolText}>
@@ -289,7 +288,7 @@ export const ChatScreen = () => {
                                             <Icon
                                                 name="error-outline"
                                                 size={14}
-                                                color="#ffcdd2"
+                                                color="rgba(255, 255, 255, 0.85)"
                                                 style={styles.statusMargin}
                                             />
                                         </TouchableOpacity>
@@ -305,7 +304,7 @@ export const ChatScreen = () => {
             {pendingApproval && (
                 <View style={styles.approvalCard}>
                     <View style={styles.approvalHeader}>
-                        <Icon name="warning" size={20} color="#f57c00" />
+                        <Icon name="warning" size={20} color={theme.colors.warnText} />
                         <Text style={styles.approvalTitle}>{t('assistant.approvalRequired', '需要人工审批')}</Text>
                     </View>
                     <Text style={styles.approvalPrompt}>{pendingApproval.prompt}</Text>
@@ -375,13 +374,14 @@ const markdownStyles = {
         lineHeight: 22,
     },
     code_inline: {
-        backgroundColor: '#f0f0f0',
+        color: theme.colors.text,
+        backgroundColor: theme.colors.inputBg,
         borderRadius: 4,
         paddingHorizontal: 4,
         fontSize: 13,
     },
     fence: {
-        backgroundColor: '#f5f5f5',
+        backgroundColor: theme.colors.inputBg,
         borderRadius: 6,
         padding: 8,
         fontSize: 13,
@@ -409,7 +409,7 @@ const styles = StyleSheet.create({
         width: 72,
         height: 72,
         borderRadius: 36,
-        backgroundColor: '#e8f5e9',
+        backgroundColor: theme.colors.primaryLight,
         justifyContent: 'center',
         alignItems: 'center',
         marginBottom: 16,
@@ -448,12 +448,12 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#e8f5e9',
+        backgroundColor: theme.colors.primaryLight,
         borderRadius: 10,
         paddingVertical: 11,
         width: '100%',
         borderWidth: 1,
-        borderColor: '#c8e6c9',
+        borderColor: theme.colors.primary,
     },
     secondaryBtnText: {
         color: theme.colors.primary,
@@ -468,11 +468,11 @@ const styles = StyleSheet.create({
     statusBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#fafafa',
+        backgroundColor: theme.colors.warnBgStrong,
         paddingHorizontal: 16,
         paddingVertical: 8,
         borderBottomWidth: 1,
-        borderBottomColor: '#ebebeb',
+        borderBottomColor: theme.colors.warnBorder,
     },
     statusDot: {
         width: 8,
@@ -480,14 +480,11 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         marginRight: 8,
     },
-    dotConnected: {
-        backgroundColor: '#2e7d32',
-    },
     dotConnecting: {
-        backgroundColor: '#f57c00',
+        backgroundColor: theme.colors.warnText,
     },
     dotDisconnected: {
-        backgroundColor: '#9e9e9e',
+        backgroundColor: theme.colors.textSecondary,
     },
     statusText: {
         fontSize: 12,
@@ -495,10 +492,12 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     reconnectBtn: {
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-        backgroundColor: '#eeeeee',
-        borderRadius: 4,
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        backgroundColor: theme.colors.surface,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
     },
     reconnectBtnText: {
         fontSize: 12,
@@ -522,7 +521,7 @@ const styles = StyleSheet.create({
         width: 32,
         height: 32,
         borderRadius: 16,
-        backgroundColor: theme.colors.primary,
+        backgroundColor: theme.colors.primaryDark,
         justifyContent: 'center',
         alignItems: 'center',
         marginRight: 8,
@@ -530,20 +529,19 @@ const styles = StyleSheet.create({
     },
     bubble: {
         maxWidth: '82%',
-        borderRadius: 14,
+        borderRadius: 18,
         paddingHorizontal: 14,
         paddingVertical: 10,
-        elevation: 1,
     },
     userBubble: {
-        backgroundColor: theme.colors.primary,
-        borderBottomRightRadius: 2,
+        backgroundColor: theme.colors.primaryDark,
+        borderBottomRightRadius: 6,
     },
     assistantBubble: {
         backgroundColor: theme.colors.surface,
-        borderBottomLeftRadius: 2,
+        borderBottomLeftRadius: 6,
         borderWidth: 1,
-        borderColor: '#f0f0f0',
+        borderColor: theme.colors.border,
     },
     userText: {
         color: '#fff',
@@ -556,11 +554,12 @@ const styles = StyleSheet.create({
     toolTag: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#f5f5f5',
-        borderRadius: 6,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        backgroundColor: theme.colors.inputBg,
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
         marginBottom: 4,
+        alignSelf: 'flex-start',
     },
     toolText: {
         fontSize: 12,
@@ -579,7 +578,7 @@ const styles = StyleSheet.create({
     },
     errorText: {
         fontSize: 12,
-        color: '#c62828',
+        color: theme.colors.dangerText,
         marginTop: 6,
     },
     msgFooter: {
@@ -601,13 +600,13 @@ const styles = StyleSheet.create({
         color: theme.colors.textSecondary,
     },
     approvalCard: {
-        backgroundColor: '#fff3e0',
+        backgroundColor: theme.colors.warnBgStrong,
         borderRadius: 12,
         padding: 14,
         marginHorizontal: 16,
         marginBottom: 8,
         borderWidth: 1,
-        borderColor: '#ffe0b2',
+        borderColor: theme.colors.warnBorder,
     },
     approvalHeader: {
         flexDirection: 'row',
@@ -617,7 +616,7 @@ const styles = StyleSheet.create({
     approvalTitle: {
         fontSize: 14,
         fontWeight: 'bold',
-        color: '#e65100',
+        color: theme.colors.warnText,
         marginLeft: 6,
     },
     approvalPrompt: {
@@ -642,14 +641,16 @@ const styles = StyleSheet.create({
         borderRadius: 6,
     },
     rejectBtn: {
-        backgroundColor: '#eeeeee',
+        backgroundColor: theme.colors.surface,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
     },
     rejectBtnText: {
         fontSize: 13,
         color: theme.colors.textSecondary,
     },
     approveBtn: {
-        backgroundColor: '#2e7d32',
+        backgroundColor: theme.colors.successText,
     },
     approveBtnText: {
         fontSize: 13,
@@ -660,20 +661,20 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        backgroundColor: '#fffde7',
+        backgroundColor: theme.colors.warnBg,
         paddingHorizontal: 16,
         paddingVertical: 8,
         borderTopWidth: 1,
-        borderTopColor: '#fff9c4',
+        borderTopColor: theme.colors.warnBorder,
     },
     stopBarText: {
         fontSize: 13,
-        color: '#f57f17',
+        color: theme.colors.warnText,
     },
     stopBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#d32f2f',
+        backgroundColor: theme.colors.dangerStrong,
         borderRadius: 6,
         paddingHorizontal: 10,
         paddingVertical: 5,
@@ -688,22 +689,24 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'flex-end',
         paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingVertical: 10,
         backgroundColor: theme.colors.surface,
         borderTopWidth: 1,
-        borderTopColor: '#ebebeb',
+        borderTopColor: theme.colors.divider,
     },
     chatInput: {
         flex: 1,
         maxHeight: 100,
-        backgroundColor: '#f5f5f5',
-        borderRadius: 18,
-        paddingHorizontal: 14,
-        paddingTop: 8,
-        paddingBottom: 8,
+        minHeight: 40,
+        backgroundColor: theme.colors.inputBg,
+        borderRadius: 21,
+        paddingHorizontal: 16,
+        paddingTop: 9,
+        paddingBottom: 9,
         fontSize: 15,
         color: theme.colors.text,
-        marginRight: 8,
+        marginRight: 10,
+        lineHeight: 20,
     },
     sendBtn: {
         width: 38,
@@ -714,9 +717,9 @@ const styles = StyleSheet.create({
         marginBottom: 1,
     },
     sendBtnActive: {
-        backgroundColor: theme.colors.primary,
+        backgroundColor: theme.colors.primaryDark,
     },
     sendBtnDisabled: {
-        backgroundColor: '#c8e6c9',
+        backgroundColor: theme.colors.border,
     },
 });

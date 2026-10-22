@@ -160,6 +160,7 @@ module.exports = {
         android: {
             package: "com.mdnote",
             versionCode: 20,
+            softwareKeyboardLayoutMode: "resize",
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",
