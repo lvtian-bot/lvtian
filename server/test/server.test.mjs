@@ -307,6 +307,50 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
         const checkData = await checkRes.json();
         assert.equal(checkData.content, '匹配时间戳的最终内容');
 
+        // 5.3 模拟文件在服务端被外部删除，带 expectedMtime 保存必须报 409 PRECONDITION_FAILED
+        const deletedFile = path.join(tmpDir, 'to_be_deleted.md');
+        fs.writeFileSync(deletedFile, '即将被删除的文件', 'utf8');
+        const delStat = fs.statSync(deletedFile);
+        fs.unlinkSync(deletedFile);
+        const delSaveRes = await fetch(`${baseUrl}/api/files/content`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                path: deletedFile,
+                content: '尝试覆盖已被删除的文件',
+                expectedMtime: delStat.mtimeMs,
+            }),
+        });
+        assert.equal(delSaveRes.status, 409);
+        const delSaveData = await delSaveRes.json();
+        assert.equal(delSaveData.code, 'PRECONDITION_FAILED');
+
+        // 5.4 验证符号链接父目录逃逸保存拦截
+        const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-outside-'));
+        const symlinkParent = path.join(tmpDir, 'symlink_outside');
+        try {
+            fs.symlinkSync(outsideDir, symlinkParent, 'dir');
+            const symlinkSaveRes = await fetch(`${baseUrl}/api/files/content`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    path: path.join(symlinkParent, 'escaped.txt'),
+                    content: '逃逸内容',
+                }),
+            });
+            assert.equal(symlinkSaveRes.status, 403);
+            const symlinkData = await symlinkSaveRes.json();
+            assert.equal(symlinkData.code, 'OUT_OF_BOUNDS');
+        } finally {
+            fs.rmSync(outsideDir, { recursive: true, force: true });
+        }
+
         // 6. 下载文件 /api/files/download
         const dlRes = await fetch(`${baseUrl}/api/files/download?path=${encodeURIComponent(testFile)}`, {
             headers: { Authorization: `Bearer ${token}` },

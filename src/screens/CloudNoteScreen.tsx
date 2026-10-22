@@ -151,7 +151,12 @@ export const CloudNoteScreen = () => {
                 setItems(displayList);
             } catch (err: unknown) {
                 if (reqId === requestIdRef.current) {
-                    const message = (err as Error).message || '连接网盘失败，请检查网络';
+                    const serverErr = err as { code?: string; message?: string };
+                    const code = serverErr.code;
+                    let message = (err as Error).message || t('browser.error.network', { defaultValue: '连接网盘失败，请检查网络' });
+                    if (code) {
+                        message = t(`browser.error.${code}`, { defaultValue: message });
+                    }
                     setErrorMessage(message);
                 }
             } finally {

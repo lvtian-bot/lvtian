@@ -110,6 +110,8 @@
       "DOWNLOAD_TIMEOUT": "文件下载超时，请检查网络或稍后重试",
       "UNAUTHORIZED": "访问令牌无效或已过期，请重新配置",
       "TIMEOUT": "请求超时，请检查服务端连接",
+      "REQUEST_FAILED": "网盘请求失败，请稍后重试",
+      "NOT_FOUND": "未找到指定的文件或目录",
       "FS_ERROR": "服务端文件系统读写异常"
     },
     "offlineMode": "当前处于离线模式，仅显示本地缓存，数据可能不完整",

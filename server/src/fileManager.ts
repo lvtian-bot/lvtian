@@ -284,9 +284,16 @@ export class FileManager {
 
         try {
             await fs.promises.mkdir(parentDir, { recursive: true });
+            // 严格验证父级物理真实路径必须在 allowedRoot 边界内（防止符号链接父目录逃逸）
+            const realParent = await fs.promises.realpath(parentDir);
+            const parentAllowed = realParent === this.allowedRoot || realParent.startsWith(this.allowedRoot + path.sep);
+            if (!parentAllowed) {
+                throw new FileManagerError(`目标目录超出允许的访问范围: ${realParent}`, 'OUT_OF_BOUNDS', 403);
+            }
         } catch (err: unknown) {
+            if (err instanceof FileManagerError) throw err;
             const nodeErr = err as NodeJS.ErrnoException;
-            throw new FileManagerError(`创建父级目录失败: ${nodeErr.message}`, 'FS_ERROR', 500);
+            throw new FileManagerError(`创建或校验父级目录失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
 
         // 校验现有文件的 expectedMtime 与权限 mode
@@ -303,7 +310,15 @@ export class FileManager {
             }
         } catch (err: unknown) {
             if (err instanceof FileManagerError) throw err;
-            // 文件不存在属于新建，继续
+            const nodeErr = err as NodeJS.ErrnoException;
+            if (nodeErr.code === 'ENOENT') {
+                if (expectedMtime !== undefined && expectedMtime > 0) {
+                    throw new FileManagerError('服务端文件已被外部删除或移动，保存已被阻止 (409 Conflict)', 'PRECONDITION_FAILED', 409);
+                }
+                // 预期为新文件（无 expectedMtime），正常继续新建
+            } else {
+                throw new FileManagerError(`检查目标文件状态失败: ${nodeErr.message}`, 'FS_ERROR', 500);
+            }
         }
 
         const defaultMode = existingMode !== null ? existingMode : 0o644;

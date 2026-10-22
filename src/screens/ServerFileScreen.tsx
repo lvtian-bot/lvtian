@@ -81,15 +81,18 @@ export const ServerFileScreen = () => {
     const hasLoadedInitialRef = useRef<boolean>(false);
     const prevServerUrl = useRef(serverUrl);
     const requestIdRef = useRef<number>(0);
+    const systemInfoRef = useRef<FileSystemInfo | null>(null);
 
     useEffect(() => {
         if (prevServerUrl.current !== serverUrl) {
             prevServerUrl.current = serverUrl;
+            requestIdRef.current++;
             setCurrentPath('');
             setParentPath(null);
             currentPathRef.current = '';
             parentPathRef.current = null;
             hasLoadedInitialRef.current = false;
+            systemInfoRef.current = null;
             setSystemInfo(null);
             setItems([]);
         }
@@ -132,10 +135,11 @@ export const ServerFileScreen = () => {
 
             try {
                 // 如果尚未获取系统信息，先行获取
-                let currentSysInfo = systemInfo;
+                let currentSysInfo = systemInfoRef.current;
                 if (!currentSysInfo) {
                     currentSysInfo = await serverFileService.getSystemInfo();
                     if (requestId !== requestIdRef.current) return;
+                    systemInfoRef.current = currentSysInfo;
                     setSystemInfo(currentSysInfo);
                 }
 
@@ -166,7 +170,7 @@ export const ServerFileScreen = () => {
                 }
             }
         },
-        [isConfigured, systemInfo, t]
+        [isConfigured, t]
     );
 
     useFocusEffect(

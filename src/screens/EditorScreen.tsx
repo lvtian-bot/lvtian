@@ -18,6 +18,7 @@ import { flashNoteService } from '../services/FlashNoteService';
 import { serverFileService } from '../services/ServerFileService';
 import { cloudService } from '../services/CloudService';
 import { useAssistantStore } from '../store/useAssistantStore';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -48,11 +49,17 @@ export const EditorScreen = () => {
 
     const isFlashMode = !!flashNoteId;
     const serverPrefix = source === 'server' ? (serverUrl ? serverUrl.replace(/[^a-zA-Z0-9]/g, '_') : 'default') : '';
+    const { webDavConfig } = useSettingsStore.getState();
+    const webdavPrefix = source === 'webdav'
+        ? `${(webDavConfig?.server || '').replace(/[^a-zA-Z0-9]/g, '_')}_${(webDavConfig?.username || '').replace(/[^a-zA-Z0-9]/g, '_')}`
+        : '';
     const DRAFT_KEY = isFlashMode
         ? `editor_draft_flash_${flashNoteId}`
         : source === 'server'
             ? `editor_draft_server_${serverPrefix}_${filePath}`
-            : `editor_draft_${source}_${filePath}`;
+            : source === 'webdav'
+                ? `editor_draft_webdav_${webdavPrefix}_${filePath}`
+                : `editor_draft_${source}_${filePath}`;
 
     const loadFile = useCallback(async () => {
         try {
@@ -91,6 +98,15 @@ export const EditorScreen = () => {
                     await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
                     await AsyncStorage.removeItem(legacyDraftKey);
                 }
+            } else if (draftContent === null && source === 'webdav') {
+                // 兼容旧版未带账号前缀的 WebDAV 草稿键名，若存在则自动平滑迁移
+                const legacyDraftKey = `editor_draft_webdav_${filePath}`;
+                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
+                if (legacyDraft !== null) {
+                    draftContent = legacyDraft;
+                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                    await AsyncStorage.removeItem(legacyDraftKey);
+                }
             }
 
             if (draftContent !== null && draftContent !== fileContent) {
@@ -105,6 +121,9 @@ export const EditorScreen = () => {
                                 await AsyncStorage.removeItem(DRAFT_KEY);
                                 if (source === 'local' && !isFlashMode) {
                                     await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                                }
+                                if (source === 'webdav') {
+                                    await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
                                 }
                                 setContent(fileContent);
                                 initialContentRef.current = fileContent;
@@ -233,6 +252,9 @@ export const EditorScreen = () => {
             if (source === 'local' && !isFlashMode) {
                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
             }
+            if (source === 'webdav') {
+                await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
+            }
             setIsDirty(false);
             setContent(contentToSave);
             initialContentRef.current = contentToSave;
@@ -267,6 +289,9 @@ export const EditorScreen = () => {
                             await AsyncStorage.removeItem(DRAFT_KEY);
                             if (source === 'local' && !isFlashMode) {
                                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                            }
+                            if (source === 'webdav') {
+                                await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
                             }
                             navigation.goBack();
                         },

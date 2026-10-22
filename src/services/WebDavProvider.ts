@@ -40,6 +40,98 @@ export class WebDavProvider implements ICloudProvider {
         return this.limiter.add(() => this.requestWithRetry(method, key, headers, body));
     }
 
+    /**
+     * 发起请求并读取响应文本，确保超时保护覆盖整个正文读取流，并支持最大字节数限制
+     */
+    private async requestText(
+        method: string,
+        key: string,
+        headers: Record<string, string> = {},
+        body?: string | Blob | ArrayBuffer,
+        maxBytes?: number,
+        retries = 3
+    ): Promise<{ text: string; status: number; headers: Headers }> {
+        return this.limiter.add(async () => {
+            const url = this.getUrl(key);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒全程超时保护（覆盖正文流）
+
+            try {
+                const response = await fetch(url, {
+                    method,
+                    headers: {
+                        'Authorization': this.authHeader,
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache',
+                        ...headers
+                    },
+                    body: body as any,
+                    signal: controller.signal,
+                });
+
+                if (!response.ok && (response.status === 429 || response.status === 503)) {
+                    if (retries > 0) {
+                        clearTimeout(timeoutId);
+                        const delay = 1000 * (4 - retries) + Math.random() * 500;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        return this.requestText(method, key, headers, body, maxBytes, retries - 1);
+                    }
+                }
+
+                if (!response.ok) {
+                    const errText = await response.text().catch(() => '');
+                    const err: any = new Error(`WebDav ${method} 请求失败 (${response.status}): ${errText}`);
+                    err.status = response.status;
+                    err.code = response.status === 404 ? 'NOT_FOUND' : 'REQUEST_FAILED';
+                    throw err;
+                }
+
+                if (maxBytes !== undefined) {
+                    const clHeader = response.headers.get('content-length');
+                    if (clHeader) {
+                        const cl = parseInt(clHeader, 10);
+                        if (!isNaN(cl) && cl > maxBytes) {
+                            controller.abort();
+                            const limitErr: any = new Error(`文件体积超过限制 (${(cl / 1024 / 1024).toFixed(1)}MB > ${(maxBytes / 1024 / 1024).toFixed(1)}MB)`);
+                            limitErr.code = 'LIMIT_EXCEEDED';
+                            throw limitErr;
+                        }
+                    }
+                }
+
+                const text = await response.text();
+
+                if (maxBytes !== undefined) {
+                    const actualBytes = new Blob([text]).size;
+                    if (actualBytes > maxBytes) {
+                        const limitErr: any = new Error(`文件体积超过限制 (${(actualBytes / 1024 / 1024).toFixed(1)}MB > ${(maxBytes / 1024 / 1024).toFixed(1)}MB)`);
+                        limitErr.code = 'LIMIT_EXCEEDED';
+                        throw limitErr;
+                    }
+                }
+
+                return { text, status: response.status, headers: response.headers };
+            } catch (error: any) {
+                if (error?.name === 'AbortError') {
+                    const timeoutErr: any = new Error('网盘请求超时，请检查网络连接');
+                    timeoutErr.code = 'TIMEOUT';
+                    throw timeoutErr;
+                }
+
+                if (retries > 0 && (error?.message === 'Network request failed' || error?.message?.includes('Network request failed'))) {
+                    clearTimeout(timeoutId);
+                    const delay = 1000 * (4 - retries) + Math.random() * 500;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return this.requestText(method, key, headers, body, maxBytes, retries - 1);
+                }
+
+                throw error;
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        });
+    }
+
     private async requestWithRetry(method: string, key: string, headers: Record<string, string> = {}, body?: string | Blob | ArrayBuffer, retries = 3): Promise<Response> {
         const url = this.getUrl(key);
         const controller = new AbortController();
@@ -178,11 +270,8 @@ export class WebDavProvider implements ICloudProvider {
     }
 
     async getCloudFileContent(key: string): Promise<string> {
-        const response = await this.request('GET', key);
-        if (!response.ok) {
-            throw new Error(`WebDav Get Content Failed: ${response.status}`);
-        }
-        return await response.text();
+        const res = await this.requestText('GET', key, {}, undefined, 5 * 1024 * 1024);
+        return res.text;
     }
 
     async createDirectory(key: string): Promise<void> {
@@ -219,19 +308,17 @@ export class WebDavProvider implements ICloudProvider {
             'Depth': '0'
         };
 
-        const response = await this.request('PROPFIND', key, headers);
-
-        if (response.status === 404) {
-            return null;
+        let res: { text: string };
+        try {
+            res = await this.requestText('PROPFIND', key, headers);
+        } catch (err: any) {
+            if (err?.status === 404 || err?.code === 'NOT_FOUND') {
+                return null;
+            }
+            throw err;
         }
-
-        if (!response.ok) {
-            throw new Error(`WebDav Head (PROPFIND) Failed: ${response.status}`);
-        }
-
-        const xmlText = await response.text();
         // Parse the single file response
-        const items = this.parsePropFindResponse(xmlText, key, true);
+        const items = this.parsePropFindResponse(res.text, key, true);
 
         if (items.length === 0) {
             return null;
@@ -254,14 +341,8 @@ export class WebDavProvider implements ICloudProvider {
             // 'Content-Type': 'application/xml' // Optional request body for properties
         };
 
-        const response = await this.request('PROPFIND', prefix, headers);
-
-        if (!response.ok) {
-            throw new Error(`WebDav List Failed: ${response.status}`);
-        }
-
-        const xmlText = await response.text();
-        return this.parsePropFindResponse(xmlText, prefix, false);
+        const res = await this.requestText('PROPFIND', prefix, headers);
+        return this.parsePropFindResponse(res.text, prefix, false);
     }
 
     private parsePropFindResponse(xml: string, prefix: string, includeSelf: boolean = false): CloudFileItem[] {

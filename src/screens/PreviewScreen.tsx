@@ -16,6 +16,7 @@ import { useCloudSync } from '../hooks/useCloudSync';
 import { StatusBannerContainer } from '../components/StatusBannerContainer';
 import { previewHtml } from '../preview-web/previewHtml';
 import { serverFileService } from '../services/ServerFileService';
+import * as FileSystem from 'expo-file-system/legacy';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -71,55 +72,86 @@ export const PreviewScreen = () => {
             }
 
             try {
-                let absolutePath = '';
-                if (src.startsWith('file://')) {
-                    absolutePath = src;
-                } else if (src.startsWith('/')) {
-                    absolutePath = 'file://' + src;
-                } else {
-                    const currentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-                    const parts = (currentDir + '/' + src).split('/');
-                    const stack: string[] = [];
-                    for (const part of parts) {
-                        if (part === '..') {
-                            stack.pop();
-                        } else if (part !== '.' && part !== '') {
-                            stack.push(part);
+                // 计算相对路径对应的规范绝对或相对路径
+                const currentDir = filePath.includes('/')
+                    ? filePath.substring(0, filePath.lastIndexOf('/'))
+                    : '';
+                const parts = (currentDir ? currentDir + '/' + src : src).split('/');
+                const stack: string[] = [];
+                for (const part of parts) {
+                    if (part === '..') {
+                        stack.pop();
+                    } else if (part !== '.' && part !== '') {
+                        stack.push(part);
+                    }
+                }
+                const resolvedRemoteOrLocalPath = (parts[0] === '' ? '/' : '') + stack.join('/');
+
+                if (source === 'server') {
+                    // 服务端模式：下载相对图片到沙盒缓存供 WebView 渲染
+                    const cacheDir = FileSystem.cacheDirectory || '';
+                    const sanitizedName = resolvedRemoteOrLocalPath.replace(/[^a-zA-Z0-9._-]/g, '_');
+                    const localUri = `${cacheDir}img_server_${sanitizedName}`;
+                    const exists = await fsService.exists(localUri);
+                    if (!exists) {
+                        try {
+                            await serverFileService.downloadFile(resolvedRemoteOrLocalPath, localUri);
+                        } catch (e) {
+                            console.warn('Failed to download server image:', resolvedRemoteOrLocalPath, e);
                         }
                     }
-                    absolutePath = (parts[0] === '' ? '/' : '') + stack.join('/');
+                    if (await fsService.exists(localUri)) {
+                        result = result.replace(full, full.replace(src, localUri));
+                    }
+                } else if (source === 'webdav') {
+                    // 纯在线网盘模式：下载到沙盒临时目录
+                    const cleanKey = resolvedRemoteOrLocalPath.startsWith('/') ? resolvedRemoteOrLocalPath.slice(1) : resolvedRemoteOrLocalPath;
+                    const cacheDir = FileSystem.cacheDirectory || '';
+                    const sanitizedName = cleanKey.replace(/[^a-zA-Z0-9._-]/g, '_');
+                    const localUri = `${cacheDir}img_webdav_${sanitizedName}`;
+                    const exists = await fsService.exists(localUri);
+                    if (!exists) {
+                        try {
+                            await cloudService.downloadFile(cleanKey, localUri);
+                        } catch (e) {
+                            console.warn('Failed to download webdav image:', cleanKey, e);
+                        }
+                    }
+                    if (await fsService.exists(localUri)) {
+                        result = result.replace(full, full.replace(src, localUri));
+                    }
+                } else {
+                    // 本地模式
+                    let absolutePath = resolvedRemoteOrLocalPath;
                     if (!absolutePath.startsWith('file://')) {
                         absolutePath = 'file://' + absolutePath;
                     }
-                }
-
-                const exists = await fsService.exists(absolutePath);
-                if (!exists && cloudService.isConfigured()) {
-                    const rootPath = fsService.getRootPath();
-                    const normalizedRoot = rootPath.replace('file://', '');
-                    const normalizedAbs = absolutePath.replace('file://', '');
-                    if (normalizedAbs.startsWith(normalizedRoot)) {
-                        const key = normalizedAbs.substring(normalizedRoot.length + 1);
-                        try {
-                            await cloudService.downloadFile(key, absolutePath);
-                        } catch (e) {
-                            console.warn('Failed to download image:', key, e);
+                    const exists = await fsService.exists(absolutePath);
+                    if (!exists && cloudService.isConfigured()) {
+                        const rootPath = fsService.getRootPath();
+                        const normalizedRoot = rootPath.replace('file://', '');
+                        const normalizedAbs = absolutePath.replace('file://', '');
+                        if (normalizedAbs.startsWith(normalizedRoot)) {
+                            const key = normalizedAbs.substring(normalizedRoot.length + 1);
+                            try {
+                                await cloudService.downloadFile(key, absolutePath);
+                            } catch (e) {
+                                console.warn('Failed to download image:', key, e);
+                            }
                         }
                     }
+                    result = result.replace(full, full.replace(src, absolutePath));
                 }
-
-                const newImg = full.replace(src, absolutePath);
-                result = result.replace(full, newImg);
             } catch (err) {
                 console.error('Error resolving image:', src, err);
             }
         }
         return result;
-    }, [filePath]);
+    }, [filePath, source]);
 
     const sendContentToWebView = useCallback(async (rawText: string) => {
         if (!webViewRef.current) return;
-        const resolved = isLocalMode ? await resolveMarkdownImages(rawText) : rawText;
+        const resolved = await resolveMarkdownImages(rawText);
         webViewRef.current.postMessage(JSON.stringify({
             type: 'SET_CONTENT',
             payload: {
@@ -127,11 +159,12 @@ export const PreviewScreen = () => {
                 theme: markdownTheme,
             },
         }));
-    }, [isLocalMode, resolveMarkdownImages, markdownTheme]);
+    }, [resolveMarkdownImages, markdownTheme]);
 
     const loadFile = useCallback(async () => {
         try {
             setLoading(true);
+            setIsWebViewReady(false); // 重置 WebView 就绪状态，确保重新挂载后能再次收到正文
             setLoadFailed(false);
             let fileContent = '';
 
