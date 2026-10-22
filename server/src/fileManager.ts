@@ -15,6 +15,8 @@ export interface ServerDirectoryListing {
     currentPath: string;
     parentPath: string | null;
     items: ServerFileItem[];
+    /** 目录条目过多时仅返回前面的部分条目（按目录读取顺序），为 true 表示已截断 */
+    truncated: boolean;
 }
 
 export interface FileSystemInfo {
@@ -40,6 +42,8 @@ export class FileManagerError extends Error {
 export class FileManager {
     private workspaceDir: string;
     private allowedRoot: string;
+    /** 按目标路径串行化保存操作：乐观锁检查与临时文件替换必须独占执行，防止并发保存互相覆盖 */
+    private saveQueues = new Map<string, Promise<unknown>>();
 
     constructor(workspaceDir?: string, allowedRoot?: string) {
         this.workspaceDir = workspaceDir ? path.resolve(workspaceDir) : path.join(os.homedir(), 'workspace');
@@ -161,12 +165,14 @@ export class FileManager {
             throw new FileManagerError(`读取目录列表失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
 
-        // 分批并发处理条目 stat，提速大文件夹
+        // 分批并发处理条目 stat，提速大文件夹；条目数超过上限时截断，避免超大目录扫描耗时超出客户端超时
         const concurrency = 20;
+        const maxEntries = 1000;
+        let truncated = false;
         const items: ServerFileItem[] = [];
         const validEntries = dirEntries.filter((entry) => entry.name !== '.' && entry.name !== '..');
 
-        for (let i = 0; i < validEntries.length; i += concurrency) {
+        outer: for (let i = 0; i < validEntries.length; i += concurrency) {
             const batch = validEntries.slice(i, i + concurrency);
             const batchResults = await Promise.all(
                 batch.map(async (entry) => {
@@ -193,6 +199,10 @@ export class FileManager {
                 })
             );
             items.push(...batchResults);
+            if (items.length >= maxEntries) {
+                truncated = true;
+                break outer;
+            }
         }
 
         // 排序：文件夹排在前，文件在后；同类按名称字母排序
@@ -210,6 +220,7 @@ export class FileManager {
             currentPath: resolvedPath,
             parentPath,
             items,
+            truncated,
         };
     }
 
@@ -280,6 +291,30 @@ export class FileManager {
         }
 
         const resolvedPath = await this.resolveAndValidatePath(targetPath, false);
+
+        // 同一目标文件的保存请求串行执行：乐观锁检查（mtime 比对）与临时文件替换必须在同一独占段内完成，
+        // 防止并发保存双双通过检查后，后一次 rename 静默覆盖前一次的修改
+        const previous = this.saveQueues.get(resolvedPath) ?? Promise.resolve();
+        let releaseSaveLock!: () => void;
+        const gate = new Promise<void>((resolve) => { releaseSaveLock = resolve; });
+        const tail = previous.then(() => gate);
+        this.saveQueues.set(resolvedPath, tail);
+        // 链尾自清理，避免长期运行后 Map 无限增长
+        tail.catch(() => {}).then(() => {
+            if (this.saveQueues.get(resolvedPath) === tail) {
+                this.saveQueues.delete(resolvedPath);
+            }
+        });
+
+        await previous;
+        try {
+            return await this.performSave(resolvedPath, content, expectedMtime);
+        } finally {
+            releaseSaveLock();
+        }
+    }
+
+    private async performSave(resolvedPath: string, content: string, expectedMtime?: number): Promise<{ success: boolean; mtime: number; size: number }> {
         const parentDir = path.dirname(resolvedPath);
 
         // 在创建任何目录之前，先校验最近已存在祖先的物理真实路径，

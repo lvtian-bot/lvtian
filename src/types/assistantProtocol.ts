@@ -110,6 +110,8 @@ export interface ServerDirectoryListing {
     currentPath: string;
     parentPath: string | null;
     items: ServerFileItem[];
+    /** 目录条目过多时服务端仅返回前面的部分条目，为 true 表示已截断 */
+    truncated?: boolean;
 }
 
 export interface FileSystemInfo {

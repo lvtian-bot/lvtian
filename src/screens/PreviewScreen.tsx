@@ -12,6 +12,7 @@ import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
+import { stableHash } from '../utils/identityHash';
 import { useCloudSync } from '../hooks/useCloudSync';
 import { StatusBannerContainer } from '../components/StatusBannerContainer';
 import { previewHtml } from '../preview-web/previewHtml';
@@ -64,6 +65,11 @@ export const PreviewScreen = () => {
         }
         if (matches.length === 0) return rawText;
 
+        // 在线图片缓存有效期：过期后重新下载，避免云端图片原地更新后长期显示陈旧内容
+        const IMAGE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+        const isCacheUsable = (info: FileSystem.FileInfo) =>
+            info.exists && Date.now() - info.modificationTime * 1000 < IMAGE_CACHE_TTL_MS;
+
         let result = rawText;
         for (const item of matches) {
             const { full, src } = item;
@@ -90,11 +96,12 @@ export const PreviewScreen = () => {
                 if (source === 'server') {
                     // 服务端模式：下载相对图片到沙盒缓存供 WebView 渲染
                     // 存在性检查直接使用缓存目录感知的 API，避免 fsService 将路径清洗重定向到文档根后永远判定不存在
+                    // 缓存文件名使用路径哈希，避免有损清洗导致不同路径（如 a/b.png 与 a_b.png）互相覆盖
                     const cacheDir = FileSystem.cacheDirectory || '';
-                    const sanitizedName = resolvedRemoteOrLocalPath.replace(/[^a-zA-Z0-9._-]/g, '_');
-                    const localUri = `${cacheDir}img_server_${sanitizedName}`;
+                    const digest = stableHash(resolvedRemoteOrLocalPath);
+                    const localUri = `${cacheDir}img_server_${digest}`;
                     let cacheInfo = await FileSystem.getInfoAsync(localUri);
-                    if (!cacheInfo.exists) {
+                    if (!isCacheUsable(cacheInfo)) {
                         try {
                             await serverFileService.downloadFile(resolvedRemoteOrLocalPath, localUri);
                         } catch (e) {
@@ -107,12 +114,15 @@ export const PreviewScreen = () => {
                     }
                 } else if (source === 'webdav') {
                     // 纯在线网盘模式：下载到沙盒临时目录
+                    // 缓存键含账号维度哈希与路径哈希，避免不同账号或不同路径互相覆盖
                     const cleanKey = resolvedRemoteOrLocalPath.startsWith('/') ? resolvedRemoteOrLocalPath.slice(1) : resolvedRemoteOrLocalPath;
+                    const { webDavConfig } = useSettingsStore.getState();
+                    const accountDigest = stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`);
+                    const digest = stableHash(`${accountDigest}|${cleanKey}`);
                     const cacheDir = FileSystem.cacheDirectory || '';
-                    const sanitizedName = cleanKey.replace(/[^a-zA-Z0-9._-]/g, '_');
-                    const localUri = `${cacheDir}img_webdav_${sanitizedName}`;
+                    const localUri = `${cacheDir}img_webdav_${digest}`;
                     let cacheInfo = await FileSystem.getInfoAsync(localUri);
-                    if (!cacheInfo.exists) {
+                    if (!isCacheUsable(cacheInfo)) {
                         try {
                             await cloudService.downloadFile(cleanKey, localUri);
                         } catch (e) {

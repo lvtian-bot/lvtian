@@ -274,11 +274,27 @@ export class WebDavProvider implements ICloudProvider {
 
         const url = this.getUrl(key);
 
-        const downloadResult = await FileSystem.downloadAsync(url, destPath, {
+        // downloadAsync 不支持中断，用超时竞速放弃等待，防止服务端停滞时调用方无限挂起
+        const downloadPromise = FileSystem.downloadAsync(url, destPath, {
             headers: {
                 'Authorization': this.authHeader
             }
         });
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                const timeoutErr: any = new Error('网盘请求超时，请检查网络连接');
+                timeoutErr.code = 'TIMEOUT';
+                reject(timeoutErr);
+            }, 30000);
+        });
+
+        let downloadResult;
+        try {
+            downloadResult = await Promise.race([downloadPromise, timeoutPromise]);
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
 
         if (downloadResult.status !== 200) {
             throw new Error(`WebDav Download failed: ${downloadResult.status}`);

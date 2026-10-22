@@ -57,8 +57,9 @@ export const CloudNoteScreen = () => {
 
     const [currentPrefix, setCurrentPrefix] = useState<string>(route.params?.prefix || '');
     const [items, setItems] = useState<DisplayItem[]>([]);
-    // 已成功加载条目对应的目录前缀：用于区分「切换目录」与「同目录刷新」，决定是否清空旧条目
-    const [loadedPrefix, setLoadedPrefix] = useState<string | null>(null);
+    // 已成功加载条目对应的目录前缀：用于区分「切换目录」与「同目录刷新」，决定是否清空旧条目。
+    // 存放在 ref 中，避免进入加载回调的依赖导致聚焦期间回调重建、重复发起列表请求
+    const loadedPrefixRef = useRef<string | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [refreshing, setRefreshing] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -69,10 +70,12 @@ export const CloudNoteScreen = () => {
     useEffect(() => {
         const checkConfig = () => {
             setIsConfigured(cloudService.isConfigured());
-            // 当网盘重新配置或初始化时，重置当前子路径到根目录，清空旧条目，避免跨账号/新配置请求旧子目录
+            // 当网盘重新配置或初始化时，重置当前子路径到根目录，清空旧条目，避免跨账号/新配置请求旧子目录；
+            // 同时作废仍在途的旧账号请求，防止其返回后重新填充旧条目
+            requestIdRef.current++;
             setCurrentPrefix('');
             setItems([]);
-            setLoadedPrefix('');
+            loadedPrefixRef.current = '';
         };
         const sub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, checkConfig);
         checkConfig();
@@ -99,7 +102,7 @@ export const CloudNoteScreen = () => {
             setErrorMessage(null);
 
             // 切换到新目录时立即清空上一目录条目，防止新目录加载失败后仍显示父目录内容
-            if (loadedPrefix !== null && loadedPrefix !== currentPrefix) {
+            if (loadedPrefixRef.current !== null && loadedPrefixRef.current !== currentPrefix) {
                 setItems([]);
             }
 
@@ -157,7 +160,7 @@ export const CloudNoteScreen = () => {
                 });
 
                 setItems(displayList);
-                setLoadedPrefix(currentPrefix);
+                loadedPrefixRef.current = currentPrefix;
             } catch (err: unknown) {
                 if (reqId === requestIdRef.current) {
                     const serverErr = err as { code?: string; message?: string };
@@ -175,7 +178,7 @@ export const CloudNoteScreen = () => {
                 }
             }
         },
-        [currentPrefix, t, loadedPrefix]
+        [currentPrefix, t]
     );
 
     /**

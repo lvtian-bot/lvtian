@@ -70,6 +70,7 @@ export const ServerFileScreen = () => {
     const [currentPath, setCurrentPath] = useState<string>('');
     const [parentPath, setParentPath] = useState<string | null>(null);
     const [items, setItems] = useState<ServerFileItem[]>([]);
+    const [listingTruncated, setListingTruncated] = useState<boolean>(false);
     const [systemInfo, setSystemInfo] = useState<FileSystemInfo | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -154,6 +155,7 @@ export const ServerFileScreen = () => {
                 parentPathRef.current = listing.parentPath;
                 hasLoadedInitialRef.current = true;
                 setItems(listing.items);
+                setListingTruncated(!!listing.truncated);
             } catch (err: unknown) {
                 if (requestId !== requestIdRef.current) return;
                 const serverErr = err as { code?: string; message?: string };
@@ -400,6 +402,13 @@ export const ServerFileScreen = () => {
                             </View>
                         ) : null
                     }
+                    ListFooterComponent={
+                        listingTruncated ? (
+                            <View style={styles.truncatedFooter}>
+                                <Text style={styles.truncatedText}>{t('browser.directoryTruncated', { defaultValue: '目录内容过多，仅显示部分条目' })}</Text>
+                            </View>
+                        ) : null
+                    }
                 />
             )}
         </View>
@@ -532,6 +541,14 @@ const styles = StyleSheet.create({
     emptyText: {
         marginTop: 12,
         fontSize: 14,
+        color: theme.colors.textSecondary,
+    },
+    truncatedFooter: {
+        paddingVertical: 16,
+        alignItems: 'center',
+    },
+    truncatedText: {
+        fontSize: 13,
         color: theme.colors.textSecondary,
     },
     loadingText: {

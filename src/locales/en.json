@@ -131,6 +131,7 @@
     "cloudFiles": "Cloud Files",
     "parentDir": "Up",
     "emptyDirectory": "No files in this directory",
+    "directoryTruncated": "Directory has too many entries; only part of them is shown",
     "unsupportedPreviewPrompt": "Text preview is not available for this file type. Download and open with system app?",
     "oversizedPreviewPrompt": "This file exceeds 5MB and cannot be previewed as text. Download and open with system app?",
     "unsupportedTextPreview": "This file is not a supported text or Markdown format and cannot be previewed online.",

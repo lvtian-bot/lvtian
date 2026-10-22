@@ -13,6 +13,7 @@ import { fsService } from '../services/FileSystemService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { theme } from '../utils/theme';
 import { normalizePath } from '../utils/pathUtils';
+import { stableHash } from '../utils/identityHash';
 import { syncService } from '../services/SyncService';
 import { flashNoteService } from '../services/FlashNoteService';
 import { serverFileService } from '../services/ServerFileService';
@@ -48,10 +49,10 @@ export const EditorScreen = () => {
     const { markFileAsModified } = useFileMetadataStore();
 
     const isFlashMode = !!flashNoteId;
-    const serverPrefix = source === 'server' ? (serverUrl ? serverUrl.replace(/[^a-zA-Z0-9]/g, '_') : 'default') : '';
+    const serverPrefix = source === 'server' ? (serverUrl ? stableHash(serverUrl) : 'default') : '';
     const { webDavConfig } = useSettingsStore.getState();
     const webdavPrefix = source === 'webdav'
-        ? `${(webDavConfig?.server || '').replace(/[^a-zA-Z0-9]/g, '_')}_${(webDavConfig?.username || '').replace(/[^a-zA-Z0-9]/g, '_')}`
+        ? stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`)
         : '';
     const DRAFT_KEY = isFlashMode
         ? `editor_draft_flash_${flashNoteId}`
