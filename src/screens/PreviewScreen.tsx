@@ -11,6 +11,7 @@ import { fsService } from '../services/FileSystemService';
 import { cloudService, UPLOAD_COMPLETED_EVENT } from '../services/CloudService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
 import { stableHash } from '../utils/identityHash';
 import { useCloudSync } from '../hooks/useCloudSync';
@@ -78,27 +79,39 @@ export const PreviewScreen = () => {
             }
 
             try {
-                // 计算相对路径对应的规范绝对或相对路径
-                const currentDir = filePath.includes('/')
-                    ? filePath.substring(0, filePath.lastIndexOf('/'))
-                    : '';
-                const parts = (currentDir ? currentDir + '/' + src : src).split('/');
-                const stack: string[] = [];
-                for (const part of parts) {
-                    if (part === '..') {
-                        stack.pop();
-                    } else if (part !== '.' && part !== '') {
-                        stack.push(part);
+                // 分类图片引用：file:// URI 与根绝对路径不拼接笔记目录，仅真正的相对路径才相对笔记目录解析
+                let resolvedRemoteOrLocalPath: string;
+                if (src.startsWith('file://')) {
+                    // 本地文件 URI 原样保留，由 WebView 按自身访问能力渲染
+                    resolvedRemoteOrLocalPath = src;
+                } else {
+                    const isRootAbsolute = src.startsWith('/');
+                    const currentDir = (!isRootAbsolute && filePath.includes('/'))
+                        ? filePath.substring(0, filePath.lastIndexOf('/'))
+                        : '';
+                    const parts = (isRootAbsolute ? src : (currentDir ? currentDir + '/' + src : src)).split('/');
+                    const stack: string[] = [];
+                    for (const part of parts) {
+                        if (part === '..') {
+                            stack.pop();
+                        } else if (part !== '.' && part !== '') {
+                            stack.push(part);
+                        }
                     }
+                    resolvedRemoteOrLocalPath = (isRootAbsolute ? '/' : '') + stack.join('/');
                 }
-                const resolvedRemoteOrLocalPath = (parts[0] === '' ? '/' : '') + stack.join('/');
 
                 if (source === 'server') {
                     // 服务端模式：下载相对图片到沙盒缓存供 WebView 渲染
                     // 存在性检查直接使用缓存目录感知的 API，避免 fsService 将路径清洗重定向到文档根后永远判定不存在
-                    // 缓存文件名使用路径哈希，避免有损清洗导致不同路径（如 a/b.png 与 a_b.png）互相覆盖
+                    if (resolvedRemoteOrLocalPath.startsWith('file://')) {
+                        // 在线模式无法解析本地文件 URI，维持原引用
+                        continue;
+                    }
+                    // 缓存键含助理服务地址维度，切换服务端后不复用旧服务的同名路径缓存
+                    const { serverUrl } = useAssistantStore.getState();
+                    const digest = stableHash(`${serverUrl || ''}|${resolvedRemoteOrLocalPath}`);
                     const cacheDir = FileSystem.cacheDirectory || '';
-                    const digest = stableHash(resolvedRemoteOrLocalPath);
                     const localUri = `${cacheDir}img_server_${digest}`;
                     let cacheInfo = await FileSystem.getInfoAsync(localUri);
                     if (!isCacheUsable(cacheInfo)) {
@@ -115,6 +128,10 @@ export const PreviewScreen = () => {
                 } else if (source === 'webdav') {
                     // 纯在线网盘模式：下载到沙盒临时目录
                     // 缓存键含账号维度哈希与路径哈希，避免不同账号或不同路径互相覆盖
+                    if (resolvedRemoteOrLocalPath.startsWith('file://')) {
+                        // 在线模式无法解析本地文件 URI，维持原引用
+                        continue;
+                    }
                     const cleanKey = resolvedRemoteOrLocalPath.startsWith('/') ? resolvedRemoteOrLocalPath.slice(1) : resolvedRemoteOrLocalPath;
                     const { webDavConfig } = useSettingsStore.getState();
                     const accountDigest = stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`);
@@ -267,6 +284,25 @@ export const PreviewScreen = () => {
     );
 
     const handleLinkClick = async (url: string) => {
+        // 在线模式下的相对链接：按当前文件路径解析后跳转到另一个在线预览，而非交给系统浏览器
+        const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
+        if (!hasScheme && (source === 'server' || source === 'webdav')) {
+            const currentDir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+            const parts = (url.startsWith('/') ? url : (currentDir ? currentDir + '/' + url : url)).split('/');
+            const stack: string[] = [];
+            for (const part of parts) {
+                if (part === '..') stack.pop();
+                else if (part !== '.' && part !== '') stack.push(part);
+            }
+            const resolvedLink = (url.startsWith('/') ? '/' : '') + stack.join('/');
+            navigation.navigate('Preview', {
+                filePath: resolvedLink,
+                source,
+                title: resolvedLink.split('/').pop(),
+            });
+            return;
+        }
+
         try {
             const supported = await Linking.canOpenURL(url);
             if (supported) {

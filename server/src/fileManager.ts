@@ -293,16 +293,19 @@ export class FileManager {
         const resolvedPath = await this.resolveAndValidatePath(targetPath, false);
 
         // 同一目标文件的保存请求串行执行：乐观锁检查（mtime 比对）与临时文件替换必须在同一独占段内完成，
-        // 防止并发保存双双通过检查后，后一次 rename 静默覆盖前一次的修改
-        const previous = this.saveQueues.get(resolvedPath) ?? Promise.resolve();
+        // 防止并发保存双双通过检查后，后一次 rename 静默覆盖前一次的修改。
+        // 锁键基于最近已存在祖先的物理真实路径规范化，使根内符号链接别名（如 /allowed/link/a.md
+        // 与 /allowed/real/a.md 指向同一文件）进入同一队列串行
+        const lockKey = this.canonicalLockKey(resolvedPath);
+        const previous = this.saveQueues.get(lockKey) ?? Promise.resolve();
         let releaseSaveLock!: () => void;
         const gate = new Promise<void>((resolve) => { releaseSaveLock = resolve; });
         const tail = previous.then(() => gate);
-        this.saveQueues.set(resolvedPath, tail);
+        this.saveQueues.set(lockKey, tail);
         // 链尾自清理，避免长期运行后 Map 无限增长
         tail.catch(() => {}).then(() => {
-            if (this.saveQueues.get(resolvedPath) === tail) {
-                this.saveQueues.delete(resolvedPath);
+            if (this.saveQueues.get(lockKey) === tail) {
+                this.saveQueues.delete(lockKey);
             }
         });
 
@@ -420,6 +423,20 @@ export class FileManager {
             current = parent;
         }
         return current;
+    }
+
+    /**
+     * 规范化保存锁键：以最近已存在祖先的物理真实路径为锚点拼接剩余路径段，
+     * 使经根内符号链接访问的同一物理文件共享同一把锁
+     */
+    private canonicalLockKey(resolvedPath: string): string {
+        const anchor = this.findExistingAncestor(resolvedPath);
+        try {
+            const realAnchor = fs.realpathSync(anchor);
+            return path.join(realAnchor, path.relative(anchor, resolvedPath));
+        } catch {
+            return resolvedPath;
+        }
     }
 
     /**

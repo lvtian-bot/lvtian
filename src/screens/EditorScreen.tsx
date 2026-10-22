@@ -41,6 +41,8 @@ export const EditorScreen = () => {
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [isDirty, setIsDirty] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const saveInFlightRef = useRef(false);
     const [editorHtml, setEditorHtml] = useState<string | null>(null);
     const webViewRef = useRef<WebView>(null);
     const isDraftLoaded = useRef(false);
@@ -214,6 +216,10 @@ export const EditorScreen = () => {
     };
 
     const handleManualSave = useCallback(async (contentToSave: string) => {
+        // 阻断保存进行中的重复触发（连点保存按钮、WebView 重复回调），避免并发保存与重复成功提示
+        if (saveInFlightRef.current) return;
+        saveInFlightRef.current = true;
+        setIsSaving(true);
         try {
             if (isFlashMode && flashNoteId) {
                 // --- Flash Note Save Logic ---
@@ -279,6 +285,9 @@ export const EditorScreen = () => {
                 }
                 Alert.alert(t('common.error'), message);
             }
+        } finally {
+            saveInFlightRef.current = false;
+            setIsSaving(false);
         }
     }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);
 
@@ -408,11 +417,11 @@ export const EditorScreen = () => {
                 <TouchableOpacity
                     onPress={requestSaveFromWebView}
                     style={styles.headerButton}
-                    disabled={!isDirty}
+                    disabled={!isDirty || isSaving}
                 >
                     <Text style={[
                         styles.headerButtonText,
-                        !isDirty && styles.headerButtonTextDisabled
+                        (!isDirty || isSaving) && styles.headerButtonTextDisabled
                     ]}>{t('common.save')}</Text>
                 </TouchableOpacity>
             </View>

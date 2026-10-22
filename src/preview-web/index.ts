@@ -187,7 +187,8 @@ document.addEventListener('click', function (e) {
     const link = target.closest('a') as HTMLAnchorElement | null;
     if (link && link.href) {
         e.preventDefault();
-        sendMessage('LINK_CLICK', link.href);
+        // 发送 Markdown 原始 href：相对链接不经过 about:blank 解析污染，由原生侧按当前文件路径解析
+        sendMessage('LINK_CLICK', link.getAttribute('href') || link.href);
     }
 });
 

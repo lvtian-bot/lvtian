@@ -212,7 +212,10 @@ export class WebDavProvider implements ICloudProvider {
                 err.code = 'PreconditionFailed';
                 throw err;
             }
-            throw new Error(`WebDav 上传内容失败: ${response.status} ${response.statusText}`);
+            const err: any = new Error(`WebDav 上传内容失败: ${response.status} ${response.statusText}`);
+            err.status = response.status;
+            err.code = response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'REQUEST_FAILED';
+            throw err;
         }
     }
 
@@ -241,7 +244,10 @@ export class WebDavProvider implements ICloudProvider {
                 e.code = 'PreconditionFailed';
                 throw e;
             }
-            throw new Error(`WebDav Upload Failed: ${response.status} ${response.statusText}`);
+            const e: any = new Error(`WebDav Upload Failed: ${response.status} ${response.statusText}`);
+            e.status = response.status;
+            e.code = response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : 'REQUEST_FAILED';
+            throw e;
         }
 
         // Fetch verification metadata
