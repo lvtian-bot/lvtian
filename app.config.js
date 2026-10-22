@@ -154,11 +154,11 @@ module.exports = {
         },
         ios: {
             supportsTablet: true,
-            bundleIdentifier: "com.mdnote",
+            bundleIdentifier: "com.lvtian",
             buildNumber: "19"
         },
         android: {
-            package: "com.mdnote",
+            package: "com.lvtian",
             versionCode: 20,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
