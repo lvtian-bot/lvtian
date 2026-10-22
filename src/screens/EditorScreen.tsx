@@ -20,8 +20,29 @@ import { serverFileService } from '../services/ServerFileService';
 import { cloudService } from '../services/CloudService';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { useSettingsStore } from '../store/useSettingsStore';
+import * as Clipboard from 'expo-clipboard';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
+
+// 草稿载荷：内容与基线 mtime 以单键 JSON 原子存储，避免分开写入中断产生无基线草稿
+interface DraftPayload {
+    c: string;
+    m: number;
+}
+
+const parseDraft = (raw: string | null): { content: string; baselineMtime: number } | null => {
+    if (raw === null) return null;
+    try {
+        const parsed = JSON.parse(raw) as DraftPayload;
+        // 内容与基线字段同时齐备才按新格式解析，避免旧纯文本草稿恰好是 JSON 对象时被误读
+        if (typeof parsed.c === 'string' && typeof parsed.m === 'number') {
+            return { content: parsed.c, baselineMtime: parsed.m > 0 ? parsed.m : 0 };
+        }
+    } catch {
+        // 旧版以纯文本存储内容：可用但缺少基线
+    }
+    return { content: raw, baselineMtime: 0 };
+};
 
 // Helper Component for Header Button
 const HeaderBackButton = ({ onPress, text }: { onPress: () => void, text: string }) => (
@@ -51,7 +72,9 @@ export const EditorScreen = () => {
     const { markFileAsModified } = useFileMetadataStore();
 
     const isFlashMode = !!flashNoteId;
-    const serverPrefix = source === 'server' ? (serverUrl ? stableHash(serverUrl) : 'default') : '';
+    const { serverToken } = useAssistantStore.getState();
+    // 服务前缀含地址与令牌：同地址换令牌（重装、反代按令牌选实例）视为不同服务，草稿互不串用
+    const serverPrefix = source === 'server' ? (serverUrl ? stableHash(`${serverUrl}|${serverToken || ''}`) : 'default') : '';
     const { webDavConfig } = useSettingsStore.getState();
     const webdavPrefix = source === 'webdav'
         ? stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`)
@@ -91,67 +114,104 @@ export const EditorScreen = () => {
             }
 
             // Check for draft (Both modes support drafts)
-            let draftContent = await AsyncStorage.getItem(DRAFT_KEY);
-            if (draftContent === null && source === 'local' && !isFlashMode) {
+            let draft = parseDraft(await AsyncStorage.getItem(DRAFT_KEY));
+            if (draft === null && source === 'local' && !isFlashMode) {
                 // 兼容旧版本地草稿键名，若存在则自动平滑迁移
                 const legacyDraftKey = `editor_draft_${filePath}`;
-                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
-                if (legacyDraft !== null) {
-                    draftContent = legacyDraft;
-                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                draft = parseDraft(await AsyncStorage.getItem(legacyDraftKey));
+                if (draft !== null) {
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: draft.content, m: 0 } as DraftPayload));
                     await AsyncStorage.removeItem(legacyDraftKey);
                 }
-            } else if (draftContent === null && source === 'webdav') {
+            } else if (draft === null && source === 'webdav') {
                 // 兼容旧版未带账号前缀的 WebDAV 草稿键名，若存在则自动平滑迁移
                 const legacyDraftKey = `editor_draft_webdav_${filePath}`;
-                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
-                if (legacyDraft !== null) {
-                    draftContent = legacyDraft;
-                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                draft = parseDraft(await AsyncStorage.getItem(legacyDraftKey));
+                if (draft !== null) {
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: draft.content, m: 0 } as DraftPayload));
                     await AsyncStorage.removeItem(legacyDraftKey);
+                }
+            } else if (draft === null && source === 'server' && serverUrl) {
+                // 兼容旧版仅按服务地址哈希的 server 草稿键名（不含令牌维度），自动迁移
+                const legacyServerKey = `editor_draft_server_${stableHash(serverUrl)}_${filePath}`;
+                draft = parseDraft(await AsyncStorage.getItem(legacyServerKey));
+                if (draft !== null) {
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: draft.content, m: 0 } as DraftPayload));
+                    await AsyncStorage.removeItem(legacyServerKey);
                 }
             }
 
-            if (draftContent !== null && draftContent !== fileContent) {
-                Alert.alert(
-                    t('common.draftFound'),
-                    t('common.restoreDraftPrompt'),
-                    [
-                        {
-                            text: t('common.discard'),
-                            style: 'destructive',
-                            onPress: async () => {
-                                await AsyncStorage.removeItem(DRAFT_KEY);
-                                if (source === 'local' && !isFlashMode) {
-                                    await AsyncStorage.removeItem(`editor_draft_${filePath}`);
-                                }
-                                if (source === 'webdav') {
-                                    await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
-                                }
-                                setContent(fileContent);
-                                initialContentRef.current = fileContent;
-                                isDraftLoaded.current = true;
-                                webViewRef.current?.postMessage(JSON.stringify({
-                                    type: 'SET_CONTENT',
-                                    payload: fileContent,
-                                }));
+            if (draft !== null && draft.content !== fileContent) {
+                const discardDraft = async () => {
+                    await AsyncStorage.removeItem(DRAFT_KEY);
+                    if (source === 'local' && !isFlashMode) {
+                        await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                    }
+                    if (source === 'webdav') {
+                        await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
+                    }
+                    setContent(fileContent);
+                    initialContentRef.current = fileContent;
+                    isDraftLoaded.current = true;
+                    webViewRef.current?.postMessage(JSON.stringify({
+                        type: 'SET_CONTENT',
+                        payload: fileContent,
+                    }));
+                };
+
+                if (source === 'server' && !(draft.baselineMtime > 0)) {
+                    // 旧版 server 草稿缺少版本基线：恢复后保存会绕过乐观锁直接覆盖服务端内容，不提供恢复；
+                    // 草稿内容当前界面不可见，先提供「复制到剪贴板」再丢弃，避免内容无处保留即被销毁
+                    const legacyDraftContent = draft.content;
+                    Alert.alert(
+                        t('common.draftFound'),
+                        t('common.legacyDraftNoBaseline'),
+                        [
+                            {
+                                text: t('common.copyThenDiscard', { defaultValue: '复制后丢弃' }),
+                                onPress: async () => {
+                                    await Clipboard.setStringAsync(legacyDraftContent);
+                                    await discardDraft();
+                                    Alert.alert(t('common.tip'), t('common.draftCopied', { defaultValue: '草稿内容已复制到剪贴板' }));
+                                },
                             },
-                        },
-                        {
-                            text: t('common.restore'),
-                            onPress: () => {
-                                setContent(draftContent);
-                                initialContentRef.current = fileContent; // Initial is still origin content
-                                setIsDirty(true); // Draft implies dirty
-                                isDraftLoaded.current = true;
-                                webViewRef.current?.postMessage(JSON.stringify({
-                                    type: 'SET_CONTENT',
-                                    payload: draftContent,
-                                }));
+                            {
+                                text: t('common.discard'),
+                                style: 'destructive',
+                                onPress: discardDraft,
                             },
-                        },
-                    ]
-                );
+                        ]
+                    );
+                } else {
+                    Alert.alert(
+                        t('common.draftFound'),
+                        t('common.restoreDraftPrompt'),
+                        [
+                            {
+                                text: t('common.discard'),
+                                style: 'destructive',
+                                onPress: discardDraft,
+                            },
+                            {
+                                text: t('common.restore'),
+                                onPress: () => {
+                                    // 还原草稿的基线 mtime：草稿之后文件若被外部修改，保存会触发乐观锁冲突
+                                    if (draft && source === 'server' && draft.baselineMtime > 0) {
+                                        currentMtimeRef.current = draft.baselineMtime;
+                                    }
+                                    setContent(draft ? draft.content : fileContent);
+                                    initialContentRef.current = fileContent; // Initial is still origin content
+                                    setIsDirty(true); // Draft implies dirty
+                                    isDraftLoaded.current = true;
+                                    webViewRef.current?.postMessage(JSON.stringify({
+                                        type: 'SET_CONTENT',
+                                        payload: draft ? draft.content : fileContent,
+                                    }));
+                                },
+                            },
+                        ]
+                    );
+                }
             } else {
                 setContent(fileContent);
                 initialContentRef.current = fileContent;
@@ -167,7 +227,7 @@ export const EditorScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [filePath, DRAFT_KEY, t, isFlashMode, flashNoteId, paramInitialContent, source]);
+    }, [filePath, DRAFT_KEY, serverUrl, t, isFlashMode, flashNoteId, paramInitialContent, source]);
 
     useEffect(() => {
         loadFile();
@@ -197,7 +257,8 @@ export const EditorScreen = () => {
             try {
                 // Only save draft if dirty
                 if (isDirty) {
-                    await AsyncStorage.setItem(DRAFT_KEY, content);
+                    // 内容与基线 mtime 以单键 JSON 原子写入，避免分开写入中断产生无基线草稿
+                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: content, m: currentMtimeRef.current ?? 0 } as DraftPayload));
                 }
             } catch (error) {
                 console.error('Failed to save draft:', error);

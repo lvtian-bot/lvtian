@@ -73,9 +73,16 @@ export const PreviewScreen = () => {
 
         let result = rawText;
         for (const item of matches) {
-            const { full, src } = item;
-            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
+            const { full, src: rawSrc } = item;
+            if (rawSrc.startsWith('http://') || rawSrc.startsWith('https://') || rawSrc.startsWith('data:')) {
                 continue;
+            }
+            // 与链接一致：图片路径可能带 URI 百分号编码（如空格变 %20），先解码再解析
+            let src = rawSrc;
+            try {
+                src = decodeURIComponent(rawSrc);
+            } catch {
+                // 无效编码序列时按原样处理
             }
 
             try {
@@ -126,7 +133,7 @@ export const PreviewScreen = () => {
                     }
                     cacheInfo = await FileSystem.getInfoAsync(localUri);
                     if (cacheInfo.exists) {
-                        result = result.replace(full, full.replace(src, localUri));
+                        result = result.replace(full, full.replace(rawSrc, localUri));
                     }
                 } else if (source === 'webdav') {
                     // 纯在线网盘模式：下载到沙盒临时目录
@@ -151,7 +158,7 @@ export const PreviewScreen = () => {
                     }
                     cacheInfo = await FileSystem.getInfoAsync(localUri);
                     if (cacheInfo.exists) {
-                        result = result.replace(full, full.replace(src, localUri));
+                        result = result.replace(full, full.replace(rawSrc, localUri));
                     }
                 } else {
                     // 本地模式
@@ -312,14 +319,21 @@ export const PreviewScreen = () => {
                 // 纯锚点链接（#xxx）指向当前文档内位置，在线预览暂不支持锚点定位，忽略
                 return;
             }
+            // Markdown 渲染器输出的 href 可能带 URI 百分号编码（如空格变 %20），先解码再解析
+            let decodedLink = linkPathOnly;
+            try {
+                decodedLink = decodeURIComponent(linkPathOnly);
+            } catch {
+                // 无效编码序列时按原样处理
+            }
             const currentDir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
-            const parts = (linkPathOnly.startsWith('/') ? linkPathOnly : (currentDir ? currentDir + '/' + linkPathOnly : linkPathOnly)).split('/');
+            const parts = (decodedLink.startsWith('/') ? decodedLink : (currentDir ? currentDir + '/' + decodedLink : decodedLink)).split('/');
             const stack: string[] = [];
             for (const part of parts) {
                 if (part === '..') stack.pop();
                 else if (part !== '.' && part !== '') stack.push(part);
             }
-            const needsLeadingSlash = linkPathOnly.startsWith('/') || (source === 'server' && filePath.startsWith('/'));
+            const needsLeadingSlash = decodedLink.startsWith('/') || (source === 'server' && filePath.startsWith('/'));
             const resolvedLink = (needsLeadingSlash ? '/' : '') + stack.join('/');
             navigation.navigate('Preview', {
                 filePath: resolvedLink,

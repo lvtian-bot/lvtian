@@ -120,7 +120,7 @@ export class ServerFileService {
             }
             // 传输层立即失败（连接拒绝、服务器离线等）：包装为结构化错误码，供前端按语言映射
             if (!(err instanceof ServerFileError)) {
-                const wrapped: any = new Error(errObj.message || 'Network request failed');
+                const wrapped = new Error(errObj.message || 'Network request failed') as Error & { code?: string };
                 wrapped.code = 'network';
                 throw wrapped;
             }
@@ -197,7 +197,12 @@ export class ServerFileService {
         try {
             const downloadResult = await Promise.race([resumable.downloadAsync(), timeoutPromise]);
             if (downloadResult?.status !== 200) {
-                throw new ServerFileError(`下载失败，服务端返回状态码: ${downloadResult?.status ?? 'unknown'}`, 'DOWNLOAD_FAILED', downloadResult?.status ?? 500);
+                const status = downloadResult?.status ?? 500;
+                // 仅 401 是鉴权失败；403 可能是文件权限或符号链接边界拒绝，不能误报为令牌问题
+                if (status === 401) {
+                    throw new ServerFileError('鉴权失败，请检查服务端令牌配置', 'UNAUTHORIZED', status);
+                }
+                throw new ServerFileError(`下载失败，服务端返回状态码: ${status}`, 'DOWNLOAD_FAILED', status);
             }
 
             return downloadResult.uri;

@@ -182,9 +182,9 @@ export const ServerFileScreen = () => {
     useFocusEffect(
         useCallback(() => {
             if (isConfigured) {
-                if (!hasLoadedInitialRef.current) {
-                    loadDirectory(undefined);
-                }
+                // 每次获焦都刷新当前目录：助理生成文件、外部进程增删文件后，
+                // 返回本页即呈现最新内容，而不是一直显示首次进入时的旧列表
+                loadDirectory(hasLoadedInitialRef.current ? currentPathRef.current : undefined);
             }
 
             // 仅在当前屏幕获焦时监听 Android 返回键：如果在子目录，先返回上级
@@ -252,7 +252,9 @@ export const ServerFileScreen = () => {
             const cacheDir = FileSystem.cacheDirectory || '';
             // 文件名可能含 #、? 等 URI 保留字符，直接拼接会被解析为片段或查询符，
             // 用名称哈希构造缓存目标，保留扩展名便于系统分享识别类型
-            const ext = item.name.lastIndexOf('.') !== -1 ? item.name.substring(item.name.lastIndexOf('.')) : '';
+            // 扩展名同样过滤 URI 保留字符（如 data.v?2 的 ?），保留供分享识别类型的后缀
+            const rawExt = item.name.lastIndexOf('.') !== -1 ? item.name.substring(item.name.lastIndexOf('.')) : '';
+            const ext = rawExt.replace(/[^a-zA-Z0-9._-]/g, '');
             const tempLocalUri = `${cacheDir}server_${Date.now()}_${stableHash(item.name)}${ext}`;
 
             await serverFileService.downloadFile(item.path, tempLocalUri);

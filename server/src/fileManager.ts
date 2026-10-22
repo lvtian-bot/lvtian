@@ -42,12 +42,25 @@ export class FileManagerError extends Error {
 export class FileManager {
     private workspaceDir: string;
     private allowedRoot: string;
+    /** 家目录的物理真实路径：与 allowedRoot 同一命名空间，`~` 展开与系统信息广播保持一致 */
+    private homeDirReal: string;
     /** 按目标路径串行化保存操作：乐观锁检查与临时文件替换必须独占执行，防止并发保存互相覆盖 */
     private saveQueues = new Map<string, Promise<unknown>>();
 
     constructor(workspaceDir?: string, allowedRoot?: string) {
-        this.workspaceDir = workspaceDir ? path.resolve(workspaceDir) : path.join(os.homedir(), 'workspace');
-        this.allowedRoot = allowedRoot ? path.resolve(allowedRoot) : os.homedir();
+        // 根目录自身可能包含符号链接段（如 /home -> /var/home）：
+        // 统一规范化为物理真实路径，后续 realpath 边界比较才不会把界内文件误判为逃逸
+        this.homeDirReal = this.canonicalizeRoot(os.homedir());
+        this.workspaceDir = this.canonicalizeRoot(workspaceDir ? path.resolve(workspaceDir) : path.join(os.homedir(), 'workspace'));
+        this.allowedRoot = this.canonicalizeRoot(allowedRoot ? path.resolve(allowedRoot) : os.homedir());
+    }
+
+    private canonicalizeRoot(root: string): string {
+        try {
+            return fs.realpathSync(root);
+        } catch {
+            return root; // 目录尚不存在时保留词法路径，后续创建后由祖先真实路径校验兜底
+        }
     }
 
     /**
@@ -55,7 +68,7 @@ export class FileManager {
      */
     public getSystemInfo(): FileSystemInfo {
         return {
-            homeDir: os.homedir(),
+            homeDir: this.homeDirReal,
             workspaceDir: this.workspaceDir,
             allowedRoot: this.allowedRoot,
             separator: path.sep,
@@ -71,11 +84,14 @@ export class FileManager {
         if (!inputPath || inputPath.trim() === '') {
             resolved = this.allowedRoot;
         } else if (inputPath.startsWith('~/') || inputPath === '~') {
-            resolved = path.join(os.homedir(), inputPath.slice(1));
+            resolved = path.join(this.homeDirReal, inputPath.slice(1));
         } else {
             // 保留文件名首尾合法空格，不破坏具体文件名
             resolved = path.resolve(inputPath);
         }
+        // 统一拉入物理命名空间（最近存在祖先物理化 + 剩余段拼接），
+        // 与物理 allowedRoot 前缀比较才不会因输入路径含符号链接段而误判
+        resolved = this.canonicalizePath(resolved);
 
         const isWindows = process.platform === 'win32';
         const normTarget = isWindows ? resolved.toLowerCase() : resolved;
@@ -113,10 +129,11 @@ export class FileManager {
         if (!inputPath || inputPath.trim() === '') {
             resolved = this.allowedRoot;
         } else if (inputPath.startsWith('~/') || inputPath === '~') {
-            resolved = path.join(os.homedir(), inputPath.slice(1));
+            resolved = path.join(this.homeDirReal, inputPath.slice(1));
         } else {
             resolved = path.resolve(inputPath);
         }
+        resolved = this.canonicalizePath(resolved);
 
         const isWindows = process.platform === 'win32';
         const normTarget = isWindows ? resolved.toLowerCase() : resolved;
@@ -260,23 +277,31 @@ export class FileManager {
         }
 
         try {
-            // 经文件句柄限定读取字节数：文件在 stat 之后增长（如日志追加）也不会返回超出上限的内容
+            // 循环读取直到文件尾或超限：缓冲长度不依赖打开前的 stat，
+            // 文件在 stat 与 open 之间增长也不会把截断内容当作完整结果返回
             const handle = await fs.promises.open(resolvedPath, 'r');
             try {
-                const readLen = Math.min(stats.size, maxBytes) + 1; // 多读 1 字节用于检测 stat 后增长超限
-                const buf = Buffer.alloc(readLen);
-                const { bytesRead } = await handle.read(buf, 0, readLen, 0);
-                if (bytesRead > maxBytes) {
-                    throw new FileManagerError(
-                        `文件过大，超出最大支持大小（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`,
-                        'LIMIT_EXCEEDED',
-                        400
-                    );
+                const chunkSize = 1024 * 1024;
+                const chunks: Buffer[] = [];
+                let totalBytes = 0;
+                while (totalBytes <= maxBytes) {
+                    const buf = Buffer.alloc(Math.min(chunkSize, maxBytes + 1 - totalBytes));
+                    const { bytesRead } = await handle.read(buf, 0, buf.length, null);
+                    if (bytesRead === 0) break;
+                    totalBytes += bytesRead;
+                    if (totalBytes > maxBytes) {
+                        throw new FileManagerError(
+                            `文件过大，超出最大支持大小（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`,
+                            'LIMIT_EXCEEDED',
+                            400
+                        );
+                    }
+                    chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
                 }
                 return {
-                    content: buf.subarray(0, bytesRead).toString('utf8'),
+                    content: Buffer.concat(chunks).toString('utf8'),
                     mtime: stats.mtimeMs,
-                    size: bytesRead,
+                    size: totalBytes,
                 };
             } finally {
                 await handle.close();
@@ -312,7 +337,7 @@ export class FileManager {
         // 防止并发保存双双通过检查后，后一次 rename 静默覆盖前一次的修改。
         // 锁键基于最近已存在祖先的物理真实路径规范化，使根内符号链接别名（如 /allowed/link/a.md
         // 与 /allowed/real/a.md 指向同一文件）进入同一队列串行
-        const lockKey = this.canonicalLockKey(resolvedPath);
+        const lockKey = this.canonicalizePath(resolvedPath);
         const previous = this.saveQueues.get(lockKey) ?? Promise.resolve();
         let releaseSaveLock!: () => void;
         const gate = new Promise<void>((resolve) => { releaseSaveLock = resolve; });
@@ -458,10 +483,11 @@ export class FileManager {
     }
 
     /**
-     * 规范化保存锁键：以最近已存在祖先的物理真实路径为锚点拼接剩余路径段，
-     * 使经根内符号链接访问的同一物理文件共享同一把锁
+     * 统一路径命名空间：以最近已存在祖先的物理真实路径为锚点拼接剩余路径段。
+     * 用于路径边界校验（词法输入与物理 allowedRoot 可比）与保存锁键
+     * （经根内符号链接访问的同一物理文件共享同一把锁）
      */
-    private canonicalLockKey(resolvedPath: string): string {
+    private canonicalizePath(resolvedPath: string): string {
         const anchor = this.findExistingAncestor(resolvedPath);
         try {
             const realAnchor = fs.realpathSync(anchor);
