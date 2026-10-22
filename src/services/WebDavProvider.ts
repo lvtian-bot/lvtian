@@ -42,6 +42,8 @@ export class WebDavProvider implements ICloudProvider {
 
     private async requestWithRetry(method: string, key: string, headers: Record<string, string> = {}, body?: string | Blob | ArrayBuffer, retries = 3): Promise<Response> {
         const url = this.getUrl(key);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时熔断防挂死
 
         try {
             const response = await fetch(url, {
@@ -52,7 +54,8 @@ export class WebDavProvider implements ICloudProvider {
                     'Pragma': 'no-cache',
                     ...headers
                 },
-                body: body as any
+                body: body as any,
+                signal: controller.signal,
             });
 
             // Handle Rate Limiting (429) and Service Unavailable (503)
@@ -67,6 +70,12 @@ export class WebDavProvider implements ICloudProvider {
 
             return response;
         } catch (error: any) {
+            if (error?.name === 'AbortError') {
+                const timeoutErr: any = new Error('网盘请求超时，请检查网络连接');
+                timeoutErr.code = 'TIMEOUT';
+                throw timeoutErr;
+            }
+
             // Retry on network errors
             if (retries > 0 && (error?.message === 'Network request failed' || error?.message?.includes('Network request failed'))) {
                 const delay = 1000 * (4 - retries) + Math.random() * 500;
@@ -81,6 +90,8 @@ export class WebDavProvider implements ICloudProvider {
                 console.error(`[WebDav] Request failed: ${method} ${url}`, error);
             }
             throw error;
+        } finally {
+            clearTimeout(timeoutId);
         }
     }
 

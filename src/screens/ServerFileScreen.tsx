@@ -42,6 +42,8 @@ const TEXT_EXTENSIONS = new Set([
     '.csv',
 ]);
 
+const MAX_PREVIEW_SIZE = 5 * 1024 * 1024; // 5MB
+
 interface HeaderCloudButtonProps {
     onPress: () => void;
     label: string;
@@ -199,7 +201,9 @@ export const ServerFileScreen = () => {
         }
 
         const ext = item.extension.toLowerCase();
-        if (TEXT_EXTENSIONS.has(ext)) {
+        const isSupportedText = TEXT_EXTENSIONS.has(ext);
+
+        if (isSupportedText && item.size <= MAX_PREVIEW_SIZE) {
             // 支持文本/Markdown 预览与轻度编辑
             navigation.navigate('Preview', {
                 filePath: item.path,
@@ -207,12 +211,18 @@ export const ServerFileScreen = () => {
                 title: item.name,
             });
         } else {
-            // 其他类型提示下载并打开
+            // 非文本类型或超过 5MB 的超大文本文件提示下载并打开
+            const promptMessage = isSupportedText && item.size > MAX_PREVIEW_SIZE
+                ? t('browser.oversizedPreviewPrompt', {
+                    defaultValue: '该文件体积超过 5MB 无法直接文本预览，是否下载并调起系统应用打开？',
+                })
+                : t('browser.unsupportedPreviewPrompt', {
+                    defaultValue: '该文件类型无法直接文本预览，是否下载并调起系统应用打开？',
+                });
+
             Alert.alert(
                 item.name,
-                t('browser.unsupportedPreviewPrompt', {
-                    defaultValue: '该文件类型无法直接文本预览，是否下载并调起系统应用打开？',
-                }),
+                promptMessage,
                 [
                     { text: t('common.cancel', { defaultValue: '取消' }), style: 'cancel' },
                     { text: t('common.download', { defaultValue: '下载并打开' }), onPress: () => handleDownloadAndOpen(item) },

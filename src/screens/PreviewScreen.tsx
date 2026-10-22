@@ -151,7 +151,13 @@ export const PreviewScreen = () => {
             setContent(fileContent);
         } catch (err: unknown) {
             setLoadFailed(true);
-            Alert.alert(t('common.error'), (err as Error).message || t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' }));
+            const serverErr = err as { code?: string; message?: string };
+            const code = serverErr.code;
+            let message = (err as Error).message || t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' });
+            if (code) {
+                message = t(`browser.error.${code}`, { defaultValue: message });
+            }
+            Alert.alert(t('common.error'), message);
         } finally {
             setLoading(false);
         }

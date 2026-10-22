@@ -220,6 +220,10 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
         const unauthRes = await fetch(`${baseUrl}/api/files/info`);
         assert.equal(unauthRes.status, 401);
 
+        // 1.1 仅在 URL query 中传 Token 应被拒绝（401），防反向代理/日志泄露
+        const queryTokenRes = await fetch(`${baseUrl}/api/files/info?token=${token}`);
+        assert.equal(queryTokenRes.status, 401);
+
         // 2. 携带有效 Token 访问 /api/files/info
         const infoRes = await fetch(`${baseUrl}/api/files/info`, {
             headers: { Authorization: `Bearer ${token}` },

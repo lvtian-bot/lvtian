@@ -64,11 +64,12 @@ export class LvtianServer {
         this.setupWebSocket();
     }
 
-    private isAuthorized(req: http.IncomingMessage, urlObj: URL): boolean {
+    private isAuthorized(req: http.IncomingMessage): boolean {
         const authHeader = req.headers.authorization;
-        const token = authHeader?.startsWith('Bearer ')
-            ? authHeader.slice(7)
-            : urlObj.searchParams.get('token');
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return false;
+        }
+        const token = authHeader.slice(7).trim();
         return token === this.config.token;
     }
 
@@ -152,7 +153,7 @@ export class LvtianServer {
 
         // 统一鉴权拦截：所有 /api/* 均需要 Bearer Token
         if (pathname.startsWith('/api/')) {
-            if (!this.isAuthorized(req, urlObj)) {
+            if (!this.isAuthorized(req)) {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: '无效的访问令牌（Unauthorized）' }));
                 return;

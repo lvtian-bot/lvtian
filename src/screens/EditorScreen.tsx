@@ -82,18 +82,18 @@ export const EditorScreen = () => {
 
             // Check for draft (Both modes support drafts)
             let draftContent = await AsyncStorage.getItem(DRAFT_KEY);
-            if (!draftContent && source === 'local' && !isFlashMode) {
+            if (draftContent === null && source === 'local' && !isFlashMode) {
                 // 兼容旧版本地草稿键名，若存在则自动平滑迁移
                 const legacyDraftKey = `editor_draft_${filePath}`;
                 const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
-                if (legacyDraft) {
+                if (legacyDraft !== null) {
                     draftContent = legacyDraft;
                     await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
                     await AsyncStorage.removeItem(legacyDraftKey);
                 }
             }
 
-            if (draftContent && draftContent !== fileContent) {
+            if (draftContent !== null && draftContent !== fileContent) {
                 Alert.alert(
                     t('common.draftFound'),
                     t('common.restoreDraftPrompt'),

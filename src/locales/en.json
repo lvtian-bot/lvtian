@@ -130,6 +130,7 @@
     "parentDir": "Up",
     "emptyDirectory": "No files in this directory",
     "unsupportedPreviewPrompt": "Text preview is not available for this file type. Download and open with system app?",
+    "oversizedPreviewPrompt": "This file exceeds 5MB and cannot be previewed as text. Download and open with system app?",
     "unsupportedTextPreview": "This file is not a supported text or Markdown format and cannot be previewed online.",
     "fileTooLargePreview": "This file exceeds 5MB and cannot be previewed on mobile.",
     "shareUnavailable": "Sharing is not available on this device",

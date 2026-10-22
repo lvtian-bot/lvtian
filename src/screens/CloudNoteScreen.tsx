@@ -67,6 +67,9 @@ export const CloudNoteScreen = () => {
     useEffect(() => {
         const checkConfig = () => {
             setIsConfigured(cloudService.isConfigured());
+            // 当网盘重新配置或初始化时，重置当前子路径到根目录，清空旧条目，避免跨账号/新配置请求旧子目录
+            setCurrentPrefix('');
+            setItems([]);
         };
         const sub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, checkConfig);
         checkConfig();
