@@ -6,11 +6,11 @@ import {
     TextInput,
     TouchableOpacity,
     FlatList,
-    KeyboardAvoidingView,
-    Platform,
     ActivityIndicator,
     Alert,
+    Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -139,12 +139,12 @@ export const ChatScreen = () => {
     }
 
     // 2. 正常聊天界面
-    // 键盘避让：iOS 用 padding 模式；Android 依赖 windowSoftInputMode=resize
-    // （app.config.js softwareKeyboardLayoutMode）+ 键盘弹起时 TabNavigator 自动隐藏底部 Tab 栏
+    // 键盘避让：react-native-keyboard-controller（与 Journal 日记同款方案），
+    // 双端 padding 模式平滑跟随键盘，不依赖原生窗口模式配置
     return (
         <KeyboardAvoidingView
             style={styles.chatContainer}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior="padding"
             keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
         >
             {/* 连接异常时才显示状态提示条；已连接时保持界面干净 */}

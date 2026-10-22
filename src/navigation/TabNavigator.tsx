@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Keyboard, KeyboardEvent, Platform } from 'react-native';
+import React from 'react';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -14,12 +13,6 @@ import { MeScreen } from '../screens/MeScreen';
 import { MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
-
-const styles = StyleSheet.create({
-    hiddenTabBar: {
-        display: 'none',
-    },
-});
 
 const ChatStack = createNativeStackNavigator();
 const FlashStack = createNativeStackNavigator();
@@ -124,57 +117,26 @@ export const TabNavigator = () => {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
 
-    // 聊天页键盘弹起时隐藏底部 Tab 栏，让输入框紧贴键盘
-    const [keyboardVisible, setKeyboardVisible] = useState(false);
-
-    useEffect(() => {
-        const onKeyboardShow = (_e: KeyboardEvent) => {
-            setKeyboardVisible(true);
-        };
-        const onKeyboardHide = () => {
-            setKeyboardVisible(false);
-        };
-
-        const showSubscription = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-            onKeyboardShow
-        );
-        const hideSubscription = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-            onKeyboardHide
-        );
-
-        return () => {
-            showSubscription.remove();
-            hideSubscription.remove();
-        };
-    }, []);
-
-    const defaultTabBarStyle = {
-        backgroundColor: theme.colors.surface,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.border,
-        elevation: 8,
-        paddingBottom: insets.bottom,
-        paddingTop: 0,
-    };
-
     return (
         <Tab.Navigator
             tabBarPosition="bottom"
             initialRouteName="Flash"
             backBehavior="initialRoute"
             initialLayout={{ width: 0 }}
-            screenOptions={({ route }) => ({
+            screenOptions={{
                 swipeEnabled: false,
                 animationEnabled: false,
                 tabBarShowIcon: true,
                 tabBarShowLabel: true,
                 tabBarIndicatorStyle: { height: 0 },
-                tabBarStyle:
-                    route.name === 'Chat' && keyboardVisible
-                        ? styles.hiddenTabBar
-                        : defaultTabBarStyle,
+                tabBarStyle: {
+                    backgroundColor: theme.colors.surface,
+                    borderTopWidth: 1,
+                    borderTopColor: theme.colors.border,
+                    elevation: 8,
+                    paddingBottom: insets.bottom,
+                    paddingTop: 0,
+                },
                 tabBarActiveTintColor: theme.colors.primary,
                 tabBarInactiveTintColor: 'gray',
                 tabBarItemStyle: {
@@ -185,7 +147,7 @@ export const TabNavigator = () => {
                     textTransform: 'none',
                     margin: 0,
                 },
-            })}
+            }}
         >
             <Tab.Screen
                 name="Chat"
