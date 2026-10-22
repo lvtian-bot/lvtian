@@ -137,8 +137,8 @@ const withCustomGradleProperties = (config) => {
 
 module.exports = {
     expo: {
-        name: "MDNote",
-        slug: "mdnote",
+        name: "绿天",
+        slug: "lvtian",
         version: pkg.version,
         locales: {
             en: "./config-locales/en.json",
