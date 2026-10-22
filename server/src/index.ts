@@ -61,7 +61,7 @@ async function main() {
     console.log(`🌿 绿天个人助理独立服务端 (Lvtian Server)`);
     console.log('====================================================');
 
-    const memoryManager = new MemoryManager();
+    const memoryManager = new MemoryManager(config.workspace);
     const sessionManager = new SessionManager(config.dataDir);
     const dshRunner = new DshRunner(config.workspace, memoryManager, sessionManager);
     const fileManager = new FileManager(config.workspace);
@@ -78,7 +78,7 @@ async function main() {
     }
     console.log(`\n🔑 访问令牌:         ${maskedToken} (安全脱敏，查看完整凭据: npm run token 或 node dist/index.js --show-token)`);
     console.log(`📂 工作区目录:       ${config.workspace}`);
-    console.log(`🧠 记忆系统目录:     ${os.homedir()} (SOUL.md, MEMORY.md, USER.md)`);
+    console.log(`🧠 记忆系统目录:     ${memoryManager.getBaseDir()} (SOUL.md, MEMORY.md, USER.md)`);
     console.log(`⚙️ 配置文件路径:     ~/.config/lvtian/config.json (权限 0600)`);
     console.log('====================================================\n');
 

@@ -109,6 +109,61 @@ test('scripts match server absolute entrypoint as exact argv and reject sub-path
     assert.equal(isServerArgv(['cat', 'other-data']), false);
 });
 
+test('MemoryManager loads context from workspace directory and preserves existing content', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-mm-'));
+    // 写入预置工作区文件
+    fs.writeFileSync(path.join(tmpDir, 'SOUL.md'), '# 自定义灵魂准则\n忠诚敏锐');
+    fs.writeFileSync(path.join(tmpDir, 'MEMORY.md'), '# 自定义长期记忆\n偏好中文交流');
+    fs.writeFileSync(path.join(tmpDir, 'USER.md'), '# 主人档案\n称呼：先生');
+
+    const mm = new MemoryManager(tmpDir);
+    assert.equal(mm.getBaseDir(), tmpDir);
+
+    const ctx = mm.loadContext();
+    assert.equal(ctx.soul, '# 自定义灵魂准则\n忠诚敏锐');
+    assert.equal(ctx.memory, '# 自定义长期记忆\n偏好中文交流');
+    assert.equal(ctx.user, '# 主人档案\n称呼：先生');
+
+    // 验证追加流水日志写入 workspace/memory/
+    mm.appendDailyLog('测试标题', '测试内容流水');
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyFile = path.join(tmpDir, 'memory', `${today}.md`);
+    assert.ok(fs.existsSync(dailyFile));
+    const dailyContent = fs.readFileSync(dailyFile, 'utf8');
+    assert.ok(dailyContent.includes('测试标题'));
+    assert.ok(dailyContent.includes('测试内容流水'));
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('MemoryManager preserves existing Git-cloned workspace files and normalizes permissions', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-git-workspace-'));
+    // 模拟用户通过 Git 将已有仓库克隆到工作区，生成普通 0644 权限文件
+    const soulPath = path.join(tmpDir, 'SOUL.md');
+    const memoryPath = path.join(tmpDir, 'MEMORY.md');
+    const userPath = path.join(tmpDir, 'USER.md');
+
+    fs.writeFileSync(soulPath, '# 历史积累灵魂\n忠诚果断', { mode: 0o644 });
+    fs.writeFileSync(memoryPath, '# 历史沉淀长期记忆\n偏好自然语言', { mode: 0o644 });
+    fs.writeFileSync(userPath, '# 历史主人档案\n称呼：先生', { mode: 0o644 });
+
+    const mm = new MemoryManager(tmpDir);
+    const ctx = mm.loadContext();
+
+    // 验证完全直接使用 Git 检出的老机器人记忆，未被默认模板覆盖
+    assert.equal(ctx.soul, '# 历史积累灵魂\n忠诚果断');
+    assert.equal(ctx.memory, '# 历史沉淀长期记忆\n偏好自然语言');
+    assert.equal(ctx.user, '# 历史主人档案\n称呼：先生');
+
+    // 验证权限已安全收紧为 0600（Windows 不支持 POSIX 三段权限位，做跨平台兼容判断）
+    if (process.platform !== 'win32') {
+        const stat = fs.statSync(soulPath);
+        assert.equal((stat.mode & 0o777), 0o600);
+    }
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('composite final text preserves earlier committed segments and replaces truncated terminal segment', () => {
     // 模拟包含工具调用的多阶段输出：工具前有 text 事件，工具后有截断 text 事件，最终有无损 final 事件
     const committedSegments = ['好的，我正在为您查询日程...', '日程如下（截断）：- 会议'];
