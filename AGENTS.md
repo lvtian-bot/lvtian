@@ -160,7 +160,7 @@ MDNote/
 │   ├── hooks/                       # 自定义 Hooks (useCloudSync, useFlashNoteList...)
 │   ├── locales/                     # 国际化语言包 (zh.json, en.json)
 │   ├── navigation/                  # 导航配置 (AppNavigator, TabNavigator, NoteNavigator)
-│   ├── screens/                     # 页面级组件 (FlashScreen, TodoScreen, NoteScreen, PreviewScreen, EditorScreen...)
+│   ├── screens/                     # 页面级组件 (FlashScreen, TodoScreen, ChatScreen, ServerFileScreen, CloudNoteScreen, PreviewScreen, EditorScreen...)
 │   ├── services/                    # ⭐ 业务逻辑服务层 (业务中枢)
 │   │   ├── CloudService.ts          # 云服务策略入口 (ICloudProvider)
 │   │   ├── WebDavProvider.ts        # WebDAV 协议实现
@@ -208,7 +208,7 @@ MDNote/
 | `docs/多云端/` | `多云端架构与实现.md`（ICloudProvider 策略模式、WebDAV 映射、COS 退役清理）＋ `多云端问题记录.md` |
 | `docs/编辑器/` | `编辑器架构与选型.md`（CodeMirror 6 嵌入、Vite 单文件打包注入、Bridge 协议）＋ `编辑器问题记录.md` |
 | `docs/闪念与待办/` | `闪念与待办业务逻辑.md`（时间线格式规范、待办演进说明）＋ `闪念与待办问题记录.md` |
-| `docs/浏览与缓存/` | `云优先架构与按需缓存.md`（“列表即菜单，点击即下单”、View/Action 分层、单向数据流）＋ `浏览与缓存问题记录.md` |
+| `docs/系统文件/` | `系统文件与在线网盘.md`（直连服务端真实目录、纯在线云盘轻度浏览与编辑统一入口） |
 | `docs/分享与原生插件/` | `分享扩展与原生插件配置.md`（跨进程分享广播、Config Plugins）＋ `分享与原生插件问题记录.md`（新架构生命周期修复） |
 | `docs/运维与排障/` | `故障排查与速查手册.md`（全链路排查步骤、错误代码速查表、日志收集）＋ `运维与排障问题记录.md` |
 | `docs/TODO.md` | **任务待办登记**：新功能 / Bug 修复 / 暂不考虑；发版时归档至 `docs/TODO-ARCHIVE.md` |

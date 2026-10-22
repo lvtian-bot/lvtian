@@ -78,6 +78,7 @@ export const ServerFileScreen = () => {
     const parentPathRef = useRef<string | null>(null);
     const hasLoadedInitialRef = useRef<boolean>(false);
     const prevServerUrl = useRef(serverUrl);
+    const requestIdRef = useRef<number>(0);
 
     useEffect(() => {
         if (prevServerUrl.current !== serverUrl) {
@@ -118,6 +119,8 @@ export const ServerFileScreen = () => {
                 return;
             }
 
+            const requestId = ++requestIdRef.current;
+
             if (isRefresh) {
                 setRefreshing(true);
             } else {
@@ -130,12 +133,14 @@ export const ServerFileScreen = () => {
                 let currentSysInfo = systemInfo;
                 if (!currentSysInfo) {
                     currentSysInfo = await serverFileService.getSystemInfo();
+                    if (requestId !== requestIdRef.current) return;
                     setSystemInfo(currentSysInfo);
                 }
 
                 // 首次进入默认打开主目录
                 const pathToLoad = targetPath !== undefined ? targetPath : (currentPathRef.current || currentSysInfo.homeDir);
                 const listing = await serverFileService.listDirectory(pathToLoad);
+                if (requestId !== requestIdRef.current) return;
 
                 setCurrentPath(listing.currentPath);
                 setParentPath(listing.parentPath);
@@ -144,6 +149,7 @@ export const ServerFileScreen = () => {
                 hasLoadedInitialRef.current = true;
                 setItems(listing.items);
             } catch (err: unknown) {
+                if (requestId !== requestIdRef.current) return;
                 const serverErr = err as { code?: string; message?: string };
                 const code = serverErr.code;
                 let message = (err as Error).message || '读取目录失败';
@@ -152,8 +158,10 @@ export const ServerFileScreen = () => {
                 }
                 setErrorMessage(message);
             } finally {
-                setLoading(false);
-                setRefreshing(false);
+                if (requestId === requestIdRef.current) {
+                    setLoading(false);
+                    setRefreshing(false);
+                }
             }
         },
         [isConfigured, systemInfo, t]

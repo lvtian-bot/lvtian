@@ -149,16 +149,13 @@ export const PreviewScreen = () => {
             }
 
             setContent(fileContent);
-            if (isWebViewReady) {
-                await sendContentToWebView(fileContent);
-            }
         } catch (err: unknown) {
             setLoadFailed(true);
             Alert.alert(t('common.error'), (err as Error).message || t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' }));
         } finally {
             setLoading(false);
         }
-    }, [filePath, source, isWebViewReady, sendContentToWebView, t]);
+    }, [filePath, source, t]);
 
     // Push content when WebView is ready
     useEffect(() => {

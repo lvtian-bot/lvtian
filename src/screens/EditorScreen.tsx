@@ -63,7 +63,8 @@ export const EditorScreen = () => {
             if (isFlashMode) {
                 // Flash Note Mode: Use passed content directly
                 fileContent = paramInitialContent || '';
-            } else if (paramInitialContent !== undefined) {
+            } else if (source !== 'local' && paramInitialContent !== undefined) {
+                // 纯在线模式（VPS / 网盘）：直接信任并复用刚拉取的预览快照，避免重复网络请求
                 fileContent = paramInitialContent;
             } else if (source === 'server') {
                 const res = await serverFileService.readFileContent(filePath);
@@ -72,7 +73,7 @@ export const EditorScreen = () => {
             } else if (source === 'webdav') {
                 fileContent = await cloudService.getCloudFileContent(filePath);
             } else {
-                // File Mode: Read from FS
+                // 本地文件模式：始终从手机本地沙盒重新读取最新内容，防止覆盖后台同步拉取的最新版本
                 const exists = await fsService.exists(filePath);
                 if (exists) {
                     fileContent = await fsService.readFile(filePath);
@@ -80,7 +81,17 @@ export const EditorScreen = () => {
             }
 
             // Check for draft (Both modes support drafts)
-            const draftContent = await AsyncStorage.getItem(DRAFT_KEY);
+            let draftContent = await AsyncStorage.getItem(DRAFT_KEY);
+            if (!draftContent && source === 'local' && !isFlashMode) {
+                // 兼容旧版本地草稿键名，若存在则自动平滑迁移
+                const legacyDraftKey = `editor_draft_${filePath}`;
+                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
+                if (legacyDraft) {
+                    draftContent = legacyDraft;
+                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                    await AsyncStorage.removeItem(legacyDraftKey);
+                }
+            }
 
             if (draftContent && draftContent !== fileContent) {
                 Alert.alert(
@@ -92,9 +103,16 @@ export const EditorScreen = () => {
                             style: 'destructive',
                             onPress: async () => {
                                 await AsyncStorage.removeItem(DRAFT_KEY);
+                                if (source === 'local' && !isFlashMode) {
+                                    await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                                }
                                 setContent(fileContent);
                                 initialContentRef.current = fileContent;
                                 isDraftLoaded.current = true;
+                                webViewRef.current?.postMessage(JSON.stringify({
+                                    type: 'SET_CONTENT',
+                                    payload: fileContent,
+                                }));
                             },
                         },
                         {
@@ -104,6 +122,10 @@ export const EditorScreen = () => {
                                 initialContentRef.current = fileContent; // Initial is still origin content
                                 setIsDirty(true); // Draft implies dirty
                                 isDraftLoaded.current = true;
+                                webViewRef.current?.postMessage(JSON.stringify({
+                                    type: 'SET_CONTENT',
+                                    payload: draftContent,
+                                }));
                             },
                         },
                     ]
@@ -208,6 +230,9 @@ export const EditorScreen = () => {
 
             // Common Post-Save Cleanup
             await AsyncStorage.removeItem(DRAFT_KEY);
+            if (source === 'local' && !isFlashMode) {
+                await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+            }
             setIsDirty(false);
             setContent(contentToSave);
             initialContentRef.current = contentToSave;
@@ -240,6 +265,9 @@ export const EditorScreen = () => {
                         style: 'destructive',
                         onPress: async () => {
                             await AsyncStorage.removeItem(DRAFT_KEY);
+                            if (source === 'local' && !isFlashMode) {
+                                await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                            }
                             navigation.goBack();
                         },
                     },
@@ -256,7 +284,7 @@ export const EditorScreen = () => {
             return true; // Prevent default behavior
         }
         return false; // Allow default behavior
-    }, [isDirty, content, DRAFT_KEY, navigation, t, handleManualSave]);
+    }, [isDirty, content, DRAFT_KEY, navigation, t, handleManualSave, filePath, isFlashMode, source]);
 
     // Handle hardware back button
     useEffect(() => {

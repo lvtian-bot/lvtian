@@ -9,6 +9,7 @@ import {
     TouchableOpacity,
     BackHandler,
     DeviceEventEmitter,
+    Alert,
 } from 'react-native';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -21,6 +22,25 @@ import { cloudService, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudServi
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList & NoteStackParamList>;
 type RoutePropType = RouteProp<NoteStackParamList, 'CloudFileList'>;
+
+const TEXT_EXTENSIONS = new Set([
+    '.md',
+    '.markdown',
+    '.txt',
+    '.json',
+    '.js',
+    '.ts',
+    '.html',
+    '.css',
+    '.yaml',
+    '.yml',
+    '.sh',
+    '.log',
+    '.xml',
+    '.csv',
+]);
+
+const MAX_PREVIEW_SIZE = 5 * 1024 * 1024; // 5MB
 
 interface DisplayItem {
     name: string;
@@ -180,6 +200,28 @@ export const CloudNoteScreen = () => {
     const handleItemPress = (item: DisplayItem) => {
         if (item.isDirectory) {
             setCurrentPrefix(item.key);
+            return;
+        }
+
+        const lastDot = item.name.lastIndexOf('.');
+        const ext = lastDot !== -1 ? item.name.slice(lastDot).toLowerCase() : '';
+        if (!TEXT_EXTENSIONS.has(ext)) {
+            Alert.alert(
+                item.name,
+                t('browser.unsupportedTextPreview', {
+                    defaultValue: '该文件不是支持的纯文本或 Markdown 格式，暂不支持直接在线预览。',
+                })
+            );
+            return;
+        }
+
+        if (item.size > MAX_PREVIEW_SIZE) {
+            Alert.alert(
+                item.name,
+                t('browser.fileTooLargePreview', {
+                    defaultValue: '该文件体积超过 5MB，暂不支持在手机端直接文本预览。',
+                })
+            );
             return;
         }
 

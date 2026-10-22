@@ -91,8 +91,6 @@ export class ServerFileService {
                 signal: controller.signal,
             });
 
-            clearTimeout(timeoutId);
-
             if (response.status === 401) {
                 throw new ServerFileError('访问令牌无效或已过期，请重新配置', 'UNAUTHORIZED', 401);
             }
@@ -116,12 +114,13 @@ export class ServerFileService {
 
             return (await response.json()) as T;
         } catch (err: unknown) {
-            clearTimeout(timeoutId);
             const errObj = err as Error;
             if (errObj.name === 'AbortError') {
                 throw new ServerFileError('请求超时，请检查服务端连接', 'TIMEOUT', 408);
             }
             throw errObj;
+        } finally {
+            clearTimeout(timeoutId);
         }
     }
 
