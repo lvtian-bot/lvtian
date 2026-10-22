@@ -3,6 +3,7 @@ import { loadOrCreateConfig, ServerConfig } from './config.js';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { DshRunner } from './dshRunner.js';
+import { FileManager } from './fileManager.js';
 import { LvtianServer } from './server.js';
 
 function parseArgs(): Partial<ServerConfig> {
@@ -63,8 +64,9 @@ async function main() {
     const memoryManager = new MemoryManager(config.workspace);
     const sessionManager = new SessionManager(config.dataDir);
     const dshRunner = new DshRunner(config.workspace, memoryManager, sessionManager);
+    const fileManager = new FileManager(config.workspace);
 
-    const server = new LvtianServer(config, sessionManager, memoryManager, dshRunner);
+    const server = new LvtianServer(config, sessionManager, memoryManager, dshRunner, fileManager);
     await server.start();
 
     const maskedToken = `${config.token.slice(0, 4)}****${config.token.slice(-4)}`;

@@ -13,8 +13,13 @@ import { fsService } from '../services/FileSystemService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { theme } from '../utils/theme';
 import { normalizePath } from '../utils/pathUtils';
+import { stableHash } from '../utils/identityHash';
 import { syncService } from '../services/SyncService';
 import { flashNoteService } from '../services/FlashNoteService';
+import { serverFileService } from '../services/ServerFileService';
+import { cloudService } from '../services/CloudService';
+import { useAssistantStore } from '../store/useAssistantStore';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
 
@@ -29,11 +34,15 @@ export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
-    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent } = route.params; // Get flash params
-    const filePath = normalizePath(rawFilePath);
+    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent, source = 'local', title, expectedMtime: paramExpectedMtime } = route.params; // Get params
+    const filePath = source === 'server' ? rawFilePath : normalizePath(rawFilePath);
+    const currentMtimeRef = useRef<number | undefined>(paramExpectedMtime);
+    const serverUrl = useAssistantStore(state => state.serverUrl);
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [isDirty, setIsDirty] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const saveInFlightRef = useRef(false);
     const [editorHtml, setEditorHtml] = useState<string | null>(null);
     const webViewRef = useRef<WebView>(null);
     const isDraftLoaded = useRef(false);
@@ -42,19 +51,39 @@ export const EditorScreen = () => {
     const { markFileAsModified } = useFileMetadataStore();
 
     const isFlashMode = !!flashNoteId;
-    const DRAFT_KEY = isFlashMode ? `editor_draft_flash_${flashNoteId}` : `editor_draft_${filePath}`;
+    const serverPrefix = source === 'server' ? (serverUrl ? stableHash(serverUrl) : 'default') : '';
+    const { webDavConfig } = useSettingsStore.getState();
+    const webdavPrefix = source === 'webdav'
+        ? stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`)
+        : '';
+    const DRAFT_KEY = isFlashMode
+        ? `editor_draft_flash_${flashNoteId}`
+        : source === 'server'
+            ? `editor_draft_server_${serverPrefix}_${filePath}`
+            : source === 'webdav'
+                ? `editor_draft_webdav_${webdavPrefix}_${filePath}`
+                : `editor_draft_${source}_${filePath}`;
 
     const loadFile = useCallback(async () => {
         try {
-            console.log('[EditorScreen] Loading...', isFlashMode ? `FlashNote: ${flashNoteId}` : `File: ${filePath}`);
+            console.log('[EditorScreen] Loading...', isFlashMode ? `FlashNote: ${flashNoteId}` : `File: ${filePath} (${source})`);
 
             let fileContent = '';
 
             if (isFlashMode) {
                 // Flash Note Mode: Use passed content directly
                 fileContent = paramInitialContent || '';
+            } else if (source !== 'local' && paramInitialContent !== undefined) {
+                // 纯在线模式（VPS / 网盘）：直接信任并复用刚拉取的预览快照，避免重复网络请求
+                fileContent = paramInitialContent;
+            } else if (source === 'server') {
+                const res = await serverFileService.readFileContent(filePath);
+                fileContent = res.content;
+                currentMtimeRef.current = res.mtime;
+            } else if (source === 'webdav') {
+                fileContent = await cloudService.getCloudFileContent(filePath);
             } else {
-                // File Mode: Read from FS
+                // 本地文件模式：始终从手机本地沙盒重新读取最新内容，防止覆盖后台同步拉取的最新版本
                 const exists = await fsService.exists(filePath);
                 if (exists) {
                     fileContent = await fsService.readFile(filePath);
@@ -62,9 +91,28 @@ export const EditorScreen = () => {
             }
 
             // Check for draft (Both modes support drafts)
-            const draftContent = await AsyncStorage.getItem(DRAFT_KEY);
+            let draftContent = await AsyncStorage.getItem(DRAFT_KEY);
+            if (draftContent === null && source === 'local' && !isFlashMode) {
+                // 兼容旧版本地草稿键名，若存在则自动平滑迁移
+                const legacyDraftKey = `editor_draft_${filePath}`;
+                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
+                if (legacyDraft !== null) {
+                    draftContent = legacyDraft;
+                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                    await AsyncStorage.removeItem(legacyDraftKey);
+                }
+            } else if (draftContent === null && source === 'webdav') {
+                // 兼容旧版未带账号前缀的 WebDAV 草稿键名，若存在则自动平滑迁移
+                const legacyDraftKey = `editor_draft_webdav_${filePath}`;
+                const legacyDraft = await AsyncStorage.getItem(legacyDraftKey);
+                if (legacyDraft !== null) {
+                    draftContent = legacyDraft;
+                    await AsyncStorage.setItem(DRAFT_KEY, legacyDraft);
+                    await AsyncStorage.removeItem(legacyDraftKey);
+                }
+            }
 
-            if (draftContent && draftContent !== fileContent) {
+            if (draftContent !== null && draftContent !== fileContent) {
                 Alert.alert(
                     t('common.draftFound'),
                     t('common.restoreDraftPrompt'),
@@ -74,9 +122,19 @@ export const EditorScreen = () => {
                             style: 'destructive',
                             onPress: async () => {
                                 await AsyncStorage.removeItem(DRAFT_KEY);
+                                if (source === 'local' && !isFlashMode) {
+                                    await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                                }
+                                if (source === 'webdav') {
+                                    await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
+                                }
                                 setContent(fileContent);
                                 initialContentRef.current = fileContent;
                                 isDraftLoaded.current = true;
+                                webViewRef.current?.postMessage(JSON.stringify({
+                                    type: 'SET_CONTENT',
+                                    payload: fileContent,
+                                }));
                             },
                         },
                         {
@@ -86,6 +144,10 @@ export const EditorScreen = () => {
                                 initialContentRef.current = fileContent; // Initial is still origin content
                                 setIsDirty(true); // Draft implies dirty
                                 isDraftLoaded.current = true;
+                                webViewRef.current?.postMessage(JSON.stringify({
+                                    type: 'SET_CONTENT',
+                                    payload: draftContent,
+                                }));
                             },
                         },
                     ]
@@ -105,7 +167,7 @@ export const EditorScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [filePath, DRAFT_KEY, t, isFlashMode, flashNoteId, paramInitialContent]);
+    }, [filePath, DRAFT_KEY, t, isFlashMode, flashNoteId, paramInitialContent, source]);
 
     useEffect(() => {
         loadFile();
@@ -154,6 +216,10 @@ export const EditorScreen = () => {
     };
 
     const handleManualSave = useCallback(async (contentToSave: string) => {
+        // 阻断保存进行中的重复触发（连点保存按钮、WebView 重复回调），避免并发保存与重复成功提示
+        if (saveInFlightRef.current) return;
+        saveInFlightRef.current = true;
+        setIsSaving(true);
         try {
             if (isFlashMode && flashNoteId) {
                 // --- Flash Note Save Logic ---
@@ -163,6 +229,15 @@ export const EditorScreen = () => {
                     await flashNoteService.updateNote(flashNoteId, contentToSave);
                 }
                 Alert.alert(t('common.success'), t('timeline.noteUpdated')); // Feedback for user
+            } else if (source === 'server') {
+                // --- Server File Save Logic ---
+                const saveRes = await serverFileService.saveFileContent(filePath, contentToSave, currentMtimeRef.current);
+                currentMtimeRef.current = saveRes.mtime;
+                Alert.alert(t('common.success'), t('editor.savedSuccessfully', { defaultValue: '已成功保存至服务端' }));
+            } else if (source === 'webdav') {
+                // --- Pure Online WebDAV Save Logic ---
+                await cloudService.uploadContent(filePath, contentToSave);
+                Alert.alert(t('common.success'), t('editor.savedSuccessfully', { defaultValue: '已成功保存至网盘' }));
             } else {
                 // --- Standard File Save Logic ---
                 // 手动保存：写本地 + 触发云同步
@@ -170,7 +245,6 @@ export const EditorScreen = () => {
                 markFileAsModified(filePath);
 
                 // Upload to cloud if configured (wait for upload to complete before navigating back)
-                // syncService.uploadFile handles cloud configuration check internally
                 const success = await syncService.uploadFile(filePath, { withLock: true });
                 if (!success) {
                     const metadata = useFileMetadataStore.getState().getMetadata(filePath);
@@ -182,6 +256,12 @@ export const EditorScreen = () => {
 
             // Common Post-Save Cleanup
             await AsyncStorage.removeItem(DRAFT_KEY);
+            if (source === 'local' && !isFlashMode) {
+                await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+            }
+            if (source === 'webdav') {
+                await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
+            }
             setIsDirty(false);
             setContent(contentToSave);
             initialContentRef.current = contentToSave;
@@ -189,11 +269,27 @@ export const EditorScreen = () => {
             // Navigate back
             navigation.goBack();
 
-        } catch (error) {
+        } catch (error: unknown) {
             console.error('Save failed:', error);
-            Alert.alert(t('common.error'), t('editor.saveFailed') + String(error));
+            const serverErr = error as { code?: string; message?: string };
+            if (serverErr.code === 'PRECONDITION_FAILED') {
+                Alert.alert(
+                    t('common.conflict', { defaultValue: '保存冲突' }),
+                    t('editor.conflictMtimeMessage', { defaultValue: '服务端该文件在您编辑期间已被外部修改。为防止覆盖他人内容，本次保存已被阻止。建议先返回重新进入。' })
+                );
+            } else {
+                // 结构化错误码经国际化映射后再提示，避免直接透出服务层硬编码文案
+                let message = (error as Error).message || t('editor.saveFailed');
+                if (serverErr.code) {
+                    message = t(`browser.error.${serverErr.code}`, { defaultValue: message });
+                }
+                Alert.alert(t('common.error'), message);
+            }
+        } finally {
+            saveInFlightRef.current = false;
+            setIsSaving(false);
         }
-    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, t]);
+    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);
 
     const handleBackPress = useCallback(() => {
         if (isDirty) {
@@ -206,6 +302,12 @@ export const EditorScreen = () => {
                         style: 'destructive',
                         onPress: async () => {
                             await AsyncStorage.removeItem(DRAFT_KEY);
+                            if (source === 'local' && !isFlashMode) {
+                                await AsyncStorage.removeItem(`editor_draft_${filePath}`);
+                            }
+                            if (source === 'webdav') {
+                                await AsyncStorage.removeItem(`editor_draft_webdav_${filePath}`);
+                            }
                             navigation.goBack();
                         },
                     },
@@ -222,7 +324,7 @@ export const EditorScreen = () => {
             return true; // Prevent default behavior
         }
         return false; // Allow default behavior
-    }, [isDirty, content, DRAFT_KEY, navigation, t, handleManualSave]);
+    }, [isDirty, content, DRAFT_KEY, navigation, t, handleManualSave, filePath, isFlashMode, source]);
 
     // Handle hardware back button
     useEffect(() => {
@@ -309,17 +411,17 @@ export const EditorScreen = () => {
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
                     <Text style={styles.title} numberOfLines={2}>
-                        {isFlashMode ? (t('timeline.editTitle') || 'Edit Note') : filePath.split('/').pop()}
+                        {isFlashMode ? (t('timeline.editTitle') || 'Edit Note') : (title || filePath.split('/').pop() || filePath)}
                     </Text>
                 </View>
                 <TouchableOpacity
                     onPress={requestSaveFromWebView}
                     style={styles.headerButton}
-                    disabled={!isDirty}
+                    disabled={!isDirty || isSaving}
                 >
                     <Text style={[
                         styles.headerButtonText,
-                        !isDirty && styles.headerButtonTextDisabled
+                        (!isDirty || isSaving) && styles.headerButtonTextDisabled
                     ]}>{t('common.save')}</Text>
                 </TouchableOpacity>
             </View>
