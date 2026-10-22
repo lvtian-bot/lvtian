@@ -51,7 +51,9 @@ export const EditorScreen = () => {
     const { markFileAsModified } = useFileMetadataStore();
 
     const isFlashMode = !!flashNoteId;
-    const serverPrefix = source === 'server' ? (serverUrl ? stableHash(serverUrl) : 'default') : '';
+    const { serverToken } = useAssistantStore.getState();
+    // 服务前缀含地址与令牌：同地址换令牌（重装、反代按令牌选实例）视为不同服务，草稿互不串用
+    const serverPrefix = source === 'server' ? (serverUrl ? stableHash(`${serverUrl}|${serverToken || ''}`) : 'default') : '';
     const { webDavConfig } = useSettingsStore.getState();
     const webdavPrefix = source === 'webdav'
         ? stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`)
@@ -63,6 +65,9 @@ export const EditorScreen = () => {
             : source === 'webdav'
                 ? `editor_draft_webdav_${webdavPrefix}_${filePath}`
                 : `editor_draft_${source}_${filePath}`;
+    // 草稿的基线 mtime 与内容分开存储：恢复草稿时还原基线，文件若已被外部修改，
+    // 保存将触发乐观锁冲突而非静默用旧草稿覆盖新内容
+    const DRAFT_MTIME_KEY = `${DRAFT_KEY}_mtime`;
 
     const loadFile = useCallback(async () => {
         try {
@@ -122,6 +127,7 @@ export const EditorScreen = () => {
                             style: 'destructive',
                             onPress: async () => {
                                 await AsyncStorage.removeItem(DRAFT_KEY);
+                                await AsyncStorage.removeItem(DRAFT_MTIME_KEY);
                                 if (source === 'local' && !isFlashMode) {
                                     await AsyncStorage.removeItem(`editor_draft_${filePath}`);
                                 }
@@ -139,7 +145,13 @@ export const EditorScreen = () => {
                         },
                         {
                             text: t('common.restore'),
-                            onPress: () => {
+                            onPress: async () => {
+                                // 还原草稿的基线 mtime：草稿之后文件若被外部修改，保存会触发乐观锁冲突
+                                const draftMtimeStr = await AsyncStorage.getItem(DRAFT_MTIME_KEY);
+                                const draftMtime = draftMtimeStr ? Number(draftMtimeStr) : NaN;
+                                if (!isNaN(draftMtime) && draftMtime > 0) {
+                                    currentMtimeRef.current = draftMtime;
+                                }
                                 setContent(draftContent);
                                 initialContentRef.current = fileContent; // Initial is still origin content
                                 setIsDirty(true); // Draft implies dirty
@@ -167,7 +179,7 @@ export const EditorScreen = () => {
         } finally {
             setLoading(false);
         }
-    }, [filePath, DRAFT_KEY, t, isFlashMode, flashNoteId, paramInitialContent, source]);
+    }, [filePath, DRAFT_KEY, DRAFT_MTIME_KEY, t, isFlashMode, flashNoteId, paramInitialContent, source]);
 
     useEffect(() => {
         loadFile();
@@ -198,6 +210,7 @@ export const EditorScreen = () => {
                 // Only save draft if dirty
                 if (isDirty) {
                     await AsyncStorage.setItem(DRAFT_KEY, content);
+                    await AsyncStorage.setItem(DRAFT_MTIME_KEY, String(currentMtimeRef.current ?? ''));
                 }
             } catch (error) {
                 console.error('Failed to save draft:', error);
@@ -206,7 +219,7 @@ export const EditorScreen = () => {
 
         const timeoutId = setTimeout(saveDraft, 500);
         return () => clearTimeout(timeoutId);
-    }, [content, isDirty, DRAFT_KEY]);
+    }, [content, isDirty, DRAFT_KEY, DRAFT_MTIME_KEY]);
 
     const handleAutoSave = (newContent: string) => {
         // Update state, trigger effect to save to cache
@@ -256,6 +269,7 @@ export const EditorScreen = () => {
 
             // Common Post-Save Cleanup
             await AsyncStorage.removeItem(DRAFT_KEY);
+            await AsyncStorage.removeItem(DRAFT_MTIME_KEY);
             if (source === 'local' && !isFlashMode) {
                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
             }
@@ -289,7 +303,7 @@ export const EditorScreen = () => {
             saveInFlightRef.current = false;
             setIsSaving(false);
         }
-    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);
+    }, [filePath, markFileAsModified, DRAFT_KEY, DRAFT_MTIME_KEY, navigation, isFlashMode, flashNoteId, source, t]);
 
     const handleBackPress = useCallback(() => {
         if (isDirty) {
@@ -302,6 +316,7 @@ export const EditorScreen = () => {
                         style: 'destructive',
                         onPress: async () => {
                             await AsyncStorage.removeItem(DRAFT_KEY);
+                            await AsyncStorage.removeItem(DRAFT_MTIME_KEY);
                             if (source === 'local' && !isFlashMode) {
                                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
                             }
@@ -324,7 +339,7 @@ export const EditorScreen = () => {
             return true; // Prevent default behavior
         }
         return false; // Allow default behavior
-    }, [isDirty, content, DRAFT_KEY, navigation, t, handleManualSave, filePath, isFlashMode, source]);
+    }, [isDirty, content, DRAFT_KEY, DRAFT_MTIME_KEY, navigation, t, handleManualSave, filePath, isFlashMode, source]);
 
     // Handle hardware back button
     useEffect(() => {

@@ -108,6 +108,7 @@
       "PRECONDITION_FAILED": "文件在远端已被修改，保存冲突",
       "LIMIT_EXCEEDED": "文件大小超出允许限制",
       "DOWNLOAD_TIMEOUT": "文件下载超时，请检查网络或稍后重试",
+      "DOWNLOAD_FAILED": "文件下载失败，请稍后重试",
       "UNAUTHORIZED": "访问令牌无效或已过期，请重新配置",
       "TIMEOUT": "请求超时，请检查服务端连接",
       "REQUEST_FAILED": "网盘请求失败，请稍后重试",

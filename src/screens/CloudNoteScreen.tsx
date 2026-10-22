@@ -65,20 +65,28 @@ export const CloudNoteScreen = () => {
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [isConfigured, setIsConfigured] = useState<boolean>(cloudService.isConfigured());
     const requestIdRef = useRef<number>(0);
+    // 云盘提供方初始化/重配置的代数：变化时在渲染提交后触发一次根目录加载
+    const [providerEpoch, setProviderEpoch] = useState(0);
+
+    const resetForProvider = () => {
+        setIsConfigured(cloudService.isConfigured());
+        // 当网盘重新配置或初始化时，重置当前子路径到根目录，清空旧条目，避免跨账号/新配置请求旧子目录；
+        // 同时作废仍在途的旧账号请求，防止其返回后重新填充旧条目
+        requestIdRef.current++;
+        setCurrentPrefix('');
+        setItems([]);
+        loadedPrefixRef.current = '';
+    };
 
     // 监听云存储初始化完成事件，确保非响应式的 SecureStore 异步读取完成后及时更新界面
     useEffect(() => {
-        const checkConfig = () => {
-            setIsConfigured(cloudService.isConfigured());
-            // 当网盘重新配置或初始化时，重置当前子路径到根目录，清空旧条目，避免跨账号/新配置请求旧子目录；
-            // 同时作废仍在途的旧账号请求，防止其返回后重新填充旧条目
-            requestIdRef.current++;
-            setCurrentPrefix('');
-            setItems([]);
-            loadedPrefixRef.current = '';
-        };
-        const sub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, checkConfig);
-        checkConfig();
+        const sub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, () => {
+            resetForProvider();
+            // 初始化完成（如启动期密码异步读取到位）后自动加载根目录，
+            // 修复首查报「未配置」后前缀未变、聚焦效应不再触发导致的空白列表
+            setProviderEpoch(e => e + 1);
+        });
+        resetForProvider();
         return () => sub.remove();
     }, []);
 
@@ -180,6 +188,19 @@ export const CloudNoteScreen = () => {
         },
         [currentPrefix, t]
     );
+
+    // 经 ref 调用最新版加载函数：直接把 loadCloudFiles 放进下 方 effect 的依赖会随前缀变化重复加载
+    const loadCloudFilesRef = useRef(loadCloudFiles);
+    useEffect(() => {
+        loadCloudFilesRef.current = loadCloudFiles;
+    }, [loadCloudFiles]);
+
+    // 提供方初始化/重配置完成后（渲染已提交、加载函数已捕获重置后的空前缀）自动加载根目录
+    useEffect(() => {
+        if (providerEpoch > 0 && cloudService.isConfigured()) {
+            loadCloudFilesRef.current();
+        }
+    }, [providerEpoch]);
 
     /**
      * 计算上级前缀

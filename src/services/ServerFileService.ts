@@ -197,7 +197,12 @@ export class ServerFileService {
         try {
             const downloadResult = await Promise.race([resumable.downloadAsync(), timeoutPromise]);
             if (downloadResult?.status !== 200) {
-                throw new ServerFileError(`下载失败，服务端返回状态码: ${downloadResult?.status ?? 'unknown'}`, 'DOWNLOAD_FAILED', downloadResult?.status ?? 500);
+                const status = downloadResult?.status ?? 500;
+                // 鉴权失败与通用失败分别映射结构化错误码，供前端按语言提示
+                if (status === 401 || status === 403) {
+                    throw new ServerFileError('鉴权失败，请检查服务端令牌配置', 'UNAUTHORIZED', status);
+                }
+                throw new ServerFileError(`下载失败，服务端返回状态码: ${status}`, 'DOWNLOAD_FAILED', status);
             }
 
             return downloadResult.uri;

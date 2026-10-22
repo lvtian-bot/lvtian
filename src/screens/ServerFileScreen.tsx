@@ -182,9 +182,9 @@ export const ServerFileScreen = () => {
     useFocusEffect(
         useCallback(() => {
             if (isConfigured) {
-                if (!hasLoadedInitialRef.current) {
-                    loadDirectory(undefined);
-                }
+                // 每次获焦都刷新当前目录：助理生成文件、外部进程增删文件后，
+                // 返回本页即呈现最新内容，而不是一直显示首次进入时的旧列表
+                loadDirectory(hasLoadedInitialRef.current ? currentPathRef.current : undefined);
             }
 
             // 仅在当前屏幕获焦时监听 Android 返回键：如果在子目录，先返回上级

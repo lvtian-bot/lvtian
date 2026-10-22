@@ -46,8 +46,18 @@ export class FileManager {
     private saveQueues = new Map<string, Promise<unknown>>();
 
     constructor(workspaceDir?: string, allowedRoot?: string) {
-        this.workspaceDir = workspaceDir ? path.resolve(workspaceDir) : path.join(os.homedir(), 'workspace');
-        this.allowedRoot = allowedRoot ? path.resolve(allowedRoot) : os.homedir();
+        // 根目录自身可能包含符号链接段（如 /home -> /var/home）：
+        // 统一规范化为物理真实路径，后续 realpath 边界比较才不会把界内文件误判为逃逸
+        this.workspaceDir = this.canonicalizeRoot(workspaceDir ? path.resolve(workspaceDir) : path.join(os.homedir(), 'workspace'));
+        this.allowedRoot = this.canonicalizeRoot(allowedRoot ? path.resolve(allowedRoot) : os.homedir());
+    }
+
+    private canonicalizeRoot(root: string): string {
+        try {
+            return fs.realpathSync(root);
+        } catch {
+            return root; // 目录尚不存在时保留词法路径，后续创建后由祖先真实路径校验兜底
+        }
     }
 
     /**
@@ -260,23 +270,31 @@ export class FileManager {
         }
 
         try {
-            // 经文件句柄限定读取字节数：文件在 stat 之后增长（如日志追加）也不会返回超出上限的内容
+            // 循环读取直到文件尾或超限：缓冲长度不依赖打开前的 stat，
+            // 文件在 stat 与 open 之间增长也不会把截断内容当作完整结果返回
             const handle = await fs.promises.open(resolvedPath, 'r');
             try {
-                const readLen = Math.min(stats.size, maxBytes) + 1; // 多读 1 字节用于检测 stat 后增长超限
-                const buf = Buffer.alloc(readLen);
-                const { bytesRead } = await handle.read(buf, 0, readLen, 0);
-                if (bytesRead > maxBytes) {
-                    throw new FileManagerError(
-                        `文件过大，超出最大支持大小（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`,
-                        'LIMIT_EXCEEDED',
-                        400
-                    );
+                const chunkSize = 1024 * 1024;
+                const chunks: Buffer[] = [];
+                let totalBytes = 0;
+                while (totalBytes <= maxBytes) {
+                    const buf = Buffer.alloc(Math.min(chunkSize, maxBytes + 1 - totalBytes));
+                    const { bytesRead } = await handle.read(buf, 0, buf.length, null);
+                    if (bytesRead === 0) break;
+                    totalBytes += bytesRead;
+                    if (totalBytes > maxBytes) {
+                        throw new FileManagerError(
+                            `文件过大，超出最大支持大小（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`,
+                            'LIMIT_EXCEEDED',
+                            400
+                        );
+                    }
+                    chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
                 }
                 return {
-                    content: buf.subarray(0, bytesRead).toString('utf8'),
+                    content: Buffer.concat(chunks).toString('utf8'),
                     mtime: stats.mtimeMs,
-                    size: bytesRead,
+                    size: totalBytes,
                 };
             } finally {
                 await handle.close();
