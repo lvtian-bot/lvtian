@@ -216,6 +216,24 @@ test('FileManager correctly lists, reads, saves and resolves files', async () =>
         }
     }
 
+    // 验证保存路径中的符号链接祖先在创建任何目录前即被拦截（不得在外部目录创建新子目录）
+    if (process.platform !== 'win32') {
+        const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-outside-dir-'));
+        const linkDir = path.join(tmpDir, 'escape-link-dir');
+        try {
+            fs.symlinkSync(outsideDir, linkDir, 'dir');
+            const targetPath = path.join(linkDir, 'new-subdir', 'file.md');
+            await assert.rejects(
+                async () => await fm.saveFileContent(targetPath, '不应写入的越界内容'),
+                (err) => err.code === 'OUT_OF_BOUNDS' || err.code === 'SYMLINK_ESCAPE'
+            );
+            assert.equal(fs.existsSync(path.join(outsideDir, 'new-subdir')), false);
+        } finally {
+            fs.rmSync(outsideDir, { recursive: true, force: true });
+            try { fs.unlinkSync(linkDir); } catch {}
+        }
+    }
+
     // 2. 目录列表
     const listing = await fm.listDirectory(tmpDir);
     assert.equal(listing.currentPath, tmpDir);

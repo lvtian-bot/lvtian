@@ -282,12 +282,25 @@ export class FileManager {
         const resolvedPath = await this.resolveAndValidatePath(targetPath, false);
         const parentDir = path.dirname(resolvedPath);
 
+        // 在创建任何目录之前，先校验最近已存在祖先的物理真实路径，
+        // 防止经符号链接在外部目录下实际创建出新目录之后才拒绝保存
+        const existingAncestor = this.findExistingAncestor(parentDir);
+        try {
+            const realAncestor = await fs.promises.realpath(existingAncestor);
+            if (!this.isPathWithinAllowedRoot(realAncestor)) {
+                throw new FileManagerError(`目标目录超出允许的访问范围: ${realAncestor}`, 'OUT_OF_BOUNDS', 403);
+            }
+        } catch (err: unknown) {
+            if (err instanceof FileManagerError) throw err;
+            const nodeErr = err as NodeJS.ErrnoException;
+            throw new FileManagerError(`校验目标目录失败: ${nodeErr.message}`, 'FS_ERROR', 500);
+        }
+
         try {
             await fs.promises.mkdir(parentDir, { recursive: true });
-            // 严格验证父级物理真实路径必须在 allowedRoot 边界内（防止符号链接父目录逃逸）
+            // mkdir 后复核最终父目录物理真实路径仍在边界内（竞态兜底）
             const realParent = await fs.promises.realpath(parentDir);
-            const parentAllowed = realParent === this.allowedRoot || realParent.startsWith(this.allowedRoot + path.sep);
-            if (!parentAllowed) {
+            if (!this.isPathWithinAllowedRoot(realParent)) {
                 throw new FileManagerError(`目标目录超出允许的访问范围: ${realParent}`, 'OUT_OF_BOUNDS', 403);
             }
         } catch (err: unknown) {
@@ -348,6 +361,30 @@ export class FileManager {
             const nodeErr = err as NodeJS.ErrnoException;
             throw new FileManagerError(`保存文件失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
+    }
+
+    /**
+     * 判断物理路径是否位于允许根目录边界内（Windows 下大小写不敏感）
+     */
+    private isPathWithinAllowedRoot(target: string): boolean {
+        const isWindows = process.platform === 'win32';
+        const normTarget = isWindows ? target.toLowerCase() : target;
+        const normRoot = isWindows ? this.allowedRoot.toLowerCase() : this.allowedRoot;
+        return normTarget === normRoot || normTarget.startsWith(normRoot + (normRoot.endsWith(path.sep) ? '' : path.sep));
+    }
+
+    /**
+     * 从给定目录逐级向上找到第一个实际存在的祖先目录（符号链接本身视为存在）
+     */
+    private findExistingAncestor(startDir: string): string {
+        let current = path.resolve(startDir);
+        const root = path.parse(current).root;
+        while (!fs.existsSync(current) && current !== root) {
+            const parent = path.dirname(current);
+            if (parent === current) break;
+            current = parent;
+        }
+        return current;
     }
 
     /**

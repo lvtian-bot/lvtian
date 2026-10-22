@@ -18,6 +18,11 @@ import {
 const require = createRequire(import.meta.url);
 const WS = require('ws');
 
+// 保存端点传输上限：内容解码后上限为 5MB（saveFileContent 中的权威限制），
+// JSON 序列化最坏情况下单个字符会膨胀至 6 字节（\uXXXX 转义），
+// 传输上限需覆盖最坏膨胀并留出 JSON 结构（path 等字段）余量，避免合法内容在传输层被误拒
+const SAVE_BODY_MAX_BYTES = 5 * 1024 * 1024 * 6 + 2 * 1024 * 1024;
+
 interface AuthenticatedSocket extends WebSocket {
     isAuthenticated?: boolean;
     isAlive?: boolean;
@@ -215,7 +220,7 @@ export class LvtianServer {
         // 保存文件文本内容（轻度编辑，支持 expectedMtime 乐观锁）
         if (pathname === '/api/files/content' && req.method === 'POST') {
             try {
-                const body = await this.readJsonBody<{ path?: string; content?: string; expectedMtime?: number }>(req);
+                const body = await this.readJsonBody<{ path?: string; content?: string; expectedMtime?: number }>(req, SAVE_BODY_MAX_BYTES);
                 if (!body.path || typeof body.content !== 'string') {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: '缺少 path 或 content 参数', code: 'PARAM_MISSING' }));

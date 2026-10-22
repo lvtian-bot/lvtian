@@ -57,6 +57,8 @@ export const CloudNoteScreen = () => {
 
     const [currentPrefix, setCurrentPrefix] = useState<string>(route.params?.prefix || '');
     const [items, setItems] = useState<DisplayItem[]>([]);
+    // 已成功加载条目对应的目录前缀：用于区分「切换目录」与「同目录刷新」，决定是否清空旧条目
+    const [loadedPrefix, setLoadedPrefix] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [refreshing, setRefreshing] = useState<boolean>(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -70,6 +72,7 @@ export const CloudNoteScreen = () => {
             // 当网盘重新配置或初始化时，重置当前子路径到根目录，清空旧条目，避免跨账号/新配置请求旧子目录
             setCurrentPrefix('');
             setItems([]);
+            setLoadedPrefix('');
         };
         const sub = DeviceEventEmitter.addListener(CLOUD_INIT_COMPLETED_EVENT, checkConfig);
         checkConfig();
@@ -94,6 +97,11 @@ export const CloudNoteScreen = () => {
                 setLoading(true);
             }
             setErrorMessage(null);
+
+            // 切换到新目录时立即清空上一目录条目，防止新目录加载失败后仍显示父目录内容
+            if (loadedPrefix !== null && loadedPrefix !== currentPrefix) {
+                setItems([]);
+            }
 
             try {
                 // 直接向 WebDAV 请求云端文件列表（纯在线）
@@ -149,6 +157,7 @@ export const CloudNoteScreen = () => {
                 });
 
                 setItems(displayList);
+                setLoadedPrefix(currentPrefix);
             } catch (err: unknown) {
                 if (reqId === requestIdRef.current) {
                     const serverErr = err as { code?: string; message?: string };
@@ -166,7 +175,7 @@ export const CloudNoteScreen = () => {
                 }
             }
         },
-        [currentPrefix, t]
+        [currentPrefix, t, loadedPrefix]
     );
 
     /**

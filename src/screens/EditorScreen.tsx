@@ -271,7 +271,12 @@ export const EditorScreen = () => {
                     t('editor.conflictMtimeMessage', { defaultValue: '服务端该文件在您编辑期间已被外部修改。为防止覆盖他人内容，本次保存已被阻止。建议先返回重新进入。' })
                 );
             } else {
-                Alert.alert(t('common.error'), (error as Error).message || (t('editor.saveFailed') + String(error)));
+                // 结构化错误码经国际化映射后再提示，避免直接透出服务层硬编码文案
+                let message = (error as Error).message || t('editor.saveFailed');
+                if (serverErr.code) {
+                    message = t(`browser.error.${serverErr.code}`, { defaultValue: message });
+                }
+                Alert.alert(t('common.error'), message);
             }
         }
     }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);

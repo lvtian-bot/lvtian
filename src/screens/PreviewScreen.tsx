@@ -89,18 +89,20 @@ export const PreviewScreen = () => {
 
                 if (source === 'server') {
                     // 服务端模式：下载相对图片到沙盒缓存供 WebView 渲染
+                    // 存在性检查直接使用缓存目录感知的 API，避免 fsService 将路径清洗重定向到文档根后永远判定不存在
                     const cacheDir = FileSystem.cacheDirectory || '';
                     const sanitizedName = resolvedRemoteOrLocalPath.replace(/[^a-zA-Z0-9._-]/g, '_');
                     const localUri = `${cacheDir}img_server_${sanitizedName}`;
-                    const exists = await fsService.exists(localUri);
-                    if (!exists) {
+                    let cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    if (!cacheInfo.exists) {
                         try {
                             await serverFileService.downloadFile(resolvedRemoteOrLocalPath, localUri);
                         } catch (e) {
                             console.warn('Failed to download server image:', resolvedRemoteOrLocalPath, e);
                         }
                     }
-                    if (await fsService.exists(localUri)) {
+                    cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    if (cacheInfo.exists) {
                         result = result.replace(full, full.replace(src, localUri));
                     }
                 } else if (source === 'webdav') {
@@ -109,15 +111,16 @@ export const PreviewScreen = () => {
                     const cacheDir = FileSystem.cacheDirectory || '';
                     const sanitizedName = cleanKey.replace(/[^a-zA-Z0-9._-]/g, '_');
                     const localUri = `${cacheDir}img_webdav_${sanitizedName}`;
-                    const exists = await fsService.exists(localUri);
-                    if (!exists) {
+                    let cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    if (!cacheInfo.exists) {
                         try {
                             await cloudService.downloadFile(cleanKey, localUri);
                         } catch (e) {
                             console.warn('Failed to download webdav image:', cleanKey, e);
                         }
                     }
-                    if (await fsService.exists(localUri)) {
+                    cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    if (cacheInfo.exists) {
                         result = result.replace(full, full.replace(src, localUri));
                     }
                 } else {
@@ -184,6 +187,8 @@ export const PreviewScreen = () => {
             setContent(fileContent);
         } catch (err: unknown) {
             setLoadFailed(true);
+            // 清除上一次的陈旧内容，防止 WebView 因加载周期重新挂载后把旧正文再次推送渲染
+            setContent('');
             const serverErr = err as { code?: string; message?: string };
             const code = serverErr.code;
             let message = (err as Error).message || t('browser.fileLoadFailed', { defaultValue: 'Failed to load file' });

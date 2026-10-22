@@ -51,85 +51,95 @@ export class WebDavProvider implements ICloudProvider {
         maxBytes?: number,
         retries = 3
     ): Promise<{ text: string; status: number; headers: Headers }> {
-        return this.limiter.add(async () => {
-            const url = this.getUrl(key);
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒全程超时保护（覆盖正文流）
+        // 重试全程占用同一个限流槽位：递归重试若重新进入 limiter.add，会在槽位满时排队等待自身释放，造成死锁
+        return this.limiter.add(() => this.requestTextAttempt(method, key, headers, body, maxBytes, retries));
+    }
 
-            try {
-                const response = await fetch(url, {
-                    method,
-                    headers: {
-                        'Authorization': this.authHeader,
-                        'Cache-Control': 'no-cache',
-                        'Pragma': 'no-cache',
-                        ...headers
-                    },
-                    body: body as any,
-                    signal: controller.signal,
-                });
+    private async requestTextAttempt(
+        method: string,
+        key: string,
+        headers: Record<string, string> = {},
+        body?: string | Blob | ArrayBuffer,
+        maxBytes?: number,
+        retries = 3
+    ): Promise<{ text: string; status: number; headers: Headers }> {
+        const url = this.getUrl(key);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒全程超时保护（覆盖正文流）
 
-                if (!response.ok && (response.status === 429 || response.status === 503)) {
-                    if (retries > 0) {
-                        clearTimeout(timeoutId);
-                        const delay = 1000 * (4 - retries) + Math.random() * 500;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                        return this.requestText(method, key, headers, body, maxBytes, retries - 1);
-                    }
+        try {
+            const response = await fetch(url, {
+                method,
+                headers: {
+                    'Authorization': this.authHeader,
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
+                    ...headers
+                },
+                body: body as any,
+                signal: controller.signal,
+            });
+
+            if (!response.ok && (response.status === 429 || response.status === 503)) {
+                if (retries > 0) {
+                    clearTimeout(timeoutId);
+                    const delay = 1000 * (4 - retries) + Math.random() * 500;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return this.requestTextAttempt(method, key, headers, body, maxBytes, retries - 1);
                 }
+            }
 
-                if (!response.ok) {
-                    const errText = await response.text().catch(() => '');
-                    const err: any = new Error(`WebDav ${method} 请求失败 (${response.status}): ${errText}`);
-                    err.status = response.status;
-                    err.code = response.status === 404 ? 'NOT_FOUND' : 'REQUEST_FAILED';
-                    throw err;
-                }
+            if (!response.ok) {
+                const errText = await response.text().catch(() => '');
+                const err: any = new Error(`WebDav ${method} 请求失败 (${response.status}): ${errText}`);
+                err.status = response.status;
+                err.code = response.status === 404 ? 'NOT_FOUND' : 'REQUEST_FAILED';
+                throw err;
+            }
 
-                if (maxBytes !== undefined) {
-                    const clHeader = response.headers.get('content-length');
-                    if (clHeader) {
-                        const cl = parseInt(clHeader, 10);
-                        if (!isNaN(cl) && cl > maxBytes) {
-                            controller.abort();
-                            const limitErr: any = new Error(`文件体积超过限制 (${(cl / 1024 / 1024).toFixed(1)}MB > ${(maxBytes / 1024 / 1024).toFixed(1)}MB)`);
-                            limitErr.code = 'LIMIT_EXCEEDED';
-                            throw limitErr;
-                        }
-                    }
-                }
-
-                const text = await response.text();
-
-                if (maxBytes !== undefined) {
-                    const actualBytes = new Blob([text]).size;
-                    if (actualBytes > maxBytes) {
-                        const limitErr: any = new Error(`文件体积超过限制 (${(actualBytes / 1024 / 1024).toFixed(1)}MB > ${(maxBytes / 1024 / 1024).toFixed(1)}MB)`);
+            if (maxBytes !== undefined) {
+                const clHeader = response.headers.get('content-length');
+                if (clHeader) {
+                    const cl = parseInt(clHeader, 10);
+                    if (!isNaN(cl) && cl > maxBytes) {
+                        controller.abort();
+                        const limitErr: any = new Error(`文件体积超过限制 (${(cl / 1024 / 1024).toFixed(1)}MB > ${(maxBytes / 1024 / 1024).toFixed(1)}MB)`);
                         limitErr.code = 'LIMIT_EXCEEDED';
                         throw limitErr;
                     }
                 }
-
-                return { text, status: response.status, headers: response.headers };
-            } catch (error: any) {
-                if (error?.name === 'AbortError') {
-                    const timeoutErr: any = new Error('网盘请求超时，请检查网络连接');
-                    timeoutErr.code = 'TIMEOUT';
-                    throw timeoutErr;
-                }
-
-                if (retries > 0 && (error?.message === 'Network request failed' || error?.message?.includes('Network request failed'))) {
-                    clearTimeout(timeoutId);
-                    const delay = 1000 * (4 - retries) + Math.random() * 500;
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    return this.requestText(method, key, headers, body, maxBytes, retries - 1);
-                }
-
-                throw error;
-            } finally {
-                clearTimeout(timeoutId);
             }
-        });
+
+            const text = await response.text();
+
+            if (maxBytes !== undefined) {
+                const actualBytes = new Blob([text]).size;
+                if (actualBytes > maxBytes) {
+                    const limitErr: any = new Error(`文件体积超过限制 (${(actualBytes / 1024 / 1024).toFixed(1)}MB > ${(maxBytes / 1024 / 1024).toFixed(1)}MB)`);
+                    limitErr.code = 'LIMIT_EXCEEDED';
+                    throw limitErr;
+                }
+            }
+
+            return { text, status: response.status, headers: response.headers };
+        } catch (error: any) {
+            if (error?.name === 'AbortError') {
+                const timeoutErr: any = new Error('网盘请求超时，请检查网络连接');
+                timeoutErr.code = 'TIMEOUT';
+                throw timeoutErr;
+            }
+
+            if (retries > 0 && (error?.message === 'Network request failed' || error?.message?.includes('Network request failed'))) {
+                clearTimeout(timeoutId);
+                const delay = 1000 * (4 - retries) + Math.random() * 500;
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return this.requestTextAttempt(method, key, headers, body, maxBytes, retries - 1);
+            }
+
+            throw error;
+        } finally {
+            clearTimeout(timeoutId);
+        }
     }
 
     private async requestWithRetry(method: string, key: string, headers: Record<string, string> = {}, body?: string | Blob | ArrayBuffer, retries = 3): Promise<Response> {
@@ -243,13 +253,25 @@ export class WebDavProvider implements ICloudProvider {
     }
 
     async downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }> {
-        // Create parent directory
-        const dir = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
-        if (dir) {
-            await fsService.createDirectory(dir);
+        let destPath: string;
+        if (downloadPath.startsWith('file://')) {
+            // 绝对 URI（如缓存目录）：直接写入目标位置，避免被清洗重定向到文档根导致下载与引用位置不一致
+            destPath = downloadPath;
+            const dir = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
+            try {
+                await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+            } catch {
+                // 目录已存在时忽略，其余情况交由下载自身报错
+            }
+        } else {
+            // Create parent directory
+            const dir = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
+            if (dir) {
+                await fsService.createDirectory(dir);
+            }
+            destPath = fsService.getAbsolutePath(downloadPath);
         }
 
-        const destPath = fsService.getAbsolutePath(downloadPath);
         const url = this.getUrl(key);
 
         const downloadResult = await FileSystem.downloadAsync(url, destPath, {
