@@ -260,13 +260,29 @@ export class FileManager {
         }
 
         try {
-            const content = await fs.promises.readFile(resolvedPath, 'utf8');
-            return {
-                content,
-                mtime: stats.mtimeMs,
-                size: stats.size,
-            };
+            // 经文件句柄限定读取字节数：文件在 stat 之后增长（如日志追加）也不会返回超出上限的内容
+            const handle = await fs.promises.open(resolvedPath, 'r');
+            try {
+                const readLen = Math.min(stats.size, maxBytes) + 1; // 多读 1 字节用于检测 stat 后增长超限
+                const buf = Buffer.alloc(readLen);
+                const { bytesRead } = await handle.read(buf, 0, readLen, 0);
+                if (bytesRead > maxBytes) {
+                    throw new FileManagerError(
+                        `文件过大，超出最大支持大小（${(maxBytes / 1024 / 1024).toFixed(1)}MB）`,
+                        'LIMIT_EXCEEDED',
+                        400
+                    );
+                }
+                return {
+                    content: buf.subarray(0, bytesRead).toString('utf8'),
+                    mtime: stats.mtimeMs,
+                    size: bytesRead,
+                };
+            } finally {
+                await handle.close();
+            }
         } catch (err: unknown) {
+            if (err instanceof FileManagerError) throw err;
             const nodeErr = err as NodeJS.ErrnoException;
             throw new FileManagerError(`读取文件内容失败: ${nodeErr.message}`, 'FS_ERROR', 500);
         }
@@ -349,13 +365,29 @@ export class FileManager {
 
         // 校验现有文件的 expectedMtime 与权限 mode
         let existingMode: number | null = null;
+        // 保存必须落到目标真实文件：目标是根内符号链接时，rename 到词法路径会顶替链接本身
+        // 而真实文件内容不变（界面报成功但实际未保存），因此先解析到物理目标并校验边界
+        let finalPath = resolvedPath;
         try {
-            const existingStats = await fs.promises.stat(resolvedPath);
+            try {
+                const realTarget = await fs.promises.realpath(resolvedPath);
+                if (!this.isPathWithinAllowedRoot(realTarget)) {
+                    throw new FileManagerError('禁止通过符号链接访问根目录外部目标', 'SYMLINK_ESCAPE', 403);
+                }
+                finalPath = realTarget;
+            } catch (err: unknown) {
+                if (err instanceof FileManagerError) throw err;
+                const rnErr = err as NodeJS.ErrnoException;
+                if (rnErr.code !== 'ENOENT') throw err;
+                // 目标不存在（新建文件），使用原路径
+            }
+
+            const existingStats = await fs.promises.stat(finalPath);
             existingMode = existingStats.mode;
 
             if (expectedMtime !== undefined && expectedMtime > 0) {
-                // 允许 100ms 误差容限
-                if (Math.abs(existingStats.mtimeMs - expectedMtime) > 100) {
+                // 严格相等比对：mtime 经 JSON 传输无损，任何不一致都视为外部修改，阻止覆盖
+                if (existingStats.mtimeMs !== expectedMtime) {
                     throw new FileManagerError('服务端文件已被外部修改，保存已被阻止 (409 Conflict)', 'PRECONDITION_FAILED', 409);
                 }
             }
@@ -373,15 +405,15 @@ export class FileManager {
         }
 
         const defaultMode = existingMode !== null ? existingMode : 0o644;
-        const tmpFile = `${resolvedPath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+        const tmpFile = `${finalPath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
 
         try {
             await fs.promises.writeFile(tmpFile, content, { encoding: 'utf8', mode: defaultMode });
             if (existingMode !== null) {
                 await fs.promises.chmod(tmpFile, existingMode);
             }
-            await fs.promises.rename(tmpFile, resolvedPath);
-            const stats = await fs.promises.stat(resolvedPath);
+            await fs.promises.rename(tmpFile, finalPath);
+            const stats = await fs.promises.stat(finalPath);
             return {
                 success: true,
                 mtime: stats.mtimeMs,

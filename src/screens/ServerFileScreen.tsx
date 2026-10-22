@@ -18,6 +18,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { theme } from '../utils/theme';
+import { stableHash } from '../utils/identityHash';
 import { RootStackParamList, NoteStackParamList } from '../types/navigation';
 import { serverFileService } from '../services/ServerFileService';
 import { ServerFileItem, FileSystemInfo } from '../types/assistantProtocol';
@@ -64,7 +65,7 @@ export const ServerFileScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
 
-    const { serverUrl } = useAssistantStore();
+    const { serverUrl, serverToken } = useAssistantStore();
     const isConfigured = !!serverUrl && serverUrl.trim().length > 0;
 
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -80,13 +81,15 @@ export const ServerFileScreen = () => {
     const currentPathRef = useRef<string>('');
     const parentPathRef = useRef<string | null>(null);
     const hasLoadedInitialRef = useRef<boolean>(false);
-    const prevServerUrl = useRef(serverUrl);
+    const prevServiceIdentityRef = useRef(`${serverUrl}|${serverToken}`);
     const requestIdRef = useRef<number>(0);
     const systemInfoRef = useRef<FileSystemInfo | null>(null);
 
     useEffect(() => {
-        if (prevServerUrl.current !== serverUrl) {
-            prevServerUrl.current = serverUrl;
+        // 同地址换 Token 也视为切换了服务实例（重装、反代按 Token 选后端），需整体重置浏览状态
+        const serviceIdentity = `${serverUrl}|${serverToken}`;
+        if (prevServiceIdentityRef.current !== serviceIdentity) {
+            prevServiceIdentityRef.current = serviceIdentity;
             requestIdRef.current++;
             setCurrentPath('');
             setParentPath(null);
@@ -96,8 +99,9 @@ export const ServerFileScreen = () => {
             systemInfoRef.current = null;
             setSystemInfo(null);
             setItems([]);
+            setListingTruncated(false);
         }
-    }, [serverUrl]);
+    }, [serverUrl, serverToken]);
 
     const handleOpenCloud = useCallback(() => {
         navigation.navigate('CloudFileList');
@@ -246,7 +250,10 @@ export const ServerFileScreen = () => {
 
         try {
             const cacheDir = FileSystem.cacheDirectory || '';
-            const tempLocalUri = `${cacheDir}server_${Date.now()}_${item.name}`;
+            // 文件名可能含 #、? 等 URI 保留字符，直接拼接会被解析为片段或查询符，
+            // 用名称哈希构造缓存目标，保留扩展名便于系统分享识别类型
+            const ext = item.name.lastIndexOf('.') !== -1 ? item.name.substring(item.name.lastIndexOf('.')) : '';
+            const tempLocalUri = `${cacheDir}server_${Date.now()}_${stableHash(item.name)}${ext}`;
 
             await serverFileService.downloadFile(item.path, tempLocalUri);
 

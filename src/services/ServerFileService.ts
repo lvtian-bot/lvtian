@@ -118,6 +118,12 @@ export class ServerFileService {
             if (errObj.name === 'AbortError') {
                 throw new ServerFileError('请求超时，请检查服务端连接', 'TIMEOUT', 408);
             }
+            // 传输层立即失败（连接拒绝、服务器离线等）：包装为结构化错误码，供前端按语言映射
+            if (!(err instanceof ServerFileError)) {
+                const wrapped: any = new Error(errObj.message || 'Network request failed');
+                wrapped.code = 'network';
+                throw wrapped;
+            }
             throw errObj;
         } finally {
             clearTimeout(timeoutId);
@@ -163,37 +169,49 @@ export class ServerFileService {
     }
 
     /**
-     * 下载文件到本地沙盒临时目录（用于调起系统原生分享或查看，带 30 秒熔断防挂死）
+     * 下载文件到本地沙盒临时目录（用于调起系统原生分享或查看）。
+     * 超时按「30 秒无进展」判定而非固定总时长：慢速链路上的大文件只要仍在传输就不中断。
      */
     public async downloadFile(remotePath: string, localDestUri: string): Promise<string> {
         const { baseUrl, token } = await this.getHttpEndpoint();
         const url = `${baseUrl}/api/files/download?path=${encodeURIComponent(remotePath)}`;
 
-        const downloadPromise = FileSystem.downloadAsync(url, localDestUri, {
+        let lastProgressAt = Date.now();
+        const resumable = FileSystem.createDownloadResumable(url, localDestUri, {
             headers: {
                 Authorization: `Bearer ${token}`,
             },
+        }, () => {
+            lastProgressAt = Date.now();
         });
 
-        let timer: ReturnType<typeof setTimeout> | null = null;
+        let watchdog: ReturnType<typeof setInterval> | null = null;
         const timeoutPromise = new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-                reject(new ServerFileError('文件下载超时（超过 30 秒），请检查网络或稍后重试', 'DOWNLOAD_TIMEOUT', 408));
-            }, 30000);
+            watchdog = setInterval(() => {
+                if (Date.now() - lastProgressAt > 30000) {
+                    reject(new ServerFileError('文件下载超时（30 秒无进展），请检查网络或稍后重试', 'DOWNLOAD_TIMEOUT', 408));
+                }
+            }, 5000);
         });
 
         try {
-            const downloadResult = await Promise.race([downloadPromise, timeoutPromise]);
-            if (timer) clearTimeout(timer);
-
-            if (downloadResult.status !== 200) {
-                throw new ServerFileError(`下载失败，服务端返回状态码: ${downloadResult.status}`, 'DOWNLOAD_FAILED', downloadResult.status);
+            const downloadResult = await Promise.race([resumable.downloadAsync(), timeoutPromise]);
+            if (downloadResult?.status !== 200) {
+                throw new ServerFileError(`下载失败，服务端返回状态码: ${downloadResult?.status ?? 'unknown'}`, 'DOWNLOAD_FAILED', downloadResult?.status ?? 500);
             }
 
             return downloadResult.uri;
         } catch (err: unknown) {
-            if (timer) clearTimeout(timer);
+            // 中断仍在传输的下载并清理残留的部分文件，避免继续占用带宽与缓存空间
+            resumable.pauseAsync().catch(() => undefined);
+            try {
+                await FileSystem.deleteAsync(localDestUri, { idempotent: true });
+            } catch {
+                // ignore
+            }
             throw err;
+        } finally {
+            if (watchdog) clearInterval(watchdog);
         }
     }
 }

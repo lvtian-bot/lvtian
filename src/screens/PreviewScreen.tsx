@@ -98,7 +98,10 @@ export const PreviewScreen = () => {
                             stack.push(part);
                         }
                     }
-                    resolvedRemoteOrLocalPath = (isRootAbsolute ? '/' : '') + stack.join('/');
+                    // 服务端路径以根绝对形式表示（filePath 以 / 开头），拼接结果需保留前导斜杠，
+                    // 否则服务端会相对进程工作目录解析导致找不到文件
+                    const needsLeadingSlash = isRootAbsolute || (source === 'server' && filePath.startsWith('/'));
+                    resolvedRemoteOrLocalPath = (needsLeadingSlash ? '/' : '') + stack.join('/');
                 }
 
                 if (source === 'server') {
@@ -179,16 +182,31 @@ export const PreviewScreen = () => {
         return result;
     }, [filePath, source]);
 
+    // 记录最近一次待渲染的原始正文：图片解析是异步的，二次推送前核对正文未被更新，防止旧图片版本覆盖新内容
+    const latestRawContentRef = useRef('');
+
     const sendContentToWebView = useCallback(async (rawText: string) => {
         if (!webViewRef.current) return;
-        const resolved = await resolveMarkdownImages(rawText);
+        latestRawContentRef.current = rawText;
+        // 先推送原文让预览立即可见；在线图片在后台解析替换完成后二次推送，
+        // 避免多张未缓存图片串行下载（每张最长 30 秒超时）阻塞整个预览渲染
         webViewRef.current.postMessage(JSON.stringify({
             type: 'SET_CONTENT',
             payload: {
-                content: resolved,
+                content: rawText,
                 theme: markdownTheme,
             },
         }));
+        const resolved = await resolveMarkdownImages(rawText);
+        if (resolved !== rawText && latestRawContentRef.current === rawText && webViewRef.current) {
+            webViewRef.current.postMessage(JSON.stringify({
+                type: 'SET_CONTENT',
+                payload: {
+                    content: resolved,
+                    theme: markdownTheme,
+                },
+            }));
+        }
     }, [resolveMarkdownImages, markdownTheme]);
 
     const loadFile = useCallback(async () => {
@@ -287,14 +305,22 @@ export const PreviewScreen = () => {
         // 在线模式下的相对链接：按当前文件路径解析后跳转到另一个在线预览，而非交给系统浏览器
         const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
         if (!hasScheme && (source === 'server' || source === 'webdav')) {
+            // 先拆出锚点片段：`next.md#usage` 不能把 `#usage` 当作文件名的一部分
+            const hashIdx = url.indexOf('#');
+            const linkPathOnly = hashIdx !== -1 ? url.substring(0, hashIdx) : url;
+            if (!linkPathOnly) {
+                // 纯锚点链接（#xxx）指向当前文档内位置，在线预览暂不支持锚点定位，忽略
+                return;
+            }
             const currentDir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
-            const parts = (url.startsWith('/') ? url : (currentDir ? currentDir + '/' + url : url)).split('/');
+            const parts = (linkPathOnly.startsWith('/') ? linkPathOnly : (currentDir ? currentDir + '/' + linkPathOnly : linkPathOnly)).split('/');
             const stack: string[] = [];
             for (const part of parts) {
                 if (part === '..') stack.pop();
                 else if (part !== '.' && part !== '') stack.push(part);
             }
-            const resolvedLink = (url.startsWith('/') ? '/' : '') + stack.join('/');
+            const needsLeadingSlash = linkPathOnly.startsWith('/') || (source === 'server' && filePath.startsWith('/'));
+            const resolvedLink = (needsLeadingSlash ? '/' : '') + stack.join('/');
             navigation.navigate('Preview', {
                 filePath: resolvedLink,
                 source,
