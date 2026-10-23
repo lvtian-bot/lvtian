@@ -521,7 +521,7 @@ const styles = StyleSheet.create({
         width: 32,
         height: 32,
         borderRadius: 16,
-        backgroundColor: theme.colors.primaryDark,
+        backgroundColor: theme.colors.primary,
         justifyContent: 'center',
         alignItems: 'center',
         marginRight: 8,
@@ -534,7 +534,7 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
     },
     userBubble: {
-        backgroundColor: theme.colors.primaryDark,
+        backgroundColor: theme.colors.primary,
         borderBottomRightRadius: 6,
     },
     assistantBubble: {
@@ -717,7 +717,7 @@ const styles = StyleSheet.create({
         marginBottom: 1,
     },
     sendBtnActive: {
-        backgroundColor: theme.colors.primaryDark,
+        backgroundColor: theme.colors.primary,
     },
     sendBtnDisabled: {
         backgroundColor: theme.colors.border,
