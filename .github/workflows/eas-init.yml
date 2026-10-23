@@ -11,6 +11,8 @@ jobs:
           node-version: 20
       - name: 安装 eas-cli
         run: npm install -g eas-cli
+      - name: 安装项目依赖
+        run: npm ci
       - name: 摘除旧项目 ID（仅 CI 副本）
         run: sed -i '/projectId/d' app.config.js
       - name: 初始化 EAS 项目
