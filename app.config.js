@@ -167,14 +167,14 @@ module.exports = {
             }
         },
         updates: {
-            url: "https://u.expo.dev/71e44e22-3174-44f1-8fbf-b84c2295dfd8"
+            url: "https://u.expo.dev/9b2d91e1-6f12-4695-8d6c-c2ee5b45d459"
         },
         runtimeVersion: {
             policy: "appVersion"
         },
         extra: {
             eas: {
-                projectId: "71e44e22-3174-44f1-8fbf-b84c2295dfd8"
+                projectId: "9b2d91e1-6f12-4695-8d6c-c2ee5b45d459"
             }
         },
         plugins: [
