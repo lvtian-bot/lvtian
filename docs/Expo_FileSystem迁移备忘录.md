@@ -22,7 +22,7 @@
 |---------|------------------------------------|-------------------|---------|
 | 检查文件存在性 | `FileSystem.getInfoAsync(uri)` | `new File(uri).exists` | 需判断 `exists` 字段及 `isDirectory` |
 | 读取文本内容 | `FileSystem.readAsStringAsync(uri, { encoding: UTF8 })` | `new File(uri).text()` | 必须保证 UTF-8 编码，防止中文乱码 |
-| 写入文本内容 | `FileSystem.writeAsStringAsync(uri, content, { encoding: UTF8 })` | `new File(uri).write(content)` | 写入前确保父级目录已递归建立 |
+| 写入文本内容 | `FileSystemService.writeFile()` 内部使用 `await file.write(content)` | `await new File(uri).write(content)` | SDK 58 的 `File.write()` 返回 Promise；必须等待写入完成才可报告成功或开始同步，异步失败由服务层捕获并向调用方抛出；写入前确保父级目录已递归建立 |
 | 删除文件/目录 | `FileSystem.deleteAsync(uri, { idempotent: true })` | `new File(uri).delete()` | 开启幂等，文件不存在时不抛异常 |
 | 递归创建目录 | `FileSystem.makeDirectoryAsync(uri, { intermediates: true })` | `new Directory(uri).create({ intermediates: true })` | 必须开启 `intermediates: true` |
 

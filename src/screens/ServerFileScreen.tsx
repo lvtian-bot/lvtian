@@ -409,14 +409,14 @@ export const ServerFileScreen = () => {
                                 <Icon name="folder-open" size={48} color={theme.colors.border} />
                                 <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
                             </View>
-                        ) : null
+                        ) : undefined
                     }
                     ListFooterComponent={
                         listingTruncated ? (
                             <View style={styles.truncatedFooter}>
                                 <Text style={styles.truncatedText}>{t('browser.directoryTruncated', { defaultValue: '目录内容过多，仅显示部分条目' })}</Text>
                             </View>
-                        ) : null
+                        ) : undefined
                     }
                 />
             )}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, type ComponentRef } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, DeviceEventEmitter, Linking } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
@@ -37,7 +37,7 @@ export const PreviewScreen = () => {
     const [loadFailed, setLoadFailed] = useState(false);
     const [fileMtime, setFileMtime] = useState<number | undefined>(undefined);
     const [isWebViewReady, setIsWebViewReady] = useState(false);
-    const webViewRef = useRef<WebView>(null);
+    const webViewRef = useRef<ComponentRef<typeof WebView>>(null);
 
     // 仅在 local 模式使用本地云同步 hook
     const isLocalMode = source === 'local';

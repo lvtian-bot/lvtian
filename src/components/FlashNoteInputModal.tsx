@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, type ComponentRef } from 'react';
 import {
     Modal,
     View,
@@ -46,7 +46,7 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const [inputText, setInputText] = useState(initialContent || '');
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
 
-    const inputRef = useRef<TextInput>(null);
+    const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
     const isDraftLoaded = useRef(false);
 
     const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5;

@@ -191,6 +191,8 @@ module.exports = {
             "expo-image",
             "expo-secure-store",
             "expo-sharing",
+            "expo-localization",
+            "expo-status-bar",
             // Referencing plugins defined above
             withDisablePredictiveBack,
             withCustomBuildGradle,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, type ComponentRef } from 'react';
 import {
     Modal,
     View,
@@ -27,7 +27,7 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
 }) => {
     const { t } = useTranslation();
     const [newName, setNewName] = useState(currentName);
-    const inputRef = useRef<TextInput>(null);
+    const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
     useEffect(() => {
         if (visible) {
