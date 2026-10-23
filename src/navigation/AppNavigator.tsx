@@ -3,12 +3,13 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { TabNavigator } from './TabNavigator';
 import { PreviewScreen } from '../screens/PreviewScreen';
 import { EditorScreen } from '../screens/EditorScreen';
+import { ServerFileScreen } from '../screens/ServerFileScreen';
+import { CloudNoteScreen } from '../screens/CloudNoteScreen';
 import { CloudRepoConfigScreen } from '../screens/CloudRepoConfigScreen'; // 新增
 import { FlashNoteConfigScreen } from '../screens/FlashNoteConfigScreen'; // 新增
 import { CacheManagerScreen } from '../screens/CacheManagerScreen'; // 新增
 import { AboutScreen } from '../screens/AboutScreen'; // 新增
 import { PermissionInfoScreen } from '../screens/PermissionInfoScreen'; // 新增
-import { MeScreen } from '../screens/MeScreen'; // 新增
 import { AssistantConfigScreen } from '../screens/AssistantConfigScreen'; // 新增：助理服务配置
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next'; // 新增
@@ -68,13 +69,22 @@ export const AppNavigator = () => {
                     title: t('about.permissions.title')
                 }}
             />
-            {/* 新增：我页面 */}
+            {/* 新增：我页面入口后的系统文件页面 */}
             <Stack.Screen
-                name="Me"
-                component={MeScreen}
+                name="ServerFileList"
+                component={ServerFileScreen}
                 options={{
                     headerShown: true,
-                    title: t('tabs.me')
+                    title: t('tabs.files')
+                }}
+            />
+            {/* 新增：我页面入口后的云盘文件页面 */}
+            <Stack.Screen
+                name="CloudFileList"
+                component={CloudNoteScreen}
+                options={{
+                    headerShown: true,
+                    title: t('browser.cloudFiles', { defaultValue: '云盘文件' })
                 }}
             />
             {/* 新增：助理服务配置页面 */}

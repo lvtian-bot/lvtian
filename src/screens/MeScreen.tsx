@@ -9,7 +9,7 @@ import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
-import Icon from '@expo/vector-icons/MaterialCommunityIcons';
+import Icon from '@expo/vector-icons/MaterialIcons';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -46,7 +46,7 @@ export const MeScreen = () => {
                 <View style={styles.cardContent}>
                     <View style={styles.cardHeaderRow}>
                         <View style={styles.cardTitleContainer}>
-                            <Icon name="robot" size={28} color={theme.colors.primary} style={styles.cardIcon} />
+                            <Icon name="smart-toy" size={28} color={theme.colors.primary} style={styles.cardIcon} />
                             <Text style={styles.cardTitle}>{t('settings.assistantTitle', '绿天助理服务')}</Text>
                         </View>
                         <View style={[styles.cardServiceTag, connectionState === 'connected' && styles.connectedTag]}>
@@ -101,6 +101,32 @@ export const MeScreen = () => {
                 </View>
             </TouchableOpacity>
 
+            {/* 文件入口 - 系统文件 */}
+            <TouchableOpacity
+                style={styles.smallCard}
+                onPress={() => navigation.navigate('ServerFileList')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.smallCardLeft}>
+                    <Icon name="folder" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Text style={styles.smallCardTitle}>{t('tabs.files')}</Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+
+            {/* 文件入口 - 云盘文件 */}
+            <TouchableOpacity
+                style={styles.smallCard}
+                onPress={() => navigation.navigate('CloudFileList')}
+                activeOpacity={0.8}
+            >
+                <View style={styles.smallCardLeft}>
+                    <Icon name="cloud" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Text style={styles.smallCardTitle}>{t('browser.cloudFiles', { defaultValue: '云盘文件' })}</Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+
             {/* 闪念笔记配置 - 独立小卡片 */}
             <TouchableOpacity
                 style={styles.smallCard}
@@ -108,7 +134,7 @@ export const MeScreen = () => {
                 activeOpacity={0.8}
             >
                 <View style={styles.smallCardLeft}>
-                    <Icon name="flash-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Icon name="bolt" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
                     <Text style={styles.smallCardTitle}>{t('settings.flashNoteConfig')}</Text>
                 </View>
                 <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
@@ -121,7 +147,7 @@ export const MeScreen = () => {
                 activeOpacity={0.8}
             >
                 <View style={styles.smallCardLeft}>
-                    <Icon name="palette-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Icon name="palette" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
                     <Text style={styles.smallCardTitle}>{t('settings.markdownStyle')}</Text>
                 </View>
                 <View style={styles.smallCardRight}>
@@ -137,7 +163,7 @@ export const MeScreen = () => {
                 activeOpacity={0.8}
             >
                 <View style={styles.smallCardLeft}>
-                    <Icon name="trash-can-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Icon name="delete-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
                     <Text style={styles.smallCardTitle}>{t('settings.cacheManager')}</Text>
                 </View>
                 <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
@@ -150,7 +176,7 @@ export const MeScreen = () => {
                 activeOpacity={0.8}
             >
                 <View style={styles.smallCardLeft}>
-                    <Icon name="information-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
+                    <Icon name="info-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
                     <Text style={styles.smallCardTitle}>{t('about.title')}</Text>
                 </View>
                 <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
@@ -258,10 +284,10 @@ const styles = StyleSheet.create({
         borderRadius: 4,
     },
     connectedTag: {
-        backgroundColor: '#e8f5e9',
+        backgroundColor: theme.colors.successBg,
     },
     connectedName: {
-        color: '#2e7d32',
+        color: theme.colors.successText,
     },
     cardServiceName: {
         fontSize: 12,

@@ -101,7 +101,7 @@
 
 ## 1. 项目定位
 
-**MDNote** 是一款基于 **React Native (Expo)** 构建的现代化、**云优先、本地加速**的 Markdown 个人笔记与任务管理应用。
+**绿天（Lvtian，原名 MDNote，2026-10 更名）**是一款基于 **React Native (Expo)** 构建的现代化、**云优先、本地加速**的 Markdown 个人笔记与任务管理应用。
 
 **核心特性：**
 *   **云优先 & 本地加速**：支持 WebDAV 协议（原腾讯云 COS 已退出）。采用策略模式设计，确保云服务可扩展。恪守“列表即菜单，点击即下单”设计哲学，本地缓存仅作首屏加速，云端为唯一真相来源。
@@ -137,7 +137,7 @@
 ### 2.3 目录结构
 
 ```text
-MDNote/
+lvtian/
 ├── App.tsx                          # 应用主入口 (Provider 初始化与状态挂载)
 ├── app.config.js                    # Expo 动态配置与自定义插件
 ├── plugins/                         # Expo Config Plugins (原生行为定制)
@@ -159,7 +159,7 @@ MDNote/
 │   │   └── previewHtml.ts           # 注入 RN WebView 的产物
 │   ├── hooks/                       # 自定义 Hooks (useCloudSync, useFlashNoteList...)
 │   ├── locales/                     # 国际化语言包 (zh.json, en.json)
-│   ├── navigation/                  # 导航配置 (AppNavigator, TabNavigator, NoteNavigator)
+│   ├── navigation/                  # 导航配置 (AppNavigator, TabNavigator；文件页已并入「我」页导航)
 │   ├── screens/                     # 页面级组件 (FlashScreen, TodoScreen, ChatScreen, ServerFileScreen, CloudNoteScreen, PreviewScreen, EditorScreen...)
 │   ├── services/                    # ⭐ 业务逻辑服务层 (业务中枢)
 │   │   ├── CloudService.ts          # 云服务策略入口 (ICloudProvider)

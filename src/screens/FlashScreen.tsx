@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Clipboard, BackHandler, Share } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
+import { formatNoteTimestamp } from '../utils/formatNoteTime';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next';
@@ -66,16 +66,8 @@ export const FlashScreen = () => {
     const headerRight = useCallback(() => (
         <View style={styles.headerRightContainer}>
             <HeaderSyncStatus isSyncing={isSyncing} syncStatus={syncStatus} conflictType={conflictType} />
-            <TouchableOpacity
-                onPress={() => (navigation as any).navigate('Me')}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                style={styles.settingsButton}
-                activeOpacity={0.7}
-            >
-                <Icon name="settings" size={22} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
         </View>
-    ), [isSyncing, syncStatus, conflictType, navigation]);
+    ), [isSyncing, syncStatus, conflictType]);
 
     useLayoutEffect(() => {
         navigation.setOptions({
@@ -219,7 +211,7 @@ export const FlashScreen = () => {
                 onPress={() => handleEditNote(item)}
                 onLongPress={() => handleNoteLongPress(item)}
             >
-                <Text style={styles.timestamp}>{item.timestamp}</Text>
+                <Text style={styles.timestamp}>{formatNoteTimestamp(item.timestamp, t)}</Text>
                 <Text style={styles.content} numberOfLines={5} ellipsizeMode="tail">{item.content.trim()}</Text>
             </TouchableOpacity>
         </View>
@@ -282,10 +274,6 @@ const styles = StyleSheet.create({
     headerRightContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-    },
-    settingsButton: {
-        marginLeft: 12,
-        marginRight: 8,
     },
     card: {
         backgroundColor: theme.colors.surface,

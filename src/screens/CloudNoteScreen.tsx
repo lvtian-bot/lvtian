@@ -17,11 +17,11 @@ import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
 
 import { theme } from '../utils/theme';
-import { RootStackParamList, NoteStackParamList } from '../types/navigation';
+import { RootStackParamList } from '../types/navigation';
 import { cloudService, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudService';
 
-type NavigationProp = NativeStackNavigationProp<RootStackParamList & NoteStackParamList>;
-type RoutePropType = RouteProp<NoteStackParamList, 'CloudFileList'>;
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type RoutePropType = RouteProp<RootStackParamList, 'CloudFileList'>;
 
 const TEXT_EXTENSIONS = new Set([
     '.md',

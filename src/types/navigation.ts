@@ -1,16 +1,11 @@
 import { NavigatorScreenParams } from '@react-navigation/native';
 
-export type NoteStackParamList = {
-    ServerFileList: { initialPath?: string } | undefined;
-    CloudFileList: { prefix?: string } | undefined;
-};
-
 export type MainTabParamList = {
     Chat: undefined;
     Flash: undefined;
     Todo: undefined;
     Moments: undefined;
-    Files: NavigatorScreenParams<NoteStackParamList>;
+    Me: undefined;
 };
 
 export type RootStackParamList = {
@@ -23,5 +18,6 @@ export type RootStackParamList = {
     About: undefined; // 关于页面
     PermissionInfo: undefined; // 权限说明页面
     AssistantConfig: undefined; // 助理服务配置页面
-    Me: undefined; // 设置页面
+    ServerFileList: { initialPath?: string } | undefined; // 系统文件（由「我」页进入）
+    CloudFileList: { prefix?: string } | undefined; // 云盘文件（由「我」页进入）
 };

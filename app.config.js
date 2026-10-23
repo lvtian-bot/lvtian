@@ -137,8 +137,8 @@ const withCustomGradleProperties = (config) => {
 
 module.exports = {
     expo: {
-        name: "MDNote",
-        slug: "mdnote",
+        name: "绿天",
+        slug: "lvtian",
         version: pkg.version,
         locales: {
             en: "./config-locales/en.json",
@@ -154,11 +154,11 @@ module.exports = {
         },
         ios: {
             supportsTablet: true,
-            bundleIdentifier: "com.mdnote",
+            bundleIdentifier: "com.lvtian",
             buildNumber: "19"
         },
         android: {
-            package: "com.mdnote",
+            package: "com.lvtian",
             versionCode: 20,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
