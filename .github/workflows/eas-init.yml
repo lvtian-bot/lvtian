@@ -1,0 +1,19 @@
+name: EAS Init (one-off)
+on: workflow_dispatch
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 安装 eas-cli
+        run: npm install -g eas-cli
+      - name: 初始化 EAS 项目
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas init --non-interactive
+      - name: 输出新项目 ID
+        run: grep -n "projectId" app.config.js
