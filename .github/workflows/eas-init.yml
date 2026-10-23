@@ -18,6 +18,6 @@ jobs:
       - name: 初始化 EAS 项目
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas init --non-interactive
+        run: eas init --non-interactive --force
       - name: 输出新项目 ID
         run: grep -n "projectId" app.config.js
