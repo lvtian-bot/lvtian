@@ -407,6 +407,20 @@ export class SessionManager {
             fs.renameSync(tmpPath, activePath);
             // 轮换后增量重置为 0，避免超大快照本身导致无限频繁轮换
             this.activeLogBytes.set(sessionId, 0);
+
+            // 保留最近 10 个轮换分段（~40MB），自动清理被最新快照完全覆盖的历史超期分段，杜绝磁盘无限累积
+            const updatedSegments = this.listSegments(dir);
+            const maxSegments = 10;
+            if (updatedSegments.length > maxSegments) {
+                const toPrune = updatedSegments.slice(0, updatedSegments.length - maxSegments);
+                for (const seg of toPrune) {
+                    try {
+                        fs.unlinkSync(path.join(dir, seg));
+                    } catch {
+                        // ignore
+                    }
+                }
+            }
         } catch (err) {
             console.warn(`[SessionManager] 轮换会话日志 ${sessionId} 失败(不影响继续追加): ${err}`);
         }

@@ -245,16 +245,27 @@ export class LvtianServer {
             }
             try {
                 const downloadInfo = await this.fileManager.getFileDownloadInfo(targetPath);
-                // 打开文件确认可读并校验权限，随后直接由底层安全路径流式传输
-                const fileHandle = await fs.promises.open(downloadInfo.resolvedPath, 'r');
-                await fileHandle.close();
+                // 直接使用 Node 官方 FileHandle 打开文件并创建只读流，
+                // 由 Node 内部在流传输完成/出错时安全自动关闭该句柄，杜绝描述符泄漏与并发竞争
+                let fileHandle: fs.promises.FileHandle;
+                try {
+                    fileHandle = await fs.promises.open(downloadInfo.resolvedPath, 'r');
+                } catch (openErr: unknown) {
+                    const nodeErr = openErr as NodeJS.ErrnoException;
+                    if (nodeErr.code === 'EACCES' || nodeErr.code === 'EPERM') {
+                        res.writeHead(403, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: `无权限读取该文件: ${targetPath}`, code: 'EACCES' }));
+                        return;
+                    }
+                    throw openErr;
+                }
 
                 res.writeHead(200, {
                     'Content-Type': 'application/octet-stream',
                     'Content-Length': downloadInfo.size,
                     'Content-Disposition': `attachment; filename="${encodeURIComponent(downloadInfo.fileName)}"`,
                 });
-                const stream = fs.createReadStream(downloadInfo.resolvedPath);
+                const stream = fileHandle.createReadStream();
                 stream.on('error', (streamErr: unknown) => {
                     console.error('[Server] 下载流传输异常:', streamErr);
                     if (!res.headersSent) {
@@ -266,12 +277,6 @@ export class LvtianServer {
                 });
                 stream.pipe(res);
             } catch (err: unknown) {
-                const nodeErr = err as NodeJS.ErrnoException;
-                if (nodeErr.code === 'EACCES' || nodeErr.code === 'EPERM') {
-                    res.writeHead(403, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: `无权限读取该文件: ${targetPath}`, code: 'EACCES' }));
-                    return;
-                }
                 this.sendFileManagerError(res, err);
             }
             return;
@@ -367,7 +372,12 @@ export class LvtianServer {
             }
 
             case 'sync': {
-                const sessionId = msg.sessionId || 'main';
+                const rawSessionId = msg.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(rawSessionId)) {
+                    console.warn(`[Server] 拒绝非法 sessionId 报文: ${rawSessionId}`);
+                    break;
+                }
+                const sessionId = rawSessionId;
                 ws.sessionId = sessionId;
                 const reconcile = this.sessionManager.getReconcileData(sessionId, msg.lastSeq);
                 this.send(ws, {
@@ -382,12 +392,29 @@ export class LvtianServer {
             }
 
             case 'chat': {
-                this.handleChat(ws, msg.sessionId || 'main', msg.messageId, msg.content);
+                const rawSessionId = msg.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(rawSessionId)) {
+                    console.warn(`[Server] 拒绝非法 sessionId 聊天报文: ${rawSessionId}`);
+                    this.send(ws, {
+                        type: 'message_ack',
+                        messageId: msg.messageId,
+                        seq: 0,
+                        status: 'error',
+                        error: '非法 sessionId',
+                    });
+                    break;
+                }
+                this.handleChat(ws, rawSessionId, msg.messageId, msg.content);
                 break;
             }
 
             case 'stop': {
-                const sessionId = msg.sessionId || 'main';
+                const rawSessionId = msg.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(rawSessionId)) {
+                    console.warn(`[Server] 拒绝非法 sessionId 终止报文: ${rawSessionId}`);
+                    break;
+                }
+                const sessionId = rawSessionId;
                 const stopped = this.dshRunner.stop(sessionId);
                 const seq = this.sessionManager.nextSeq(sessionId);
                 this.broadcastSession(sessionId, {
