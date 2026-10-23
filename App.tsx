@@ -3,6 +3,7 @@ import './src/i18n'; // Initialize i18next
 import React, { useEffect } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
@@ -79,8 +80,8 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
     });
 
     return () => {
-      console.log('[App] Removing onShareReceived listener');
-      subscription.remove();
+        console.log('[App] Removing onShareReceived listener');
+        subscription.remove();
     };
   }, [handleSharedContent]);
 
@@ -90,38 +91,40 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={theme.colors.surface} />
-      <SafeAreaProvider>
-        <NavigationContainer ref={navigationRef}>
-          <AppNavigator />
-        </NavigationContainer>
+      <KeyboardProvider>
+        <StatusBar barStyle="dark-content" backgroundColor={theme.colors.surface} />
+        <SafeAreaProvider>
+          <NavigationContainer ref={navigationRef}>
+            <AppNavigator />
+          </NavigationContainer>
 
-        {/* Global Share Input Modal */}
-        <FlashNoteInputModal
-          visible={isGlobalModalVisible}
-          initialContent={globalShareContent}
-          onSave={async (id, content) => {
-            try {
-              // Determine if it should be saved as Note or Todo based on some heuristic? 
-              // For now, default to Note as per request "Flash Note Dialog"
-              await flashNoteService.addNote(content);
-              // Also notify list to refresh
-              DeviceEventEmitter.emit(SHARE_RECEIVED_EVENT, { content: '' }); // Hack to trigger refresh if listener exists, or usually FLASH_NOTES_UPDATED_EVENT is better
-            } catch (e) {
-              console.error("Failed to save shared note", e);
-            } finally {
+          {/* Global Share Input Modal */}
+          <FlashNoteInputModal
+            visible={isGlobalModalVisible}
+            initialContent={globalShareContent}
+            onSave={async (id, content) => {
+              try {
+                // Determine if it should be saved as Note or Todo based on some heuristic? 
+                // For now, default to Note as per request "Flash Note Dialog"
+                await flashNoteService.addNote(content);
+                // Also notify list to refresh
+                DeviceEventEmitter.emit(SHARE_RECEIVED_EVENT, { content: '' }); // Hack to trigger refresh if listener exists, or usually FLASH_NOTES_UPDATED_EVENT is better
+              } catch (e) {
+                console.error("Failed to save shared note", e);
+              } finally {
+                setIsGlobalModalVisible(false);
+                setGlobalShareContent('');
+                useShareStore.getState().clearPendingShare();
+              }
+            }}
+            onCancel={() => {
               setIsGlobalModalVisible(false);
               setGlobalShareContent('');
               useShareStore.getState().clearPendingShare();
-            }
-          }}
-          onCancel={() => {
-            setIsGlobalModalVisible(false);
-            setGlobalShareContent('');
-            useShareStore.getState().clearPendingShare();
-          }}
-        />
-      </SafeAreaProvider>
+            }}
+          />
+        </SafeAreaProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }
