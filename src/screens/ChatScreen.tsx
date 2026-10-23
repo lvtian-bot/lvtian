@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, forwardRef } from 'react';
 import {
     View,
     Text,
@@ -8,14 +8,23 @@ import {
     FlatList,
     ActivityIndicator,
     Alert,
+    type LayoutChangeEvent,
+    type ScrollViewProps,
 } from 'react-native';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useSharedValue, withTiming } from 'react-native-reanimated';
+import {
+    KeyboardChatScrollView,
+    KeyboardStickyView,
+    type KeyboardChatScrollViewProps,
+    type KeyboardChatScrollViewRef,
+} from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '../utils/theme';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
@@ -24,10 +33,43 @@ import { RootStackParamList } from '../types/navigation';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
+const ChatScrollView = forwardRef<
+    KeyboardChatScrollViewRef,
+    ScrollViewProps & KeyboardChatScrollViewProps
+>((props, ref) => {
+    const { bottom } = useSafeAreaInsets();
+
+    return (
+        <KeyboardChatScrollView
+            ref={ref}
+            automaticallyAdjustContentInsets={false}
+            contentInsetAdjustmentBehavior="never"
+            keyboardDismissMode="interactive"
+            offset={bottom - 8}
+            {...props}
+        />
+    );
+});
+ChatScrollView.displayName = 'ChatScrollView';
+
 export const ChatScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
+    const insets = useSafeAreaInsets();
     const flatListRef = useRef<FlatList<AssistantMessage>>(null);
+    const extraContentPadding = useSharedValue(0);
+    const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
+        extraContentPadding.value = withTiming(
+            Math.max(event.nativeEvent.layout.height - 40, 0),
+            { duration: 250 },
+        );
+    }, [extraContentPadding]);
+    const renderChatScrollComponent = useCallback(
+        (props: ScrollViewProps) => (
+            <ChatScrollView {...props} extraContentPadding={extraContentPadding} />
+        ),
+        [extraContentPadding],
+    );
 
     const {
         serverUrl,
@@ -138,16 +180,9 @@ export const ChatScreen = () => {
     }
 
     // 2. 正常聊天界面
-    // 键盘避让：react-native-keyboard-controller（与 Journal 日记同款方案），
-    // 双端 padding 模式平滑跟随键盘，不依赖原生窗口模式配置
+    // 聊天消息列表与输入区分别使用库提供的聊天滚动视图和键盘粘附视图
     return (
-        <KeyboardAvoidingView
-            style={styles.chatContainer}
-            behavior="padding"
-            // automaticOffset：由库通过原生接口测量本视图在屏幕上的绝对位置，
-            // 修正嵌套于导航栈（状态栏/标题栏/标签栏）时局部坐标导致的上浮不足
-            automaticOffset
-        >
+        <View style={styles.chatContainer}>
             {/* 连接异常时才显示状态提示条；已连接时保持界面干净 */}
             {connectionState !== 'connected' && (
                 <View style={styles.statusBar}>
@@ -181,6 +216,7 @@ export const ChatScreen = () => {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
+                renderScrollComponent={renderChatScrollComponent}
                 renderItem={({ item }) => {
                     const isUser = item.role === 'user';
                     return (
@@ -301,7 +337,11 @@ export const ChatScreen = () => {
                 }}
             />
 
-            {/* 人工审批卡片 */}
+            <KeyboardStickyView
+                style={styles.keyboardSticky}
+                offset={{ opened: insets.bottom - 8 }}
+            >
+                {/* 人工审批卡片 */}
             {pendingApproval && (
                 <View style={styles.approvalCard}>
                     <View style={styles.approvalHeader}>
@@ -352,6 +392,7 @@ export const ChatScreen = () => {
                     onChangeText={setInputContent}
                     multiline
                     maxLength={2000}
+                    onLayout={handleInputLayout}
                 />
                 <TouchableOpacity
                     style={[
@@ -364,7 +405,8 @@ export const ChatScreen = () => {
                     <Icon name="send" size={20} color="#fff" />
                 </TouchableOpacity>
             </View>
-        </KeyboardAvoidingView>
+            </KeyboardStickyView>
+        </View>
     );
 };
 
@@ -464,6 +506,9 @@ const styles = StyleSheet.create({
     },
     chatContainer: {
         flex: 1,
+        backgroundColor: theme.colors.background,
+    },
+    keyboardSticky: {
         backgroundColor: theme.colors.background,
     },
     statusBar: {
