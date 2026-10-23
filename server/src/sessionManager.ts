@@ -75,14 +75,16 @@ export class SessionManager {
     }
 
     private getSafeSessionDir(sessionId: string): string {
-        if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-            throw new Error(`非法会话 ID: ${sessionId}`);
-        }
-        const resolved = path.resolve(this.sessionsDir, sessionId);
+        const safeSessionId = this.normalizeSessionId(sessionId);
+        const resolved = path.resolve(this.sessionsDir, safeSessionId);
         if (!resolved.startsWith(path.resolve(this.sessionsDir))) {
             throw new Error(`非法路径穿越: ${sessionId}`);
         }
         return resolved;
+    }
+
+    private normalizeSessionId(sessionId: string): string {
+        return /^[a-zA-Z0-9_-]+$/.test(sessionId) ? sessionId : 'main';
     }
 
     private ensureSessionDir(sessionId: string): string {
@@ -143,8 +145,8 @@ export class SessionManager {
                 } else if (entry.isFile() && entry.name.endsWith('.json')) {
                     // 旧版单文件会话：一次性迁移为事件日志目录（已迁移的 .json.migrated 不再处理）
                     const sessionId = entry.name.slice(0, -'.json'.length);
-                    if (dirIds.has(sessionId)) {
-                        continue; // 目录已存在（上次迁移中途失败），以目录为准
+                    if (dirIds.has(sessionId) && this.hasValidSnapshotLog(sessionId)) {
+                        continue; // 目录已存在且包含合法快照头，说明此前已成功迁移完成
                     }
                     this.migrateLegacyFile(sessionId, path.join(this.sessionsDir, entry.name));
                 }
@@ -154,38 +156,86 @@ export class SessionManager {
         }
     }
 
+    private hasValidSnapshotLog(sessionId: string): boolean {
+        try {
+            const activePath = path.join(this.getSafeSessionDir(sessionId), ACTIVE_LOG);
+            if (!fs.existsSync(activePath)) return false;
+            const fd = fs.openSync(activePath, 'r');
+            try {
+                const buf = Buffer.alloc(4096);
+                const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+                const head = buf.toString('utf8', 0, bytesRead);
+                const firstLine = head.split('\n')[0]?.trim();
+                if (!firstLine) return false;
+                const parsed = JSON.parse(firstLine);
+                return parsed && parsed.t === 'snapshot';
+            } finally {
+                fs.closeSync(fd);
+            }
+        } catch {
+            return false;
+        }
+    }
+
     /** 读取并重放一个会话的事件日志，完成重启修复后注册进内存 */
     private loadFromEventLog(sessionId: string): void {
         const dir = this.getSafeSessionDir(sessionId);
-        // 轮换中途崩溃可能遗留 tmp 文件，清理之
-        try {
-            if (fs.existsSync(path.join(dir, TMP_LOG))) {
-                fs.unlinkSync(path.join(dir, TMP_LOG));
+        const activePath = path.join(dir, ACTIVE_LOG);
+        const tmpPath = path.join(dir, TMP_LOG);
+
+        // 轮换中断保护：如果 activePath 缺失但 tmpPath 存在且完整，说明中断发生在重命名为 active 前夕，转正之
+        if (!fs.existsSync(activePath) && fs.existsSync(tmpPath)) {
+            try {
+                fs.renameSync(tmpPath, activePath);
+            } catch {
+                // ignore
             }
-        } catch {
-            // ignore
+        } else if (fs.existsSync(tmpPath)) {
+            // 常规情况下的陈旧临时文件，清理
+            try {
+                fs.unlinkSync(tmpPath);
+            } catch {
+                // ignore
+            }
         }
 
-        const activePath = path.join(dir, ACTIVE_LOG);
         const session = this.emptySession(sessionId);
 
         if (fs.existsSync(activePath)) {
             // 常规路径：活跃日志以快照开头，其后事件直接重放即可，旧分段无需读取
             this.replayFile(activePath, session);
         } else {
-            // 崩溃窗口：活跃日志尚未落位，按序重放全部分段（分段里含最初的建会话快照）
+            // 崩溃极端窗口：活跃日志与临时文件皆未落位，按序重放全部分段重建状态
             const segments = this.listSegments(dir);
             for (const seg of segments) {
                 this.replayFile(path.join(dir, seg), session);
+            }
+            // 重建后立即写入新的合法快照作为活跃日志，防止后续追加缺少快照头
+            try {
+                const snapLine = this.eventLine(this.buildSnapshotEvent(session));
+                fs.writeFileSync(activePath, snapLine, { encoding: 'utf8', mode: 0o600 });
+            } catch (err) {
+                console.warn(`[SessionManager] 分段重建后写入活跃快照失败: ${err}`);
             }
         }
 
         this.repairAfterLoad(session);
         this.sessions.set(sessionId, session);
+        this.activeLogBytes.set(sessionId, this.calculateActiveGrowthBytes(activePath));
+    }
+
+    /** 计算快照之后的增量字节，避免超大快照本身导致无限频繁轮换 */
+    private calculateActiveGrowthBytes(activePath: string): number {
         try {
-            this.activeLogBytes.set(sessionId, fs.statSync(activePath).size);
+            if (!fs.existsSync(activePath)) return 0;
+            const content = fs.readFileSync(activePath, 'utf8');
+            const firstNewline = content.indexOf('\n');
+            if (firstNewline === -1) {
+                return 0; // 仅有首行快照，增量为 0
+            }
+            return Buffer.byteLength(content.slice(firstNewline + 1), 'utf8');
         } catch {
-            this.activeLogBytes.set(sessionId, 0);
+            return 0;
         }
     }
 
@@ -200,25 +250,46 @@ export class SessionManager {
         }
     }
 
-    /** 逐行重放事件；末行撕裂（崩溃中断写入）时容忍丢弃，中段解析失败则停止重放保护一致性 */
+    /** 逐行重放事件；末行撕裂（崩溃中断写入）时截断清理残余字节，中段解析失败则停止重放保护一致性 */
     private replayFile(filePath: string, session: SessionData): void {
         const raw = fs.readFileSync(filePath, 'utf8');
         const lines = raw.split('\n');
+        let validByteLength = 0;
+        let hasTornTail = false;
+
         for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
+            const line = lines[i];
+            const trimmed = line.trim();
+            // 如果是中间空行，计入长度
+            if (!trimmed) {
+                if (i < lines.length - 1) {
+                    validByteLength += Buffer.byteLength(line, 'utf8') + 1; // +1 for '\n'
+                }
+                continue;
+            }
             let ev: SessionLogEvent;
             try {
-                ev = JSON.parse(line) as SessionLogEvent;
+                ev = JSON.parse(trimmed) as SessionLogEvent;
             } catch (err) {
                 if (i === lines.length - 1) {
-                    console.warn(`[SessionManager] ${path.basename(filePath)} 末行不完整(疑似崩溃撕裂)，已丢弃`);
+                    console.warn(`[SessionManager] ${path.basename(filePath)} 末行不完整(疑似崩溃撕裂)，已丢弃并截断文件`);
+                    hasTornTail = true;
                 } else {
                     console.warn(`[SessionManager] ${path.basename(filePath)} 第 ${i + 1} 行解析失败，停止重放该文件: ${err}`);
                 }
                 break;
             }
             this.applyEvent(session, ev);
+            validByteLength += Buffer.byteLength(line, 'utf8') + 1;
+        }
+
+        // 如果末行损坏，截断清理残余字节，确保后续追加始终另起一个合法新行
+        if (hasTornTail) {
+            try {
+                fs.truncateSync(filePath, validByteLength);
+            } catch (truncErr) {
+                console.warn(`[SessionManager] 截断清理损坏文件尾失败: ${truncErr}`);
+            }
         }
     }
 
@@ -358,12 +429,13 @@ export class SessionManager {
 
     private appendRaw(sessionId: string, line: string): boolean {
         try {
-            const dir = this.ensureSessionDir(sessionId);
+            const safeSessionId = this.normalizeSessionId(sessionId);
+            const dir = this.ensureSessionDir(safeSessionId);
             const activePath = path.join(dir, ACTIVE_LOG);
             fs.appendFileSync(activePath, line, { encoding: 'utf8', mode: 0o600 });
-            const bytes = (this.activeLogBytes.get(sessionId) ?? 0) + Buffer.byteLength(line, 'utf8');
-            this.activeLogBytes.set(sessionId, bytes);
-            this.maybeRotate(sessionId);
+            const bytes = (this.activeLogBytes.get(safeSessionId) ?? 0) + Buffer.byteLength(line, 'utf8');
+            this.activeLogBytes.set(safeSessionId, bytes);
+            this.maybeRotate(safeSessionId);
             return true;
         } catch (err) {
             console.error(`[SessionManager] 追加会话事件 ${sessionId} 失败: ${err}`);
@@ -401,7 +473,8 @@ export class SessionManager {
             }
             fs.renameSync(activePath, path.join(dir, `${SEGMENT_PREFIX}${String(nextIdx).padStart(6, '0')}.jsonl`));
             fs.renameSync(tmpPath, activePath);
-            this.activeLogBytes.set(sessionId, Buffer.byteLength(snapLine, 'utf8'));
+            // 轮换后增量重置为 0，避免超大快照本身导致无限频繁轮换
+            this.activeLogBytes.set(sessionId, 0);
         } catch (err) {
             console.warn(`[SessionManager] 轮换会话日志 ${sessionId} 失败(不影响继续追加): ${err}`);
         }
