@@ -120,7 +120,7 @@ export const TabNavigator = () => {
     return (
         <Tab.Navigator
             tabBarPosition="bottom"
-            initialRouteName="Flash"
+            initialRouteName="Chat"
             backBehavior="initialRoute"
             initialLayout={{ width: 0 }}
             screenOptions={{
