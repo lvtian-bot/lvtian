@@ -220,12 +220,16 @@ export class SessionManager {
         }
     }
 
-    /** 逐行重放事件；末行撕裂（崩溃中断写入）时截断清理残余字节，中段解析失败则停止重放保护一致性 */
+    /**
+     * 逐行重放事件；遇到不合法记录（末行撕裂或中段损坏）即停止重放并截断至最后合法字节。
+     * 不截断的话，后续新事件会追加在坏记录之后，每次重启都在同一位置停止重放，
+     * 坏记录之后写入的所有事件会被静默丢弃；坏记录之后的原残余字节本就永远无法重放，截断不损失可恢复数据。
+     */
     private replayFile(filePath: string, session: SessionData): void {
         const raw = fs.readFileSync(filePath, 'utf8');
         const lines = raw.split('\n');
         let validByteLength = 0;
-        let hasTornTail = false;
+        let needsTruncate = false;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
@@ -243,22 +247,22 @@ export class SessionManager {
             } catch (err) {
                 if (i === lines.length - 1) {
                     console.warn(`[SessionManager] ${path.basename(filePath)} 末行不完整(疑似崩溃撕裂)，已丢弃并截断文件`);
-                    hasTornTail = true;
                 } else {
-                    console.warn(`[SessionManager] ${path.basename(filePath)} 第 ${i + 1} 行解析失败，停止重放该文件: ${err}`);
+                    console.warn(`[SessionManager] ${path.basename(filePath)} 第 ${i + 1} 行解析失败(疑似局部损坏)，停止重放并截断至最后合法字节: ${err}`);
                 }
+                needsTruncate = true;
                 break;
             }
             this.applyEvent(session, ev);
             validByteLength += Buffer.byteLength(line, 'utf8') + 1;
         }
 
-        // 如果末行损坏，截断清理残余字节，确保后续追加始终另起一个合法新行
-        if (hasTornTail) {
+        // 截断清理坏记录及其后的残余字节，确保后续追加始终另起合法新行、重启重放不再卡在同一位置
+        if (needsTruncate) {
             try {
                 fs.truncateSync(filePath, validByteLength);
             } catch (truncErr) {
-                console.warn(`[SessionManager] 截断清理损坏文件尾失败: ${truncErr}`);
+                console.warn(`[SessionManager] 截断清理损坏文件失败: ${truncErr}`);
             }
         }
     }
@@ -437,15 +441,21 @@ export class SessionManager {
             return;
         }
         this.pendingDeltas.delete(sessionId);
-        for (const [messageId, pending] of buffered) {
-            this.appendRaw(sessionId, this.eventLine({
-                t: 'delta',
-                at: Date.now(),
-                seq: pending.seq,
-                id: messageId,
-                d: pending.text,
-            }));
-        }
+        // 一批增量合并为一次追加（单次写入、单次轮换判定）：
+        // 若逐条追加且轮换恰在中途触发，轮换快照取自内存（已含其余未落盘增量），
+        // 这些增量随后又作为事件写入新日志，重放时同一文本会被重复计入
+        const lines = [...buffered.entries()]
+            .map(([messageId, pending]) =>
+                this.eventLine({
+                    t: 'delta',
+                    at: Date.now(),
+                    seq: pending.seq,
+                    id: messageId,
+                    d: pending.text,
+                })
+            )
+            .join('');
+        this.appendRaw(sessionId, lines);
     }
 
     private scheduleDeltaFlush(sessionId: string): void {

@@ -592,4 +592,58 @@ test('SessionManager handles interrupted rotation and invalid session ID cleanly
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('SessionManager does not duplicate buffered deltas when rotation lands mid-flush', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-dup-'));
+    // 阈值取“大增量落盘触发轮换、其后的小增量与 seq 事件不再触发”的区间
+    process.env.LVTIAN_SESSION_ROTATE_BYTES = '300';
+    const sm = new SessionManager(tmpDir);
+    delete process.env.LVTIAN_SESSION_ROTATE_BYTES;
+
+    sm.addMessage('main', { id: 'm1', role: 'assistant', content: 'x'.repeat(10), timestamp: Date.now(), status: 'sent' });
+    sm.addMessage('main', { id: 'm2', role: 'assistant', content: 'y'.repeat(10), timestamp: Date.now(), status: 'sent' });
+    sm.appendDelta('main', 'm1', 'A'.repeat(400));
+    sm.appendDelta('main', 'm2', 'B');
+    // nextSeq 冲刷两条待落盘增量：m1 的落盘应触发轮换，m2 的增量必须在轮换快照之后仍不重复
+    sm.nextSeq('main');
+
+    const sm2 = new SessionManager(tmpDir);
+    const m2 = sm2.getReconcileData('main', 0).messages.find((m) => m.id === 'm2');
+    assert.ok(m2);
+    // m2 处于流式状态，重启修复会按设计追加中断标记，故只校验增量不重复
+    assert.ok(m2.content.startsWith('y'.repeat(10) + 'B'), `增量丢失: ${m2.content}`);
+    assert.ok(!m2.content.includes('BB'), `重放后增量被重复计入: ${m2.content}`);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager truncates corrupted middle record so later appends survive restart', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-midbad-'));
+    const sm = new SessionManager(tmpDir);
+    sm.addMessage('main', { id: 'u1', role: 'user', content: '坏记录之前的消息', timestamp: Date.now(), status: 'sent' });
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 在日志中段插入一行坏记录（模拟局部磁盘损坏），其后补一行合法事件
+    const sessionDir = path.join(tmpDir, 'sessions', 'main');
+    const activePath = path.join(sessionDir, 'events.jsonl');
+    const original = fs.readFileSync(activePath, 'utf8');
+    const firstLineEnd = original.indexOf('\n') + 1;
+    const badLine = '{"t":"msg","at":1,"seq":2,"m":{"id":"corrupt"' + '\u0000'.repeat(8);
+    fs.writeFileSync(activePath, original.slice(0, firstLineEnd) + badLine + '\n' + original.slice(firstLineEnd));
+
+    // 重启：坏记录被截断，其后新追加的消息在再次重启后仍能找回
+    const sm2 = new SessionManager(tmpDir);
+    const r2 = sm2.getReconcileData('main', 0);
+    assert.ok(!r2.messages.some((m) => m.id === 'corrupt'));
+
+    sm2.addMessage('main', { id: 'after-bad', role: 'user', content: '坏记录之后的新消息', timestamp: Date.now(), status: 'sent' });
+    const sm3 = new SessionManager(tmpDir);
+    const r3 = sm3.getReconcileData('main', 0);
+    assert.ok(
+        r3.messages.some((m) => m.id === 'after-bad'),
+        '坏记录截断后追加的新消息不应在重启后丢失'
+    );
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 
