@@ -264,6 +264,17 @@ export class SessionManager {
             } catch (truncErr) {
                 console.warn(`[SessionManager] 截断清理损坏文件失败: ${truncErr}`);
             }
+            return;
+        }
+
+        // 末条记录合法但缺换行符（崩溃恰在换行符写入前中断）时补齐分隔符：
+        // 否则下一条事件会直接拼接在该行尾部，再次重启时整行解析失败、连同其后新事件一并被截断丢弃
+        if (raw.length > 0 && !raw.endsWith('\n')) {
+            try {
+                fs.appendFileSync(filePath, '\n', { encoding: 'utf8' });
+            } catch (nlErr) {
+                console.warn(`[SessionManager] 补齐末行换行符失败: ${nlErr}`);
+            }
         }
     }
 

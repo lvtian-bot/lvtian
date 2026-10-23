@@ -646,4 +646,28 @@ test('SessionManager truncates corrupted middle record so later appends survive 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('SessionManager appends newline after last valid record missing its terminator', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-nl-'));
+    const sm = new SessionManager(tmpDir);
+    sm.addMessage('main', { id: 'u1', role: 'user', content: '第一条', timestamp: Date.now(), status: 'sent' });
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 模拟崩溃：末条事件 JSON 完整但换行符未写入
+    const activePath = path.join(tmpDir, 'sessions', 'main', 'events.jsonl');
+    const raw = fs.readFileSync(activePath, 'utf8');
+    fs.writeFileSync(activePath, raw.slice(0, -1));
+
+    // 第一次重启：恢复正常，且应补齐末行换行符
+    const sm2 = new SessionManager(tmpDir);
+    assert.equal(sm2.getReconcileData('main', 0).messages.length, 1);
+    assert.ok(fs.readFileSync(activePath, 'utf8').endsWith('\n'), '重启后应补齐末行换行符');
+
+    // 新事件追加后再次重启：两条消息都必须还在
+    sm2.addMessage('main', { id: 'u2', role: 'user', content: '第二条', timestamp: Date.now(), status: 'sent' });
+    const r3 = new SessionManager(tmpDir).getReconcileData('main', 0);
+    assert.equal(r3.messages.length, 2, '缺换行符场景下新旧消息都不应丢失');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 
