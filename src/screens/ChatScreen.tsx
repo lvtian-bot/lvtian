@@ -8,7 +8,6 @@ import {
     FlatList,
     ActivityIndicator,
     Alert,
-    Platform,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
@@ -145,7 +144,9 @@ export const ChatScreen = () => {
         <KeyboardAvoidingView
             style={styles.chatContainer}
             behavior="padding"
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+            // automaticOffset：由库通过原生接口测量本视图在屏幕上的绝对位置，
+            // 修正嵌套于导航栈（状态栏/标题栏/标签栏）时局部坐标导致的上浮不足
+            automaticOffset
         >
             {/* 连接异常时才显示状态提示条；已连接时保持界面干净 */}
             {connectionState !== 'connected' && (
