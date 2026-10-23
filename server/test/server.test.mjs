@@ -438,4 +438,133 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
     }
 });
 
+test('SessionManager event log persists and replays session state across restart', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-elog-'));
+    const sm = new SessionManager(tmpDir);
+
+    sm.addMessage('main', { id: 'u1', role: 'user', content: '帮我查日程', timestamp: Date.now(), status: 'sent' });
+    sm.addMessage('main', { id: 'a1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    sm.appendDelta('main', 'a1', '第一段');
+    sm.appendDelta('main', 'a1', '第二段');
+    sm.setToolCall('main', 'a1', { id: 't1', name: 'read_file', status: 'done', summary: '读取日程文件' });
+    // 工具调用后继续流式输出，验证事件顺序（msg 全量事件与 delta 增量事件交错）
+    sm.appendDelta('main', 'a1', '第三段');
+    sm.setTaskState('main', 'completed');
+    sm.setDshSessionId('main', 'dsh-abc-123');
+    // 正常收尾消息状态，避免重启修复流程按设计将其标错
+    sm.updateMessage('main', 'a1', (m) => {
+        m.status = 'done';
+    }, false);
+
+    const before = sm.getReconcileData('main', 0);
+    // 冲刷防抖窗口内的流式增量，模拟优雅停机
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 重启：新实例从事件日志重放
+    const sm2 = new SessionManager(tmpDir);
+    const after = sm2.getReconcileData('main', 0);
+    assert.equal(after.currentSeq, before.currentSeq);
+    assert.equal(after.taskState, 'completed');
+    const a1 = after.messages.find((m) => m.id === 'a1');
+    assert.ok(a1);
+    assert.equal(a1.content, '第一段第二段第三段');
+    assert.equal(a1.toolCalls?.[0]?.name, 'read_file');
+    assert.equal(sm2.getDshSessionId('main'), 'dsh-abc-123');
+
+    // 增量对账：按重启前的旧 seq 过滤能取回最新内容
+    const inc = sm2.getReconcileData('main', 1);
+    assert.ok(inc.messages.some((m) => m.id === 'a1'));
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager repairs interrupted streaming message on restart', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-repair-'));
+    const sm = new SessionManager(tmpDir);
+    sm.addMessage('main', { id: 'a1', role: 'assistant', content: '流式中途', timestamp: Date.now(), status: 'processing' });
+    sm.appendDelta('main', 'a1', '的部分输出');
+    sm.setTaskState('main', 'processing');
+    const seqBefore = sm.getReconcileData('main', 0).currentSeq;
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 模拟崩溃后重启
+    const sm2 = new SessionManager(tmpDir);
+    const r = sm2.getReconcileData('main', 0);
+    assert.equal(r.taskState, 'stopped');
+    assert.ok(r.currentSeq > seqBefore);
+    const a1 = r.messages.find((m) => m.id === 'a1');
+    assert.equal(a1.status, 'error');
+    assert.ok(a1.content.includes('任务中断'));
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager migrates legacy single-file session to event log', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-mig-'));
+    const sessionsDir = path.join(tmpDir, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const legacy = {
+        sessionId: 'main',
+        currentSeq: 5,
+        messages: [
+            { id: 'u1', seq: 1, role: 'user', content: '历史消息', timestamp: 1700000000000, status: 'sent' },
+        ],
+        taskState: 'idle',
+        updatedAt: 1700000000000,
+    };
+    fs.writeFileSync(path.join(sessionsDir, 'main.json'), JSON.stringify(legacy, null, 2));
+
+    const sm = new SessionManager(tmpDir);
+    assert.ok(fs.existsSync(path.join(sessionsDir, 'main', 'events.jsonl')));
+    assert.ok(fs.existsSync(path.join(sessionsDir, 'main.json.migrated')));
+    const r = sm.getReconcileData('main', 0);
+    assert.equal(r.currentSeq, 5);
+    assert.equal(r.messages.length, 1);
+    assert.equal(r.messages[0].content, '历史消息');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager rotates oversized log into immutable segments and tolerates torn tail', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-rotate-'));
+    // 用小阈值轻量触发轮换，避免大内存分配干扰其他测试的句柄回收
+    process.env.LVTIAN_SESSION_ROTATE_BYTES = '65536';
+    const sm = new SessionManager(tmpDir);
+    delete process.env.LVTIAN_SESSION_ROTATE_BYTES;
+
+    // 每条 16KB，累计超过 64KB 轮换阈值
+    for (let i = 0; i < 6; i++) {
+        sm.addMessage('main', {
+            id: `m${i}`,
+            role: 'assistant',
+            content: `msg-${i}-` + 'x'.repeat(16 * 1024),
+            timestamp: Date.now(),
+            status: 'sent',
+        });
+    }
+
+    const sessionDir = path.join(tmpDir, 'sessions', 'main');
+    const files = fs.readdirSync(sessionDir);
+    assert.ok(files.some((f) => f.startsWith('seg.') && f.endsWith('.jsonl')), '应产生轮换分段');
+
+    // 活跃日志必须以快照头开头
+    const activeRaw = fs.readFileSync(path.join(sessionDir, 'events.jsonl'), 'utf8');
+    const firstLine = activeRaw.slice(0, activeRaw.indexOf('\n'));
+    assert.equal(JSON.parse(firstLine).t, 'snapshot');
+
+    // 重启后仅凭活跃日志即可恢复全部消息
+    const sm2 = new SessionManager(tmpDir);
+    const r = sm2.getReconcileData('main', 0);
+    assert.equal(r.messages.length, 6);
+    assert.ok(r.messages[5].content.startsWith('msg-5-'));
+
+    // 模拟崩溃撕裂的末行：容忍丢弃且不丢失此前状态
+    fs.appendFileSync(path.join(sessionDir, 'events.jsonl'), '{"t":"msg","at":1,"seq":99,"m":{"id":"torn"');
+    const sm3 = new SessionManager(tmpDir);
+    const r3 = sm3.getReconcileData('main', 0);
+    assert.equal(r3.messages.length, 6);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 

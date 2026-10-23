@@ -265,6 +265,11 @@ export class LvtianServer {
                     'Content-Disposition': `attachment; filename="${encodeURIComponent(downloadInfo.fileName)}"`,
                 });
                 const stream = fs.createReadStream(downloadInfo.resolvedPath, { fd: fileHandle.fd, autoClose: true });
+                // autoClose 只由流关闭底层 fd；FileHandle 包装对象必须显式 close，
+                // 否则只能依赖 GC 兜底回收，回收时报 EBADF 并触发未捕获异常诊断
+                stream.on('close', () => {
+                    fileHandle.close().catch(() => undefined);
+                });
                 stream.on('error', (streamErr: unknown) => {
                     console.error('[Server] 下载流传输异常:', streamErr);
                     if (!res.headersSent) {
