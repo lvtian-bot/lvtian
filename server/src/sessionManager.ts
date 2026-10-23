@@ -75,16 +75,18 @@ export class SessionManager {
     }
 
     private getSafeSessionDir(sessionId: string): string {
-        const safeSessionId = this.normalizeSessionId(sessionId);
-        const resolved = path.resolve(this.sessionsDir, safeSessionId);
+        this.assertValidSessionId(sessionId);
+        const resolved = path.resolve(this.sessionsDir, sessionId);
         if (!resolved.startsWith(path.resolve(this.sessionsDir))) {
             throw new Error(`非法路径穿越: ${sessionId}`);
         }
         return resolved;
     }
 
-    private normalizeSessionId(sessionId: string): string {
-        return /^[a-zA-Z0-9_-]+$/.test(sessionId) ? sessionId : 'main';
+    private assertValidSessionId(sessionId: string): void {
+        if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+            throw new Error(`非法会话 ID: ${sessionId}`);
+        }
     }
 
     private ensureSessionDir(sessionId: string): string {
@@ -134,46 +136,14 @@ export class SessionManager {
             return;
         }
 
-        const dirIds = new Set(
-            entries.filter((e) => e.isDirectory()).map((e) => e.name)
-        );
-
+        // 仅维护标准的事件日志目录，不引入复杂的存量迁移与向下兼容包袱
         for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
             try {
-                if (entry.isDirectory()) {
-                    this.loadFromEventLog(entry.name);
-                } else if (entry.isFile() && entry.name.endsWith('.json')) {
-                    // 旧版单文件会话：一次性迁移为事件日志目录（已迁移的 .json.migrated 不再处理）
-                    const sessionId = entry.name.slice(0, -'.json'.length);
-                    if (dirIds.has(sessionId) && this.hasValidSnapshotLog(sessionId)) {
-                        continue; // 目录已存在且包含合法快照头，说明此前已成功迁移完成
-                    }
-                    this.migrateLegacyFile(sessionId, path.join(this.sessionsDir, entry.name));
-                }
+                this.loadFromEventLog(entry.name);
             } catch (err) {
                 console.warn(`[SessionManager] 加载会话 ${entry.name} 失败 (已跳过以保护其余正常会话): ${err}`);
             }
-        }
-    }
-
-    private hasValidSnapshotLog(sessionId: string): boolean {
-        try {
-            const activePath = path.join(this.getSafeSessionDir(sessionId), ACTIVE_LOG);
-            if (!fs.existsSync(activePath)) return false;
-            const fd = fs.openSync(activePath, 'r');
-            try {
-                const buf = Buffer.alloc(4096);
-                const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
-                const head = buf.toString('utf8', 0, bytesRead);
-                const firstLine = head.split('\n')[0]?.trim();
-                if (!firstLine) return false;
-                const parsed = JSON.parse(firstLine);
-                return parsed && parsed.t === 'snapshot';
-            } finally {
-                fs.closeSync(fd);
-            }
-        } catch {
-            return false;
         }
     }
 
@@ -379,44 +349,6 @@ export class SessionManager {
         }
     }
 
-    /** 旧版单文件会话一次性迁移：转为事件日志目录（快照头），原文件改名 .migrated 保留 */
-    private migrateLegacyFile(sessionId: string, legacyPath: string): void {
-        const raw = fs.readFileSync(legacyPath, 'utf8');
-        const legacy = JSON.parse(raw) as SessionData;
-        if (!legacy || typeof legacy !== 'object' || !Array.isArray(legacy.messages)) {
-            throw new Error(`旧会话文件结构异常: ${legacyPath}`);
-        }
-        const session: SessionData = {
-            sessionId: legacy.sessionId || sessionId,
-            currentSeq: legacy.currentSeq ?? 0,
-            messages: legacy.messages,
-            taskState: legacy.taskState ?? 'idle',
-            pendingApproval: legacy.pendingApproval,
-            dshSessionId: legacy.dshSessionId,
-            updatedAt: Date.now(),
-        };
-
-        const dir = this.ensureSessionDir(session.sessionId);
-        const activePath = path.join(dir, ACTIVE_LOG);
-        if (!fs.existsSync(activePath)) {
-            fs.writeFileSync(activePath, this.eventLine(this.buildSnapshotEvent(session)), {
-                encoding: 'utf8',
-                mode: 0o600,
-            });
-        }
-        try {
-            fs.chmodSync(activePath, 0o600);
-        } catch {
-            // ignore
-        }
-        fs.renameSync(legacyPath, `${legacyPath}.migrated`);
-        console.log(`[SessionManager] 旧会话 ${sessionId} 已迁移为事件日志`);
-
-        this.repairAfterLoad(session);
-        this.sessions.set(session.sessionId, session);
-        this.activeLogBytes.set(session.sessionId, fs.statSync(activePath).size);
-    }
-
     // ------------------------------------------------------------------
     // 追加与轮换
     // ------------------------------------------------------------------
@@ -429,13 +361,13 @@ export class SessionManager {
 
     private appendRaw(sessionId: string, line: string): boolean {
         try {
-            const safeSessionId = this.normalizeSessionId(sessionId);
-            const dir = this.ensureSessionDir(safeSessionId);
+            this.assertValidSessionId(sessionId);
+            const dir = this.ensureSessionDir(sessionId);
             const activePath = path.join(dir, ACTIVE_LOG);
             fs.appendFileSync(activePath, line, { encoding: 'utf8', mode: 0o600 });
-            const bytes = (this.activeLogBytes.get(safeSessionId) ?? 0) + Buffer.byteLength(line, 'utf8');
-            this.activeLogBytes.set(safeSessionId, bytes);
-            this.maybeRotate(safeSessionId);
+            const bytes = (this.activeLogBytes.get(sessionId) ?? 0) + Buffer.byteLength(line, 'utf8');
+            this.activeLogBytes.set(sessionId, bytes);
+            this.maybeRotate(sessionId);
             return true;
         } catch (err) {
             console.error(`[SessionManager] 追加会话事件 ${sessionId} 失败: ${err}`);
@@ -518,13 +450,13 @@ export class SessionManager {
     // ------------------------------------------------------------------
 
     public getOrCreateSession(sessionId = 'main'): SessionData {
-        const safeSessionId = /^[a-zA-Z0-9_-]+$/.test(sessionId) ? sessionId : 'main';
-        let session = this.sessions.get(safeSessionId);
+        this.assertValidSessionId(sessionId);
+        let session = this.sessions.get(sessionId);
         if (!session) {
-            session = this.emptySession(safeSessionId);
-            this.sessions.set(safeSessionId, session);
+            session = this.emptySession(sessionId);
+            this.sessions.set(sessionId, session);
             // 新会话落一个快照头，保证日志文件始终以快照开头
-            this.appendEvent(safeSessionId, this.buildSnapshotEvent(session));
+            this.appendEvent(sessionId, this.buildSnapshotEvent(session));
         }
         return session;
     }

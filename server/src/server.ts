@@ -245,31 +245,16 @@ export class LvtianServer {
             }
             try {
                 const downloadInfo = await this.fileManager.getFileDownloadInfo(targetPath);
-                // 先打开文件确认可读，再提交成功响应头：权限不足等错误发生在发头之前，
-                // 客户端才能收到结构化错误而非半途断连
-                let fileHandle: fs.promises.FileHandle;
-                try {
-                    fileHandle = await fs.promises.open(downloadInfo.resolvedPath, 'r');
-                } catch (openErr: unknown) {
-                    const nodeErr = openErr as NodeJS.ErrnoException;
-                    if (nodeErr.code === 'EACCES' || nodeErr.code === 'EPERM') {
-                        res.writeHead(403, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ error: `无权限读取该文件: ${downloadInfo.resolvedPath}`, code: 'EACCES' }));
-                        return;
-                    }
-                    throw openErr;
-                }
+                // 打开文件确认可读并校验权限，随后直接由底层安全路径流式传输
+                const fileHandle = await fs.promises.open(downloadInfo.resolvedPath, 'r');
+                await fileHandle.close();
+
                 res.writeHead(200, {
                     'Content-Type': 'application/octet-stream',
                     'Content-Length': downloadInfo.size,
                     'Content-Disposition': `attachment; filename="${encodeURIComponent(downloadInfo.fileName)}"`,
                 });
-                const stream = fs.createReadStream(downloadInfo.resolvedPath, { fd: fileHandle.fd, autoClose: true });
-                // autoClose 只由流关闭底层 fd；FileHandle 包装对象必须显式 close，
-                // 否则只能依赖 GC 兜底回收，回收时报 EBADF 并触发未捕获异常诊断
-                stream.on('close', () => {
-                    fileHandle.close().catch(() => undefined);
-                });
+                const stream = fs.createReadStream(downloadInfo.resolvedPath);
                 stream.on('error', (streamErr: unknown) => {
                     console.error('[Server] 下载流传输异常:', streamErr);
                     if (!res.headersSent) {
@@ -281,6 +266,12 @@ export class LvtianServer {
                 });
                 stream.pipe(res);
             } catch (err: unknown) {
+                const nodeErr = err as NodeJS.ErrnoException;
+                if (nodeErr.code === 'EACCES' || nodeErr.code === 'EPERM') {
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: `无权限读取该文件: ${targetPath}`, code: 'EACCES' }));
+                    return;
+                }
                 this.sendFileManagerError(res, err);
             }
             return;
