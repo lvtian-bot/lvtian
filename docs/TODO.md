@@ -29,7 +29,7 @@
 
 - [ ] 检查并验证 Android 端从其他应用分享到 MDNote 的冷热启动一致性（关联 `docs/分享与原生插件/分享与原生插件问题记录.md`）
 - [ ] 系统文件页冷启动令牌水合可能触发服务身份重置，极端时序下首屏停留加载动画；需区分「用户改配置」与「令牌从空加载」两种变化（PR #7 审查自查发现的预存问题，`src/screens/ServerFileScreen.tsx`）
-- [ ] 聊天页键盘上浮不足（输入框被键盘遮挡）：按 react-native-keyboard-controller 官方聊天布局方案使用 KeyboardChatScrollView 与 KeyboardStickyView，并保留 FlatList 虚拟列表；需在 Android 真机验证。首页默认页同步改为聊天页（PR #10）。
+- [ ] 聊天页键盘真机验收：SDK 58 / React Native 0.88 与 keyboard-controller 1.22.8 下，按实测底部标签栏高度处理列表与输入区偏移，流式自动滚动纳入动态内容 inset；待 Android 真机验证键盘弹起、输入框多行增高及回复末尾可见性（PR #10）。
 
 - [x] 恢复原有主体蓝色及浅深色层次，修正聊天页头像、用户气泡与发送按钮误用深色主题的问题，保留颜色集中管理与其他 UI 改进；主题回归测试、类型检查、Lint 与全部单测通过。✅ 2026-10-23
 

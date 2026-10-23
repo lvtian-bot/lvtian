@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, type ComponentRef } from 'react';
 import {
     Modal,
     View,
@@ -26,7 +26,7 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
 }) => {
     const { t } = useTranslation();
     const [filename, setFilename] = useState('');
-    const inputRef = useRef<TextInput>(null);
+    const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
     useEffect(() => {
         if (visible) {

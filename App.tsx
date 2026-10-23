@@ -12,7 +12,6 @@ import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
 import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
 
-import { theme } from './src/utils/theme';
 import { useShareStore } from './src/store/useShareStore';
 import { RootStackParamList } from './src/types/navigation';
 import { SHARE_RECEIVED_EVENT, flashNoteService } from './src/services/FlashNoteService';
@@ -92,7 +91,8 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
   return (
     <GestureHandlerRootView style={styles.container}>
       <KeyboardProvider>
-        <StatusBar barStyle="dark-content" backgroundColor={theme.colors.surface} />
+        {/* edge-to-edge 下状态栏透明，底色由各页头部背景透出 */}
+        <StatusBar barStyle="dark-content" />
         <SafeAreaProvider>
           <NavigationContainer ref={navigationRef}>
             <AppNavigator />

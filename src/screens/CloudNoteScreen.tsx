@@ -393,7 +393,7 @@ export const CloudNoteScreen = () => {
                                 <Icon name="folder-open" size={48} color={theme.colors.border} />
                                 <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
                             </View>
-                        ) : null
+                        ) : undefined
                     }
                 />
             )}

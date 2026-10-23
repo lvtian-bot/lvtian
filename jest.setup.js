@@ -1,10 +1,16 @@
 /* eslint-env jest */
 require('react-native-gesture-handler/jestSetup');
 
-jest.mock('react-native-reanimated', () => ({
-  useSharedValue: (value) => ({ value }),
-  withTiming: (value) => value,
-}));
+jest.mock('react-native-reanimated', () => {
+  const createAnimatedComponent = (component) => component;
+  return {
+    __esModule: true,
+    default: { createAnimatedComponent },
+    createAnimatedComponent,
+    useSharedValue: (value) => ({ value }),
+    withTiming: (value) => value,
+  };
+});
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')

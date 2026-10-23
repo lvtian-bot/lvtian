@@ -1,5 +1,6 @@
-import React from 'react';
-import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
+import React, { useCallback, useState } from 'react';
+import { View, type LayoutChangeEvent } from 'react-native';
+import { createMaterialTopTabNavigator, MaterialTopTabBar, type MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +14,7 @@ import { MeScreen } from '../screens/MeScreen';
 import { MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
+import { TabBarHeightContext } from './TabBarHeightContext';
 
 const ChatStack = createNativeStackNavigator();
 const FlashStack = createNativeStackNavigator();
@@ -116,14 +118,26 @@ const MeIcon = ({ color }: { color: string }) => (
 export const TabNavigator = () => {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
+    const [tabBarHeight, setTabBarHeight] = useState(0);
+    const handleTabBarLayout = useCallback((event: LayoutChangeEvent) => {
+        const height = event.nativeEvent.layout.height;
+        setTabBarHeight((current) => current === height ? current : height);
+    }, []);
+    const renderTabBar = useCallback((props: MaterialTopTabBarProps) => (
+        <View onLayout={handleTabBarLayout}>
+            <MaterialTopTabBar {...props} />
+        </View>
+    ), [handleTabBarLayout]);
 
     return (
-        <Tab.Navigator
-            tabBarPosition="bottom"
-            initialRouteName="Chat"
-            backBehavior="initialRoute"
-            initialLayout={{ width: 0 }}
-            screenOptions={{
+        <TabBarHeightContext.Provider value={tabBarHeight}>
+            <Tab.Navigator
+                tabBar={renderTabBar}
+                tabBarPosition="bottom"
+                initialRouteName="Chat"
+                backBehavior="initialRoute"
+                initialLayout={{ width: 0 }}
+                screenOptions={{
                 swipeEnabled: false,
                 animationEnabled: false,
                 tabBarShowIcon: true,
@@ -189,6 +203,7 @@ export const TabNavigator = () => {
                     tabBarIcon: MeIcon,
                 }}
             />
-        </Tab.Navigator>
+            </Tab.Navigator>
+        </TabBarHeightContext.Provider>
     );
 };

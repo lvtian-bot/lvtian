@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, type ComponentRef } from 'react';
 import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, BackHandler } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
@@ -65,7 +65,7 @@ export const EditorScreen = () => {
     const [isSaving, setIsSaving] = useState(false);
     const saveInFlightRef = useRef(false);
     const [editorHtml, setEditorHtml] = useState<string | null>(null);
-    const webViewRef = useRef<WebView>(null);
+    const webViewRef = useRef<ComponentRef<typeof WebView>>(null);
     const isDraftLoaded = useRef(false);
     const initialContentRef = useRef<string>('');
 

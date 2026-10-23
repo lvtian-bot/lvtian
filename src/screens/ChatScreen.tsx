@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, forwardRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext, forwardRef, type ComponentRef } from 'react';
 import {
     View,
     Text,
@@ -11,12 +11,11 @@ import {
     type LayoutChangeEvent,
     type ScrollViewProps,
 } from 'react-native';
-import { useSharedValue, withTiming } from 'react-native-reanimated';
+import { useSharedValue } from 'react-native-reanimated';
 import {
     KeyboardChatScrollView,
     KeyboardStickyView,
     type KeyboardChatScrollViewProps,
-    type KeyboardChatScrollViewRef,
 } from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
@@ -24,29 +23,53 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
 import { theme } from '../utils/theme';
+import { getChatListEndOffset } from '../utils/chatScrollMetrics';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage } from '../types/assistantProtocol';
 import { RootStackParamList } from '../types/navigation';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type ChatListMetrics = {
+    contentHeight: number;
+    viewportHeight: number;
+    bottomInset: number;
+};
+type ChatScrollViewProps = ScrollViewProps & KeyboardChatScrollViewProps & {
+    listMetricsRef: React.MutableRefObject<ChatListMetrics>;
+};
 
 const ChatScrollView = forwardRef<
-    KeyboardChatScrollViewRef,
-    ScrollViewProps & KeyboardChatScrollViewProps
->((props, ref) => {
-    const { bottom } = useSafeAreaInsets();
+    ComponentRef<typeof KeyboardChatScrollView>,
+    ChatScrollViewProps
+>(({ listMetricsRef, onLayout, onContentSizeChange, onContentInsetChange, ...props }, ref) => {
+    const tabBarHeight = useContext(TabBarHeightContext);
+    const handleLayout = useCallback((event: LayoutChangeEvent) => {
+        listMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
+        onLayout?.(event);
+    }, [listMetricsRef, onLayout]);
+    const handleContentSizeChange = useCallback((width: number, height: number) => {
+        listMetricsRef.current.contentHeight = height;
+        onContentSizeChange?.(width, height);
+    }, [listMetricsRef, onContentSizeChange]);
+    const handleContentInsetChange = useCallback((insets: Parameters<NonNullable<KeyboardChatScrollViewProps['onContentInsetChange']>>[0]) => {
+        listMetricsRef.current.bottomInset = insets.bottom;
+        onContentInsetChange?.(insets);
+    }, [listMetricsRef, onContentInsetChange]);
 
     return (
         <KeyboardChatScrollView
             ref={ref}
+            {...props}
             automaticallyAdjustContentInsets={false}
             contentInsetAdjustmentBehavior="never"
             keyboardDismissMode="interactive"
-            offset={bottom - 8}
-            {...props}
+            offset={tabBarHeight}
+            onLayout={handleLayout}
+            onContentSizeChange={handleContentSizeChange}
+            onContentInsetChange={handleContentInsetChange}
         />
     );
 });
@@ -55,21 +78,34 @@ ChatScrollView.displayName = 'ChatScrollView';
 export const ChatScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
-    const insets = useSafeAreaInsets();
+    const tabBarHeight = useContext(TabBarHeightContext);
     const flatListRef = useRef<FlatList<AssistantMessage>>(null);
+    const listMetricsRef = useRef<ChatListMetrics>({
+        contentHeight: 0,
+        viewportHeight: 0,
+        bottomInset: 0,
+    });
     const extraContentPadding = useSharedValue(0);
     const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
-        extraContentPadding.value = withTiming(
-            Math.max(event.nativeEvent.layout.height - 40, 0),
-            { duration: 250 },
-        );
+        extraContentPadding.value = Math.max(event.nativeEvent.layout.height - 40, 0);
     }, [extraContentPadding]);
     const renderChatScrollComponent = useCallback(
         (props: ScrollViewProps) => (
-            <ChatScrollView {...props} extraContentPadding={extraContentPadding} />
+            <ChatScrollView
+                {...props}
+                extraContentPadding={extraContentPadding}
+                listMetricsRef={listMetricsRef}
+            />
         ),
-        [extraContentPadding],
+        [extraContentPadding, listMetricsRef],
     );
+    const scrollToEnd = useCallback(() => {
+        const { contentHeight, viewportHeight, bottomInset } = listMetricsRef.current;
+        flatListRef.current?.scrollToOffset({
+            offset: getChatListEndOffset(contentHeight, viewportHeight, bottomInset),
+            animated: true,
+        });
+    }, [listMetricsRef]);
 
     const {
         serverUrl,
@@ -94,11 +130,9 @@ export const ChatScreen = () => {
     // 收到新消息自动滚动到底部
     useEffect(() => {
         if (messages.length > 0) {
-            setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: true });
-            }, 100);
+            setTimeout(scrollToEnd, 100);
         }
-    }, [messages.length, lastMessageContent]);
+    }, [messages.length, lastMessageContent, scrollToEnd]);
 
     const handleSend = () => {
         const text = inputContent.trim();
@@ -339,7 +373,7 @@ export const ChatScreen = () => {
 
             <KeyboardStickyView
                 style={styles.keyboardSticky}
-                offset={{ opened: insets.bottom - 8 }}
+                offset={{ opened: tabBarHeight }}
             >
                 {/* 人工审批卡片 */}
             {pendingApproval && (
