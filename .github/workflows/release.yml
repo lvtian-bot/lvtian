@@ -71,17 +71,17 @@ jobs:
         env:
           EXPO_UPDATES_CHANNEL: production
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform android --profile production --local --non-interactive --output "${{ github.workspace }}/MDNote-${PKG_VERSION}.apk"
+        run: eas build --platform android --profile production --local --non-interactive --output "${{ github.workspace }}/Lvtian-${PKG_VERSION}.apk"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MDNote-${{ env.PKG_VERSION }}
-          path: MDNote-*.apk
+          name: Lvtian-${{ env.PKG_VERSION }}
+          path: Lvtian-*.apk
           if-no-files-found: error
 
       - name: 创建 GitHub Release
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "MDNote-${PKG_VERSION}.apk" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" "Lvtian-${PKG_VERSION}.apk" --title "$GITHUB_REF_NAME" --generate-notes
