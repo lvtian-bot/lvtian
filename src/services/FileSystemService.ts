@@ -176,7 +176,7 @@ class FileSystemService {
                 parentDir.create({ intermediates: true });
             }
 
-            file.write(content);
+            await file.write(content);
         } catch (error) {
             console.error('Error writing file:', error);
             throw error;
