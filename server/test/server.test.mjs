@@ -438,4 +438,236 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
     }
 });
 
+test('SessionManager event log persists and replays session state across restart', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-elog-'));
+    const sm = new SessionManager(tmpDir);
+
+    sm.addMessage('main', { id: 'u1', role: 'user', content: '帮我查日程', timestamp: Date.now(), status: 'sent' });
+    sm.addMessage('main', { id: 'a1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    sm.appendDelta('main', 'a1', '第一段');
+    sm.appendDelta('main', 'a1', '第二段');
+    sm.setToolCall('main', 'a1', { id: 't1', name: 'read_file', status: 'done', summary: '读取日程文件' });
+    // 工具调用后继续流式输出，验证事件顺序（msg 全量事件与 delta 增量事件交错）
+    sm.appendDelta('main', 'a1', '第三段');
+    sm.setTaskState('main', 'completed');
+    sm.setDshSessionId('main', 'dsh-abc-123');
+    // 正常收尾消息状态，避免重启修复流程按设计将其标错
+    sm.updateMessage('main', 'a1', (m) => {
+        m.status = 'done';
+    }, false);
+
+    const before = sm.getReconcileData('main', 0);
+    // 冲刷防抖窗口内的流式增量，模拟优雅停机
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 重启：新实例从事件日志重放
+    const sm2 = new SessionManager(tmpDir);
+    const after = sm2.getReconcileData('main', 0);
+    assert.equal(after.currentSeq, before.currentSeq);
+    assert.equal(after.taskState, 'completed');
+    const a1 = after.messages.find((m) => m.id === 'a1');
+    assert.ok(a1);
+    assert.equal(a1.content, '第一段第二段第三段');
+    assert.equal(a1.toolCalls?.[0]?.name, 'read_file');
+    assert.equal(sm2.getDshSessionId('main'), 'dsh-abc-123');
+
+    // 增量对账：按重启前的旧 seq 过滤能取回最新内容
+    const inc = sm2.getReconcileData('main', 1);
+    assert.ok(inc.messages.some((m) => m.id === 'a1'));
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager repairs interrupted streaming message on restart', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-repair-'));
+    const sm = new SessionManager(tmpDir);
+    sm.addMessage('main', { id: 'a1', role: 'assistant', content: '流式中途', timestamp: Date.now(), status: 'processing' });
+    sm.appendDelta('main', 'a1', '的部分输出');
+    sm.setTaskState('main', 'processing');
+    const seqBefore = sm.getReconcileData('main', 0).currentSeq;
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 模拟崩溃后重启
+    const sm2 = new SessionManager(tmpDir);
+    const r = sm2.getReconcileData('main', 0);
+    assert.equal(r.taskState, 'stopped');
+    assert.ok(r.currentSeq > seqBefore);
+    const a1 = r.messages.find((m) => m.id === 'a1');
+    assert.equal(a1.status, 'error');
+    assert.ok(a1.content.includes('任务中断'));
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager rotates oversized log into immutable segments and tolerates torn tail', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-rotate-'));
+    process.env.LVTIAN_SESSION_ROTATE_BYTES = '65536';
+    const sm = new SessionManager(tmpDir);
+    delete process.env.LVTIAN_SESSION_ROTATE_BYTES;
+
+    for (let i = 0; i < 6; i++) {
+        sm.addMessage('main', {
+            id: `m${i}`,
+            role: 'assistant',
+            content: `msg-${i}-` + 'x'.repeat(16 * 1024),
+            timestamp: Date.now(),
+            status: 'sent',
+        });
+    }
+
+    const sessionDir = path.join(tmpDir, 'sessions', 'main');
+    const files = fs.readdirSync(sessionDir);
+    assert.ok(files.some((f) => f.startsWith('seg.') && f.endsWith('.jsonl')), '应产生轮换分段');
+
+    const activeRaw = fs.readFileSync(path.join(sessionDir, 'events.jsonl'), 'utf8');
+    const firstLine = activeRaw.slice(0, activeRaw.indexOf('\n'));
+    assert.equal(JSON.parse(firstLine).t, 'snapshot');
+
+    const sm2 = new SessionManager(tmpDir);
+    const r = sm2.getReconcileData('main', 0);
+    assert.equal(r.messages.length, 6);
+    assert.ok(r.messages[5].content.startsWith('msg-5-'));
+
+    // 模拟末行撕裂：截断清理并正常衔接新事件
+    fs.appendFileSync(path.join(sessionDir, 'events.jsonl'), '{"t":"msg","at":1,"seq":99,"m":{"id":"torn"');
+    const sm3 = new SessionManager(tmpDir);
+    const r3 = sm3.getReconcileData('main', 0);
+    assert.equal(r3.messages.length, 6);
+
+    sm3.addMessage('main', {
+        id: 'after-torn',
+        role: 'user',
+        content: '撕裂恢复后新消息',
+        timestamp: Date.now(),
+        status: 'sent',
+    });
+    const sm4 = new SessionManager(tmpDir);
+    const r4 = sm4.getReconcileData('main', 0);
+    assert.equal(r4.messages.length, 7);
+    assert.equal(r4.messages[6].id, 'after-torn');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager handles interrupted rotation and invalid session ID cleanly', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-edge-'));
+    const sm = new SessionManager(tmpDir);
+
+    // 1. 测试非法 session ID 严格拦截报错（杜绝非预期路径穿越或静默别名错乱）
+    assert.throws(
+        () => sm.addMessage('bad/../id', {
+            id: 'u-safe',
+            role: 'user',
+            content: '非法路径字符输入测试',
+            timestamp: Date.now(),
+            status: 'sent',
+        }),
+        /非法会话 ID/
+    );
+
+    // 2. 模拟轮换中途崩溃（events.jsonl 已移走为分段，仅留下 events.jsonl.tmp）
+    sm.getOrCreateSession('main');
+    const sessionDir = path.join(tmpDir, 'sessions', 'main');
+    const activePath = path.join(sessionDir, 'events.jsonl');
+    const tmpPath = path.join(sessionDir, 'events.jsonl.tmp');
+    const segPath = path.join(sessionDir, 'seg.000000.jsonl');
+
+    fs.renameSync(activePath, segPath);
+    // 写入一个合法的 tmp 快照文件
+    const tmpSnapshot = JSON.stringify({
+        t: 'snapshot',
+        at: Date.now(),
+        seq: 10,
+        taskState: 'idle',
+        msgs: [{ id: 'u-tmp', seq: 10, role: 'user', content: '临时快照内容', timestamp: Date.now(), status: 'sent' }],
+    }) + '\n';
+    fs.writeFileSync(tmpPath, tmpSnapshot, { encoding: 'utf8' });
+
+    // 重启：应该转正 tmp 文件，而不是误删导致历史丢失
+    const sm2 = new SessionManager(tmpDir);
+    const r2 = sm2.getReconcileData('main', 0);
+    assert.ok(r2.messages.some((m) => m.id === 'u-tmp'));
+    assert.ok(fs.existsSync(activePath), 'events.jsonl 应已由 tmp 转正');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager does not duplicate buffered deltas when rotation lands mid-flush', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-dup-'));
+    // 阈值取“大增量落盘触发轮换、其后的小增量与 seq 事件不再触发”的区间
+    process.env.LVTIAN_SESSION_ROTATE_BYTES = '300';
+    const sm = new SessionManager(tmpDir);
+    delete process.env.LVTIAN_SESSION_ROTATE_BYTES;
+
+    sm.addMessage('main', { id: 'm1', role: 'assistant', content: 'x'.repeat(10), timestamp: Date.now(), status: 'sent' });
+    sm.addMessage('main', { id: 'm2', role: 'assistant', content: 'y'.repeat(10), timestamp: Date.now(), status: 'sent' });
+    sm.appendDelta('main', 'm1', 'A'.repeat(400));
+    sm.appendDelta('main', 'm2', 'B');
+    // nextSeq 冲刷两条待落盘增量：m1 的落盘应触发轮换，m2 的增量必须在轮换快照之后仍不重复
+    sm.nextSeq('main');
+
+    const sm2 = new SessionManager(tmpDir);
+    const m2 = sm2.getReconcileData('main', 0).messages.find((m) => m.id === 'm2');
+    assert.ok(m2);
+    // m2 处于流式状态，重启修复会按设计追加中断标记，故只校验增量不重复
+    assert.ok(m2.content.startsWith('y'.repeat(10) + 'B'), `增量丢失: ${m2.content}`);
+    assert.ok(!m2.content.includes('BB'), `重放后增量被重复计入: ${m2.content}`);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager truncates corrupted middle record so later appends survive restart', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-midbad-'));
+    const sm = new SessionManager(tmpDir);
+    sm.addMessage('main', { id: 'u1', role: 'user', content: '坏记录之前的消息', timestamp: Date.now(), status: 'sent' });
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 在日志中段插入一行坏记录（模拟局部磁盘损坏），其后补一行合法事件
+    const sessionDir = path.join(tmpDir, 'sessions', 'main');
+    const activePath = path.join(sessionDir, 'events.jsonl');
+    const original = fs.readFileSync(activePath, 'utf8');
+    const firstLineEnd = original.indexOf('\n') + 1;
+    const badLine = '{"t":"msg","at":1,"seq":2,"m":{"id":"corrupt"' + '\u0000'.repeat(8);
+    fs.writeFileSync(activePath, original.slice(0, firstLineEnd) + badLine + '\n' + original.slice(firstLineEnd));
+
+    // 重启：坏记录被截断，其后新追加的消息在再次重启后仍能找回
+    const sm2 = new SessionManager(tmpDir);
+    const r2 = sm2.getReconcileData('main', 0);
+    assert.ok(!r2.messages.some((m) => m.id === 'corrupt'));
+
+    sm2.addMessage('main', { id: 'after-bad', role: 'user', content: '坏记录之后的新消息', timestamp: Date.now(), status: 'sent' });
+    const sm3 = new SessionManager(tmpDir);
+    const r3 = sm3.getReconcileData('main', 0);
+    assert.ok(
+        r3.messages.some((m) => m.id === 'after-bad'),
+        '坏记录截断后追加的新消息不应在重启后丢失'
+    );
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager appends newline after last valid record missing its terminator', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-nl-'));
+    const sm = new SessionManager(tmpDir);
+    sm.addMessage('main', { id: 'u1', role: 'user', content: '第一条', timestamp: Date.now(), status: 'sent' });
+    sm.persistSession(sm.getOrCreateSession('main'));
+
+    // 模拟崩溃：末条事件 JSON 完整但换行符未写入
+    const activePath = path.join(tmpDir, 'sessions', 'main', 'events.jsonl');
+    const raw = fs.readFileSync(activePath, 'utf8');
+    fs.writeFileSync(activePath, raw.slice(0, -1));
+
+    // 第一次重启：恢复正常，且应补齐末行换行符
+    const sm2 = new SessionManager(tmpDir);
+    assert.equal(sm2.getReconcileData('main', 0).messages.length, 1);
+    assert.ok(fs.readFileSync(activePath, 'utf8').endsWith('\n'), '重启后应补齐末行换行符');
+
+    // 新事件追加后再次重启：两条消息都必须还在
+    sm2.addMessage('main', { id: 'u2', role: 'user', content: '第二条', timestamp: Date.now(), status: 'sent' });
+    const r3 = new SessionManager(tmpDir).getReconcileData('main', 0);
+    assert.equal(r3.messages.length, 2, '缺换行符场景下新旧消息都不应丢失');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 
