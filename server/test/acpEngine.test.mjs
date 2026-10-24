@@ -61,6 +61,16 @@ function createMockEngineApp(options = {}) {
                     status: 'failed',
                 });
             }
+            if (options.toolThenReject) {
+                await notify({
+                    sessionUpdate: 'tool_call',
+                    toolCallId: 'tool-crash',
+                    title: 'Crashing tool',
+                    kind: 'shell',
+                    status: 'in_progress',
+                });
+                throw new Error('engine boom');
+            }
             for (let i = 0; i < (options.chunkCount ?? 1); i++) {
                 if (options.chunkDelayMs) await delay(options.chunkDelayMs);
                 await notify({
@@ -309,6 +319,34 @@ test('引擎启动期间 stopAll：等待启动完成并关闭连接，不留进
     const events2 = [];
     await manager.execute('main', 'asst-2', '关停后的新任务', collectCallbacks(events2));
     assert.strictEqual(lastStatus(events2), 'done');
+});
+
+test('引擎异常退出时进行中的工具终态化为失败', async () => {
+    const { manager, sessionManager } = buildManager({ toolThenReject: true });
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    await manager.execute('main', 'asst-1', '触发引擎异常', collectCallbacks(events));
+
+    const toolStatuses = events.filter((e) => e.kind === 'tool').map((e) => e.toolCall.status);
+    assert.deepStrictEqual(toolStatuses, ['running', 'failed'], '异常路径工具应终态化为失败而非停留运行中');
+    assert.strictEqual(lastStatus(events), 'error');
+});
+
+test('停止后到达的引擎迟到事件不回写消息状态', async () => {
+    const { manager, sessionManager } = buildManager({ chunkCount: 2, chunkDelayMs: 150 });
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing = manager.execute('main', 'asst-1', '长任务', collectCallbacks(events));
+
+    await new Promise((resolve) => setTimeout(resolve, 200)); // 第一个 chunk 已到，第二个在途
+    manager.stop('main');
+    await executing; // mock 引擎无取消感知，停止后仍会发出第二个 chunk 事件
+
+    const session = sessionManager.getOrCreateSession('main');
+    const msg = session.messages.find((m) => m.id === 'asst-1');
+    assert.strictEqual(msg.status, 'error', '消息应保持停止终态');
+    assert.strictEqual(deltas(events), 'chunk-1', '停止后的迟到文本事件应被忽略');
+    assert.strictEqual(session.taskState, 'stopped');
 });
 
 test('工具失败时终态为 failed，且不被后续事件覆盖为成功', async () => {

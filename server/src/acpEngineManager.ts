@@ -268,6 +268,11 @@ ${userPrompt}`;
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
+            // 异常退出时先把进行中的工具终态化为失败，避免消息已标错而工具状态永远停留运行中
+            const runtime = this.runtimes.get(sessionId);
+            if (runtime) {
+                this.finalizeTool(runtime, 'failed');
+            }
             this.runtimes.delete(sessionId);
             this.rejectPendingPermission(sessionId, message);
 
@@ -425,31 +430,26 @@ ${userPrompt}`;
         // 连接结束信号：回调正常结束或流断开（进程崩溃）均会让 run settle
         const closed = run.catch(() => undefined);
 
-        const context = await contextReady;
-        await handshakeReady;
+        let context: acp.ClientContext;
+        try {
+            context = await contextReady;
+            await handshakeReady;
+        } catch (err) {
+            // 启动失败（握手被拒或进程秒退）：此时连接尚未登记到实例，stopAll 无法回收，
+            // 必须先结束传输并终止子进程再上抛，否则引擎进程泄漏且后续请求继续叠加新进程
+            resolveStop();
+            await closed;
+            await terminateChild(child);
+            throw err;
+        }
+
         return {
             context,
             closed,
             close: async () => {
                 resolveStop();
                 await closed;
-                if (child.exitCode === null) {
-                    child.kill();
-                    await new Promise<void>((resolve) => {
-                        const killTimer = setTimeout(() => {
-                            try {
-                                child.kill('SIGKILL');
-                            } catch {
-                                // ignore
-                            }
-                            resolve();
-                        }, 2000);
-                        child.once('close', () => {
-                            clearTimeout(killTimer);
-                            resolve();
-                        });
-                    });
-                }
+                await terminateChild(child);
             },
         };
     }
@@ -507,7 +507,12 @@ ${userPrompt}`;
     private handleSessionUpdate(engineSessionId: string, update: { sessionUpdate?: string }): void {
         const sessionId = this.engineSessionIndex.get(engineSessionId);
         const runtime = sessionId ? this.runtimes.get(sessionId) : undefined;
-        if (!runtime) {
+        if (!sessionId || !runtime) {
+            return;
+        }
+
+        // 用户已停止：引擎取消收尾期间的迟到事件不得把消息与任务改回处理中
+        if (this.stoppedSessions.has(sessionId)) {
             return;
         }
 
@@ -656,6 +661,30 @@ ${userPrompt}`;
             pending.settle(false);
         }
     }
+}
+
+/**
+ * 终止引擎子进程并等待其退出：常规 kill 后 2 秒未退则升级 SIGKILL，保证调用方不会因进程悬挂而卡住
+ */
+function terminateChild(child: ChildProcess): Promise<void> {
+    if (child.exitCode !== null) {
+        return Promise.resolve();
+    }
+    child.kill();
+    return new Promise<void>((resolve) => {
+        const killTimer = setTimeout(() => {
+            try {
+                child.kill('SIGKILL');
+            } catch {
+                // ignore
+            }
+            resolve();
+        }, 2000);
+        child.once('close', () => {
+            clearTimeout(killTimer);
+            resolve();
+        });
+    });
 }
 
 const passthroughParser = {
