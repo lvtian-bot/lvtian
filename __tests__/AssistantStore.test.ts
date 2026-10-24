@@ -89,4 +89,25 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(partial.currentSeq).toBe(0);
         expect(partial.clearedSeq).toBe(12);
     });
+
+    test('setServerConfig resets clearedSeq when switching to a different server', async () => {
+        const store = useAssistantStore.getState();
+        await store.setServerConfig('https://server-a.example.com', 'token-a');
+        store.addOrUpdateMessage({
+            id: 'user-1',
+            seq: 100,
+            role: 'user',
+            content: 'test',
+            timestamp: Date.now(),
+            status: 'sent',
+        });
+        store.setCurrentSeq(100);
+        store.clearChat();
+        expect(useAssistantStore.getState().clearedSeq).toBe(100);
+
+        // 切换到新服务器地址，验证 clearedSeq 与 currentSeq 一并重置归零
+        await store.setServerConfig('https://server-b.example.com', 'token-b');
+        expect(useAssistantStore.getState().clearedSeq).toBe(0);
+        expect(useAssistantStore.getState().currentSeq).toBe(0);
+    });
 });
