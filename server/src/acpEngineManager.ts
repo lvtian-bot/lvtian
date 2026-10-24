@@ -604,15 +604,20 @@ ${userPrompt}`;
             case 'tool_call': {
                 const t = update as { toolCallId?: string; title?: string; kind?: string; status?: string };
                 runtime.toolSeq++;
+                // 初始通知可能直接携带终态（completed/failed）：按终态广播且不入进行中集合，
+                // 否则出生即失败的工具会被收尾兜底改写为成功
+                const terminal = t.status === 'completed' ? 'done' : t.status === 'failed' ? 'failed' : null;
                 const toolCall: ToolCallState = {
                     id: t.toolCallId ?? `tool-${engineSessionId}-${runtime.toolSeq}`,
                     name: t.kind ?? t.title ?? '系统工具',
-                    status: 'running',
+                    status: terminal ?? 'running',
                     summary: (t.title ?? t.kind ?? '').slice(0, 100),
                 };
-                runtime.outstandingTools.set(toolCall.id, toolCall);
                 runtime.callbacks.onToolCall({ ...toolCall });
-                runtime.callbacks.onStatusChange('running_tool');
+                if (!terminal) {
+                    runtime.outstandingTools.set(toolCall.id, toolCall);
+                    runtime.callbacks.onStatusChange('running_tool');
+                }
                 break;
             }
             case 'tool_call_update': {

@@ -97,6 +97,16 @@ function createMockEngineApp(options = {}) {
                 });
                 return { stopReason: 'end_turn' };
             }
+            if (options.toolInitialFailed) {
+                // 初始通知直接携带失败终态（无后续 update）
+                await notify({
+                    sessionUpdate: 'tool_call',
+                    toolCallId: 'tool-init-failed',
+                    title: 'Initially failed tool',
+                    kind: 'shell',
+                    status: 'failed',
+                });
+            }
             if (options.overlappingTools) {
                 // 协议允许的重叠工具：A 启动后 B 启动，随后 A 才回报失败
                 await notify({
@@ -600,6 +610,18 @@ test('停止后引擎无响应：超时强制回收连接并释放会话占用',
     const events2 = [];
     await manager.execute('main', 'asst-2', '回收后的新任务', collectCallbacks(events2));
     assert.strictEqual(lastStatus(events2), 'done', '强制回收后应能重建引擎并继续执行');
+});
+
+test('初始通知即带失败终态的工具：按失败广播，不被收尾改写为成功', async () => {
+    const { manager } = buildManager({ chunkCount: 1, toolInitialFailed: true });
+    const events = [];
+    await manager.execute('main', 'asst-1', '执行操作', collectCallbacks(events));
+
+    const statuses = events
+        .filter((e) => e.kind === 'tool' && e.toolCall.id === 'tool-init-failed')
+        .map((e) => e.toolCall.status);
+    assert.deepStrictEqual(statuses, ['failed'], '出生即失败的工具应只广播一次失败终态');
+    assert.strictEqual(lastStatus(events), 'done');
 });
 
 test('停止后引擎快速收尾时：回收计时器不误杀同会话的后续请求', async () => {
