@@ -154,6 +154,13 @@ export const ChatScreen = () => {
                     text: t('assistant.clearHistory', '清空聊天记录'),
                     style: 'destructive',
                     onPress: () => {
+                        if (taskState === 'processing' || taskState === 'awaiting_approval') {
+                            Alert.alert(
+                                t('common.notice', '提示'),
+                                t('assistant.taskRunningRejection', '上一个任务正在执行中，请等待其完成或点击停止'),
+                            );
+                            return;
+                        }
                         Alert.alert(
                             t('assistant.clearHistory', '清空聊天记录'),
                             t('assistant.clearConfirm', '确定要清空当前的聊天记录吗？这不会影响服务端的记忆文件。'),
@@ -169,13 +176,13 @@ export const ChatScreen = () => {
                     },
                 },
                 {
-                    text: t('assistant.assistantConfig', '助理服务配置'),
+                    text: t('settings.assistantConfig', '助理服务配置'),
                     onPress: () => navigation.navigate('AssistantConfig'),
                 },
                 { text: t('common.cancel', '取消'), style: 'cancel' },
             ],
         );
-    }, [clearChat, navigation, t]);
+    }, [clearChat, navigation, t, taskState]);
 
     useEffect(() => {
         // 自动连接
@@ -431,21 +438,21 @@ export const ChatScreen = () => {
                 }}
             />
 
+            {/* 向上滚动时出现的快速回到底部悬浮小圆钮：置于主容器内保证触摸响应边界完整 */}
+            {showScrollBottom && (
+                <TouchableOpacity
+                    style={styles.scrollBottomBtn}
+                    onPress={scrollToEnd}
+                    activeOpacity={0.85}
+                >
+                    <Icon name="arrow-downward" size={18} color="#2563EB" />
+                </TouchableOpacity>
+            )}
+
             <KeyboardStickyView
                 style={styles.keyboardSticky}
                 offset={{ opened: tabBarHeight }}
             >
-                {/* 向上滚动时出现的快速回到底部悬浮小圆钮 */}
-                {showScrollBottom && (
-                    <TouchableOpacity
-                        style={styles.scrollBottomBtn}
-                        onPress={scrollToEnd}
-                        activeOpacity={0.85}
-                    >
-                        <Icon name="arrow-downward" size={18} color="#2563EB" />
-                    </TouchableOpacity>
-                )}
-
                 {/* 人工审批卡片：并发审批按登记顺序逐卡展示，各自独立应答 */}
             {pendingApprovals.map((approval) => (
                 <View key={approval.approvalId} style={styles.approvalCard}>
@@ -953,11 +960,11 @@ const styles = StyleSheet.create({
     },
     scrollBottomBtn: {
         position: 'absolute',
-        top: -46,
+        bottom: 74,
         alignSelf: 'center',
-        width: 34,
-        height: 34,
-        borderRadius: 17,
+        width: 36,
+        height: 36,
+        borderRadius: 18,
         backgroundColor: '#D9EAFD',
         justifyContent: 'center',
         alignItems: 'center',

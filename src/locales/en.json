@@ -167,6 +167,7 @@
     "placeholder": "Start writing..."
   },
   "common": {
+    "actions": "Quick Actions",
     "back": "Back",
     "save": "Save",
     "cancel": "Cancel",
