@@ -4,6 +4,7 @@ import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { AcpEngineManager } from './acpEngineManager.js';
 import { FileManager } from './fileManager.js';
+import { ContextConsolidator } from './contextConsolidator.js';
 import { LvtianServer } from './server.js';
 
 function parseArgs(): Partial<ServerConfig> {
@@ -65,8 +66,9 @@ async function main() {
     const sessionManager = new SessionManager(config.dataDir);
     const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager);
     const fileManager = new FileManager(config.workspace);
+    const contextConsolidator = new ContextConsolidator(sessionManager);
 
-    const server = new LvtianServer(config, sessionManager, memoryManager, acpEngine, fileManager);
+    const server = new LvtianServer(config, sessionManager, memoryManager, acpEngine, fileManager, contextConsolidator);
     await server.start();
 
     const maskedToken = `${config.token.slice(0, 4)}****${config.token.slice(-4)}`;
