@@ -71,6 +71,31 @@ function createMockEngineApp(options = {}) {
                 });
                 throw new Error('engine boom');
             }
+            if (options.promptNeverEnds) {
+                // 引擎卡死：发出首个增量后永不结束当前轮（对取消通知也无响应）
+                await notify({
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: 'stuck' },
+                });
+                await new Promise(() => {});
+            }
+            if (options.doublePermission) {
+                // 同一会话并发两个审批请求（模拟重叠工具各自请求审批）
+                const askPermission = (toolCallId) => c.client.request(acp.methods.client.session.requestPermission, {
+                    sessionId,
+                    toolCall: { toolCallId, title: `Permission ${toolCallId}`, kind: 'shell' },
+                    options: [
+                        { kind: 'allow_once', name: 'Allow once', optionId: 'allow' },
+                        { kind: 'reject_once', name: 'Reject once', optionId: 'reject' },
+                    ],
+                });
+                const [p1, p2] = await Promise.all([askPermission('perm-a'), askPermission('perm-b')]);
+                await notify({
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: `double-${p1.outcome.outcome}-${p2.outcome.outcome}` },
+                });
+                return { stopReason: 'end_turn' };
+            }
             if (options.overlappingTools) {
                 // 协议允许的重叠工具：A 启动后 B 启动，随后 A 才回报失败
                 await notify({
@@ -156,11 +181,18 @@ function buildManager(agentOptions = {}, managerOptions = {}) {
     /** 引擎侧会话存储：跨连接共享，模拟 dsh-acp 的会话持久化 */
     const sessionStore = new Set();
 
+    let connectionCount = 0;
     const connectEngine = async (app) => {
         if (agentOptions.engineStartDelayMs) {
             await delay(agentOptions.engineStartDelayMs);
         }
-        const engineApp = createMockEngineApp({ ...agentOptions, sessionStore });
+        connectionCount++;
+        const engineOptions = { ...agentOptions, sessionStore };
+        // promptNeverEnds 只让首个引擎卡死（复现无响应），懒重启后的新引擎须正常应答以验证会话可恢复
+        if (connectionCount > 1) {
+            delete engineOptions.promptNeverEnds;
+        }
+        const engineApp = createMockEngineApp(engineOptions);
         let resolveContext;
         let resolveStop;
         const contextReady = new Promise((resolve) => { resolveContext = resolve; });
@@ -525,4 +557,46 @@ test('回复被截断时经 done 载荷透出 stopReason，由客户端本地化
     assert.strictEqual(lastStatus(events), 'done');
     const doneEvent = events.find((e) => e.kind === 'status' && e.status === 'done');
     assert.strictEqual(doneEvent?.payload?.stopReason, 'max_tokens', '截断原因应结构化透出而非服务端内嵌文案');
+});
+
+test('同一会话并发审批各自独立应答，互不覆盖', async () => {
+    const { manager } = buildManager({ doublePermission: true });
+    const events = [];
+    const executing = manager.execute('main', 'asst-1', '并发审批任务', collectCallbacks(events));
+
+    const approvals = await new Promise((resolve) => {
+        const timer = setInterval(() => {
+            const found = events.filter((e) => e.kind === 'approval');
+            if (found.length >= 2) { clearInterval(timer); resolve(found.map((e) => e.request)); }
+        }, 10);
+    });
+    assert.notStrictEqual(approvals[0].approvalId, approvals[1].approvalId, '并发审批的 ID 必须唯一');
+    assert.strictEqual(manager.handleApproval('main', approvals[0].approvalId, true), true, '第一个审批应可独立应答');
+    assert.strictEqual(manager.handleApproval('main', approvals[1].approvalId, false), true, '第二个审批不得覆盖第一个的登记');
+    await executing;
+
+    assert.ok(deltas(events).includes('double-selected-selected'), '两个审批均应收到各自的选择结果');
+});
+
+test('停止后引擎无响应：超时强制回收连接并释放会话占用', async () => {
+    const { manager, sessionManager } = buildManager(
+        { promptNeverEnds: true },
+        { stopTimeoutMs: 100 }
+    );
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing = manager.execute('main', 'asst-1', '卡死任务', collectCallbacks(events));
+
+    await delay(100); // prompt 已发出且引擎不响应
+    assert.strictEqual(manager.isRunning('main'), true);
+    manager.stop('main');
+    await executing; // 超时回收应让挂起的 prompt 以 stopped 终态结束
+
+    assert.strictEqual(manager.isRunning('main'), false, '强制回收后会话占用必须释放');
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'stopped');
+
+    // 引擎随下次请求懒重启，会话可继续使用
+    const events2 = [];
+    await manager.execute('main', 'asst-2', '回收后的新任务', collectCallbacks(events2));
+    assert.strictEqual(lastStatus(events2), 'done', '强制回收后应能重建引擎并继续执行');
 });

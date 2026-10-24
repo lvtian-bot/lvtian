@@ -47,6 +47,8 @@ export interface EngineConnection {
 export interface AcpEngineManagerOptions {
     /** 审批挂起超时（毫秒），超时自动拒绝；默认 5 分钟，测试可用环境变量 LVTIAN_APPROVAL_TIMEOUT_MS 覆盖 */
     approvalTimeoutMs?: number;
+    /** 停止后引擎无响应的强制回收超时（毫秒），默认 2000，对齐旧 DshRunner 停止保障水位 */
+    stopTimeoutMs?: number;
     /** 引擎连接工厂，默认 spawn dsh --profile acp；测试注入进程内模拟连接 */
     connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
 }
@@ -62,9 +64,10 @@ interface SessionRuntime {
     committedText: string;
 }
 
-/** 挂起中的审批：等待客户端应答或超时 */
+/** 挂起中的审批：等待客户端应答或超时；协议允许同一会话并发多个审批，按 approvalId 独立记账 */
 interface PendingPermission {
     approvalId: string;
+    sessionId: string;
     settle: (approved: boolean | 'timeout') => void;
     timer: ReturnType<typeof setTimeout>;
 }
@@ -120,6 +123,7 @@ export class AcpEngineManager {
     private memoryManager: MemoryManager;
     private sessionManager: SessionManager;
     private approvalTimeoutMs: number;
+    private stopTimeoutMs: number;
     private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
 
     private connection: EngineConnection | null = null;
@@ -132,8 +136,11 @@ export class AcpEngineManager {
     private runtimes: Map<string, SessionRuntime> = new Map();
     /** 引擎侧会话 ID → 绿天会话 ID 反查（审批请求与事件路由使用） */
     private engineSessionIndex: Map<string, string> = new Map();
+    /** 挂起中的审批（键为 approvalId）：同一会话可并发多个审批，各自独立应答与超时 */
     private pendingPermissions: Map<string, PendingPermission> = new Map();
     private stoppedSessions: Set<string> = new Set();
+    /** 审批 ID 序号：Date.now() 毫秒精度不足，并发审批需序列号保证唯一 */
+    private approvalSeq = 0;
 
     constructor(
         workspace: string,
@@ -147,6 +154,7 @@ export class AcpEngineManager {
         const envTimeout = Number.parseInt(process.env.LVTIAN_APPROVAL_TIMEOUT_MS ?? '', 10);
         this.approvalTimeoutMs = options?.approvalTimeoutMs
             ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5 * 60 * 1000);
+        this.stopTimeoutMs = options?.stopTimeoutMs ?? 2000;
         this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
     }
 
@@ -155,12 +163,12 @@ export class AcpEngineManager {
     }
 
     public handleApproval(sessionId: string, approvalId: string, approved: boolean): boolean {
-        const pending = this.pendingPermissions.get(sessionId);
-        if (!pending || pending.approvalId !== approvalId) {
+        const pending = this.pendingPermissions.get(approvalId);
+        if (!pending || pending.sessionId !== sessionId) {
             return false;
         }
         clearTimeout(pending.timer);
-        this.pendingPermissions.delete(sessionId);
+        this.pendingPermissions.delete(approvalId);
         pending.settle(approved);
         return true;
     }
@@ -179,6 +187,8 @@ export class AcpEngineManager {
             this.connection?.context.notify('session/cancel', { sessionId: runtime.engineSessionId }).catch((err) => {
                 console.warn(`[AcpEngine] 发送取消通知失败: ${err instanceof Error ? err.message : String(err)}`);
             });
+            // 引擎可能对取消通知无响应（卡死），超时兜底强制回收连接，防止会话被挂死的 prompt 永久占用
+            this.scheduleStopRecovery(sessionId);
             return true;
         }
 
@@ -197,6 +207,30 @@ export class AcpEngineManager {
             return true;
         }
         return false;
+    }
+
+    /**
+     * 停止后的超时兜底：引擎收到取消通知仍未结束当前轮（进程或工具卡死）时，
+     * 强制关闭引擎连接——挂起的 prompt 请求随连接断开 reject，各占用会话经 execute
+     * 的 stopped 分支收尾并释放预留；引擎在下次请求时懒重启。对齐旧 DshRunner 停止后 2 秒强制终止的保障水位。
+     */
+    private scheduleStopRecovery(sessionId: string): void {
+        const timer = setTimeout(() => {
+            if (!this.activeSessions.has(sessionId)) {
+                return; // 引擎已在超时窗口内正常结束，无需回收
+            }
+            console.warn(`[AcpEngine] 停止后 ${this.stopTimeoutMs}ms 引擎仍未结束，强制回收引擎连接`);
+            // 与 stopAll 相同模式：同步置空连接并清理映射再关闭。
+            // closed 清理是异步回调，若不先置空，下一个请求会抢在清理前复用已关闭的死连接
+            const conn = this.connection;
+            this.connection = null;
+            this.engineSessionIndex.clear();
+            conn?.close().catch((err: unknown) => {
+                console.warn(`[AcpEngine] 强制回收连接失败: ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }, this.stopTimeoutMs);
+        // 计时器不得阻止进程退出（Node Timeout 专属能力，其他环境安全跳过）
+        timer.unref?.();
     }
 
     /** 优雅关停：停止全部受理中的任务（含引擎启动窗口）、等待启动中的引擎就位后关闭连接 */
@@ -644,7 +678,8 @@ ${userPrompt}`;
             return { outcome: { outcome: 'cancelled' } };
         }
 
-        const approvalId = `apr-${Date.now()}`;
+        // 毫秒时间戳对并发审批不唯一，附加序列号保证各审批可独立应答
+        const approvalId = `apr-${Date.now()}-${++this.approvalSeq}`;
         const request: ApprovalRequest = {
             approvalId,
             prompt: params.toolCall?.title ?? '助理请求执行操作',
@@ -655,10 +690,11 @@ ${userPrompt}`;
 
         const approved = await new Promise<boolean | 'timeout'>((resolve) => {
             const timer = setTimeout(() => resolve('timeout'), this.approvalTimeoutMs);
-            this.pendingPermissions.set(sessionId, { approvalId, settle: resolve, timer });
+            this.pendingPermissions.set(approvalId, { approvalId, sessionId, settle: resolve, timer });
             runtime.callbacks.onApprovalRequest!(request);
         });
-        this.pendingPermissions.delete(sessionId);
+        // 只清理本审批的登记，同会话其他并发审批不受影响
+        this.pendingPermissions.delete(approvalId);
 
         if (approved === 'timeout') {
             console.warn(`[AcpEngine] 审批 ${approvalId} 超时未应答，自动拒绝`);
@@ -685,12 +721,14 @@ ${userPrompt}`;
         return { outcome: { outcome: 'selected', optionId: option.optionId } };
     }
 
-    /** 引擎取消或异常退出时，拒绝挂起中的审批（引擎侧随后以 cancelled 终止当前轮） */
+    /** 引擎取消或异常退出时，拒绝该会话挂起中的全部审批（引擎侧随后以 cancelled 终止当前轮） */
     private rejectPendingPermission(sessionId: string, reason: string): void {
-        const pending = this.pendingPermissions.get(sessionId);
-        if (pending) {
+        for (const pending of [...this.pendingPermissions.values()]) {
+            if (pending.sessionId !== sessionId) {
+                continue;
+            }
             clearTimeout(pending.timer);
-            this.pendingPermissions.delete(sessionId);
+            this.pendingPermissions.delete(pending.approvalId);
             console.warn(`[AcpEngine] 审批 ${pending.approvalId} 被终止: ${reason}`);
             pending.settle(false);
         }
