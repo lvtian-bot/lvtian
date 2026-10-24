@@ -6,7 +6,7 @@ import type { WebSocketServer } from 'ws';
 import { ServerConfig } from './config.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
-import { DshRunner } from './dshRunner.js';
+import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
 import {
     ClientMessage,
@@ -33,7 +33,7 @@ export class LvtianServer {
     private config: ServerConfig;
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;
-    private dshRunner: DshRunner;
+    private acpEngine: AcpEngineManager;
     private fileManager: FileManager;
     private httpServer: http.Server;
     private wss: WebSocketServer;
@@ -43,13 +43,13 @@ export class LvtianServer {
         config: ServerConfig,
         sessionManager: SessionManager,
         memoryManager: MemoryManager,
-        dshRunner: DshRunner,
+        acpEngine: AcpEngineManager,
         fileManager?: FileManager
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
         this.memoryManager = memoryManager;
-        this.dshRunner = dshRunner;
+        this.acpEngine = acpEngine;
         this.fileManager = fileManager || new FileManager(config.workspace);
 
         this.httpServer = http.createServer((req, res) => {
@@ -415,14 +415,14 @@ export class LvtianServer {
                     break;
                 }
                 const sessionId = rawSessionId;
-                const stopped = this.dshRunner.stop(sessionId);
+                const stopped = this.acpEngine.stop(sessionId);
                 const seq = this.sessionManager.nextSeq(sessionId);
                 this.broadcastSession(sessionId, {
                     type: 'task_status',
                     seq,
                     sessionId,
                     state: 'stopped',
-                    error: stopped ? '任务已被手动终止' : undefined,
+                    error: stopped ? 'task_stopped' : undefined,
                 });
                 break;
             }
@@ -433,15 +433,18 @@ export class LvtianServer {
                 const pending = this.sessionManager.getPendingApproval(sessionId);
                 if (pending && pending.approvalId === msg.approvalId) {
                     this.sessionManager.clearPendingApproval(sessionId);
-                    const nextState = msg.approved ? 'processing' : 'stopped';
-                    const seq = this.sessionManager.setTaskState(sessionId, nextState);
-                    this.dshRunner.handleApproval(sessionId, msg.approvalId, msg.approved);
-                    this.broadcastSession(sessionId, {
-                        type: 'task_status',
-                        seq,
-                        sessionId,
-                        state: nextState,
-                    });
+                    // ACP 引擎下拒绝审批不终止任务（引擎收到拒绝后自行收尾），
+                    // 允许与拒绝均恢复执行中状态，最终由引擎终态回调修正；审批已被
+                    // 引擎管理器移除（超时/停止竞态）时不得覆盖其终态
+                    if (this.acpEngine.handleApproval(sessionId, msg.approvalId, msg.approved)) {
+                        const seq = this.sessionManager.setTaskState(sessionId, 'processing');
+                        this.broadcastSession(sessionId, {
+                            type: 'task_status',
+                            seq,
+                            sessionId,
+                            state: 'processing',
+                        });
+                    }
                 }
                 break;
             }
@@ -455,7 +458,7 @@ export class LvtianServer {
         content: string
     ): void {
         // 如果当前已有任务在执行，拒绝并发任务且通知客户端该消息发送失败
-        if (this.dshRunner.isRunning(sessionId)) {
+        if (this.acpEngine.isRunning(sessionId)) {
             const currentSession = this.sessionManager.getOrCreateSession(sessionId);
             const errMsg = '上一个任务正在执行中，请等待其完成或点击停止';
             this.send(ws, {
@@ -526,8 +529,8 @@ export class LvtianServer {
             status: 'thinking',
         });
 
-        // 4. 调用 DshRunner 驱动底层任务 (捕获异步异常，避免 unhandled rejection 导致主进程崩溃)
-        this.dshRunner.execute(sessionId, assistantMessageId, content, {
+        // 4. 调用 ACP 引擎管理器驱动底层任务 (捕获异步异常，避免 unhandled rejection 导致主进程崩溃)
+        this.acpEngine.execute(sessionId, assistantMessageId, content, {
             onDelta: (delta: string) => {
                 const updated = this.sessionManager.appendDelta(sessionId, assistantMessageId, delta);
                 if (updated) {
@@ -565,49 +568,43 @@ export class LvtianServer {
                     params: request.params,
                 });
             },
-            onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error', error?: string) => {
-                let taskState: TaskExecutionState = 'processing';
-                if (status === 'done') taskState = 'completed';
-                if (status === 'error') taskState = 'error';
+            onStatusChange: (status, payload?: EngineStatusPayload) => {
+                // 过渡态（思考中/执行工具）已由占位 event_chunk 与工具活动广播承载，
+                // 任务状态也已由引擎管理器在执行入口落盘，这里不重复推进 seq
+                if (status === 'thinking' || status === 'running_tool') {
+                    return;
+                }
+                // stopped 为引擎管理器内部终态（如审批超时自动拒绝），持久化已由管理器完成，
+                // 这里广播结构化错误码以修正客户端实时视图
+                if (status === 'stopped') {
+                    const seq = this.sessionManager.nextSeq(sessionId);
+                    this.broadcastSession(sessionId, {
+                        type: 'task_status',
+                        seq,
+                        sessionId,
+                        state: 'stopped',
+                        error: payload?.code,
+                    });
+                    return;
+                }
 
+                // done/error 终态：消息状态与稳定错误码由此处落盘（引擎管理器只终态化任务状态），
+                // error 字段与持久化一致存稳定码，客户端按码本地化渲染、未知码按原文兜底
                 this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
-                    m.status = status === 'done' ? 'done' : status === 'error' ? 'error' : 'processing';
-                    if (error) m.errorMessage = error;
+                    m.status = status === 'done' ? 'done' : 'error';
+                    if (payload?.code) m.errorMessage = payload.code;
                 });
 
+                const taskState: TaskExecutionState = status === 'done' ? 'completed' : 'error';
                 const seq = this.sessionManager.setTaskState(sessionId, taskState);
                 this.broadcastSession(sessionId, {
                     type: 'task_status',
                     seq,
                     sessionId,
                     state: taskState,
-                    error,
+                    error: payload?.code,
+                    stopReason: payload?.stopReason,
                 });
-            },
-            onFinalText: (fullText: string) => {
-                const session = this.sessionManager.getOrCreateSession(sessionId);
-                const currentMsg = session.messages.find((m) => m.id === assistantMessageId);
-                const currentContent = currentMsg ? currentMsg.content : '';
-                if (fullText && fullText !== currentContent) {
-                    const updated = this.sessionManager.updateMessage(
-                        sessionId,
-                        assistantMessageId,
-                        (m) => {
-                            m.content = fullText;
-                        },
-                        true,
-                        true
-                    );
-                    if (updated) {
-                        this.broadcastSession(sessionId, {
-                            type: 'event_chunk',
-                            seq: updated.seq,
-                            sessionId,
-                            messageId: assistantMessageId,
-                            content: fullText,
-                        });
-                    }
-                }
             },
         }).catch((err: unknown) => {
             const errorMsg = err instanceof Error ? err.message : String(err);
@@ -668,8 +665,8 @@ export class LvtianServer {
     }
 
     public async stop(): Promise<void> {
-        // 优雅终止所有正在运行的底层 dsh 子进程，等待其退出（带 2.5s 超时），防止僵尸进程常驻
-        await this.dshRunner.stopAll();
+        // 优雅关停 ACP 引擎：停止全部受理中任务、关闭引擎连接并回收子进程，防止僵尸进程常驻
+        await this.acpEngine.stopAll();
 
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);

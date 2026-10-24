@@ -2,7 +2,7 @@ import os from 'node:os';
 import { loadOrCreateConfig, ServerConfig } from './config.js';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
-import { DshRunner } from './dshRunner.js';
+import { AcpEngineManager } from './acpEngineManager.js';
 import { FileManager } from './fileManager.js';
 import { LvtianServer } from './server.js';
 
@@ -63,10 +63,10 @@ async function main() {
 
     const memoryManager = new MemoryManager(config.workspace);
     const sessionManager = new SessionManager(config.dataDir);
-    const dshRunner = new DshRunner(config.workspace, memoryManager, sessionManager);
+    const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager);
     const fileManager = new FileManager(config.workspace);
 
-    const server = new LvtianServer(config, sessionManager, memoryManager, dshRunner, fileManager);
+    const server = new LvtianServer(config, sessionManager, memoryManager, acpEngine, fileManager);
     await server.start();
 
     const maskedToken = `${config.token.slice(0, 4)}****${config.token.slice(-4)}`;
