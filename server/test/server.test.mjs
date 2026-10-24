@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import * as acp from '@agentclientprotocol/sdk';
 import { SessionManager } from '../dist/sessionManager.js';
 import { LvtianServer } from '../dist/server.js';
 import { MemoryManager } from '../dist/memoryManager.js';
-import { DshRunner } from '../dist/dshRunner.js';
+import { AcpEngineManager } from '../dist/acpEngineManager.js';
 import { FileManager } from '../dist/fileManager.js';
 import WebSocket from 'ws';
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test('SessionManager handles final lossless text update and advances sequence', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-'));
@@ -53,7 +56,11 @@ test('LvtianServer handles WebSocket connection error without crash', async () =
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-srv-'));
     const sm = new SessionManager(tmpDir);
     const mm = new MemoryManager(tmpDir);
-    const runner = new DshRunner(tmpDir, mm, sm);
+    const engine = new AcpEngineManager(tmpDir, mm, sm, {
+        connectEngine: async () => {
+            throw new Error('该测试不触发聊天，不应启动引擎');
+        },
+    });
 
     const config = {
         port: 0, // 动态随机端口
@@ -64,7 +71,7 @@ test('LvtianServer handles WebSocket connection error without crash', async () =
         assistantName: 'TestBot',
     };
 
-    const server = new LvtianServer(config, sm, mm, runner);
+    const server = new LvtianServer(config, sm, mm, engine);
     await server.start();
 
     const assignedPort = server.httpServer.address().port;
@@ -267,7 +274,11 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-files-srv-'));
     const sm = new SessionManager(tmpDir);
     const mm = new MemoryManager(tmpDir);
-    const runner = new DshRunner(tmpDir, mm, sm);
+    const engine = new AcpEngineManager(tmpDir, mm, sm, {
+        connectEngine: async () => {
+            throw new Error('该测试不触发聊天，不应启动引擎');
+        },
+    });
     const fm = new FileManager(tmpDir, tmpDir);
 
     const testFile = path.join(tmpDir, 'report.md');
@@ -283,7 +294,7 @@ test('LvtianServer handles /api/files HTTP endpoints with token authentication',
         assistantName: 'TestBot',
     };
 
-    const server = new LvtianServer(config, sm, mm, runner, fm);
+    const server = new LvtianServer(config, sm, mm, engine, fm);
     await server.start();
     const port = server.httpServer.address().port;
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -668,6 +679,312 @@ test('SessionManager appends newline after last valid record missing its termina
     assert.equal(r3.messages.length, 2, '缺换行符场景下新旧消息都不应丢失');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// 接线层集成测试：LvtianServer + WebSocket + 进程内模拟 ACP 引擎，
+// 覆盖聊天事件广播、审批卡下发与应答、停止与审批超时终态的广播链路
+// ---------------------------------------------------------------------------
+
+/**
+ * 进程内模拟 ACP 引擎（仅覆盖接线测试所需路径）：
+ * prompt → chunkCount 个文本增量 →（可选）一次审批请求 → 终态 end_turn
+ */
+function createMockEngine(options = {}) {
+    return acp.agent({ name: 'mock-engine' })
+        .onRequest(acp.methods.agent.initialize, () => ({
+            protocolVersion: acp.PROTOCOL_VERSION,
+            agentCapabilities: {},
+        }))
+        .onRequest(acp.methods.agent.session.new, () => ({ sessionId: globalThis.crypto.randomUUID() }))
+        .onRequest(acp.methods.agent.session.prompt, async (c) => {
+            const sessionId = c.params.sessionId;
+            const notify = (update) =>
+                c.client.notify(acp.methods.client.session.update, { sessionId, update });
+            for (let i = 0; i < (options.chunkCount ?? 1); i++) {
+                if (options.chunkDelayMs) await delay(options.chunkDelayMs);
+                await notify({
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: `chunk-${i + 1}` },
+                });
+            }
+            if (options.enablePermission) {
+                const permission = await c.client.request(acp.methods.client.session.requestPermission, {
+                    sessionId,
+                    toolCall: { toolCallId: 'permission-tool', title: 'Permission tool', kind: 'shell' },
+                    options: [
+                        { kind: 'allow_once', name: 'Allow once', optionId: 'allow' },
+                        { kind: 'reject_once', name: 'Reject once', optionId: 'reject' },
+                    ],
+                });
+                await notify({
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: `permission-${permission.outcome.outcome}-${permission.outcome.optionId ?? ''}` },
+                });
+            }
+            if (options.doublePermission) {
+                // 同一会话并发两个审批请求（模拟重叠工具各自请求审批）
+                const askPermission = (toolCallId) => c.client.request(acp.methods.client.session.requestPermission, {
+                    sessionId,
+                    toolCall: { toolCallId, title: `Permission ${toolCallId}`, kind: 'shell' },
+                    options: [
+                        { kind: 'allow_once', name: 'Allow once', optionId: 'allow' },
+                        { kind: 'reject_once', name: 'Reject once', optionId: 'reject' },
+                    ],
+                });
+                const [p1, p2] = await Promise.all([askPermission('perm-a'), askPermission('perm-b')]);
+                await notify({
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: `double-${p1.outcome.outcome}-${p2.outcome.outcome}` },
+                });
+            }
+            return { stopReason: 'end_turn' };
+        })
+        .onNotification(acp.methods.agent.session.cancel, () => {});
+}
+
+/** 构造接入模拟引擎的服务端套件 */
+async function buildWiredServer(engineOptions = {}, managerOptions = {}) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-wire-test-'));
+    const memoryManager = new MemoryManager(tmp);
+    const sessionManager = new SessionManager(tmp);
+    const connectEngine = async (app) => {
+        let resolveContext;
+        let resolveStop;
+        const contextReady = new Promise((resolve) => { resolveContext = resolve; });
+        const stopSignal = new Promise((resolve) => { resolveStop = resolve; });
+        const run = app.connectWith(createMockEngine(engineOptions), async (ctx) => {
+            resolveContext(ctx);
+            await stopSignal;
+        });
+        const closed = run.catch(() => undefined);
+        return {
+            context: await contextReady,
+            closed,
+            close: async () => { resolveStop(); await closed; },
+        };
+    };
+    const engine = new AcpEngineManager(tmp, memoryManager, sessionManager, { connectEngine, ...managerOptions });
+    const config = {
+        port: 0,
+        host: '127.0.0.1',
+        token: 'test-token-wired-12345',
+        workspace: tmp,
+        dataDir: tmp,
+        assistantName: 'TestBot',
+    };
+    const server = new LvtianServer(config, sessionManager, memoryManager, engine);
+    await server.start();
+    const port = server.httpServer.address().port;
+    return { server, sessionManager, tmp, port };
+}
+
+function waitForMsg(received, predicate, desc, timeoutMs = 4000) {
+    return new Promise((resolve, reject) => {
+        const timer = setInterval(() => {
+            const found = received.find(predicate);
+            if (found) {
+                clearInterval(timer);
+                resolve(found);
+            }
+        }, 10);
+        setTimeout(() => {
+            clearInterval(timer);
+            reject(new Error(`等待消息超时: ${desc}`));
+        }, timeoutMs);
+    });
+}
+
+/** 建立已认证的 WebSocket 客户端，服务端广播按到达顺序收进 received */
+async function openAuthenticatedClient(port, token, received) {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    ws.on('message', (raw) => received.push(JSON.parse(raw.toString('utf8'))));
+    await new Promise((resolve, reject) => {
+        ws.on('error', reject);
+        ws.on('open', () => {
+            ws.send(JSON.stringify({ type: 'auth', token }));
+            resolve();
+        });
+    });
+    await waitForMsg(received, (m) => m.type === 'auth_result' && m.success, 'auth_result');
+    return ws;
+}
+
+test('聊天报文经接线层完整广播：受理回执、流式增量与完成终态', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 2 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '你好' }));
+
+    const ack = await waitForMsg(received, (m) => m.type === 'message_ack', 'message_ack');
+    assert.equal(ack.messageId, 'u1');
+    assert.equal(ack.role, 'user');
+    assert.equal(ack.content, '你好');
+
+    const placeholderIdx = received.findIndex((m) => m.type === 'event_chunk' && m.delta === '');
+    assert.ok(placeholderIdx >= 0, '应广播助理占位 event_chunk');
+    const firstDelta = await waitForMsg(received, (m) => m.type === 'event_chunk' && m.delta === 'chunk-1', '首个增量');
+    assert.ok(received.indexOf(firstDelta) > placeholderIdx, '流式增量应在占位之后');
+
+    const done = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
+    assert.ok(
+        received.findIndex((m) => m.type === 'event_chunk' && m.delta === 'chunk-2') < received.indexOf(done),
+        '终态应在全部增量之后'
+    );
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.taskState, 'completed');
+    const asstMsg = session.messages.find((m) => m.id.startsWith('asst-'));
+    assert.equal(asstMsg.status, 'done');
+    assert.equal(asstMsg.content, 'chunk-1chunk-2');
+    assert.ok(sessionManager.getDshSessionId('main'), '引擎侧会话绑定应持久化');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('审批卡下发与应答：approval_request 转发、允许后任务恢复执行并完成', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 1, enablePermission: true });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '执行操作' }));
+
+    const approval = await waitForMsg(received, (m) => m.type === 'approval_request', 'approval_request');
+    assert.ok(approval.approvalId, '审批卡应带 ID');
+    assert.equal(approval.toolName, 'shell');
+    assert.ok(approval.prompt.includes('Permission tool'));
+
+    ws.send(JSON.stringify({ type: 'approval_response', approvalId: approval.approvalId, approved: true }));
+
+    const resumed = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing', '应答后恢复执行中');
+    assert.ok(resumed.seq > approval.seq, '恢复执行中的 seq 应推进');
+
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
+
+    const allDeltas = received.filter((m) => m.type === 'event_chunk' && m.delta).map((m) => m.delta).join('');
+    assert.ok(allDeltas.includes('permission-selected-allow'), '允许应答应选中 allow 选项');
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.taskState, 'completed');
+    assert.equal(session.pendingApproval, undefined, '应答后待审批登记应清空');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('审批拒绝后任务不终止：状态恢复执行中并由引擎正常收尾', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 1, enablePermission: true });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '执行操作' }));
+
+    const approval = await waitForMsg(received, (m) => m.type === 'approval_request', 'approval_request');
+    ws.send(JSON.stringify({ type: 'approval_response', approvalId: approval.approvalId, approved: false }));
+
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing', '拒绝后恢复执行中');
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
+
+    const allDeltas = received.filter((m) => m.type === 'event_chunk' && m.delta).map((m) => m.delta).join('');
+    assert.ok(allDeltas.includes('permission-selected-reject'), '拒绝应答应选中 reject 选项');
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.taskState, 'completed', '拒绝审批不终止任务，引擎正常收尾');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('停止报文广播 stopped 终态并停止后续增量广播', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 3, chunkDelayMs: 100 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '长任务' }));
+    await waitForMsg(received, (m) => m.type === 'event_chunk' && m.delta === 'chunk-1', '首个增量');
+
+    ws.send(JSON.stringify({ type: 'stop', sessionId: 'main' }));
+
+    const stopped = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'stopped', '停止终态');
+    assert.equal(stopped.error, 'task_stopped', '停止终态应携带稳定错误码');
+
+    await delay(400); // 覆盖剩余 chunk 的原定到达窗口
+    assert.ok(
+        !received.some((m) => m.type === 'event_chunk' && (m.delta === 'chunk-2' || m.delta === 'chunk-3')),
+        '停止后不应再广播增量'
+    );
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.taskState, 'stopped');
+    const asstMsg = session.messages.find((m) => m.id.startsWith('asst-'));
+    assert.equal(asstMsg.status, 'error');
+    assert.equal(asstMsg.errorMessage, 'task_stopped');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('审批超时自动拒绝：广播 stopped 终态并携带稳定错误码', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer(
+        { chunkCount: 1, enablePermission: true },
+        { approvalTimeoutMs: 100 }
+    );
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '执行操作' }));
+    await waitForMsg(received, (m) => m.type === 'approval_request', 'approval_request');
+    // 不应答，等待服务端审批超时
+
+    const stopped = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'stopped', '审批超时终态');
+    assert.equal(stopped.error, 'approval_timeout', '超时终态应携带稳定错误码');
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.taskState, 'stopped');
+    const asstMsg = session.messages.find((m) => m.id.startsWith('asst-'));
+    assert.equal(asstMsg.errorMessage, 'approval_timeout');
+    assert.equal(session.pendingApprovals.length, 0, '超时后待审批登记应清空');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('同一会话并发审批：两卡独立下发、各自应答互不丢弃', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ doublePermission: true });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '并发审批任务' }));
+
+    // 两个审批卡先后到达（并发请求经服务端逐个广播）
+    await waitForMsg(received, (m) => m.type === 'approval_request' && m.prompt.includes('perm-a'), 'perm-a 审批卡');
+    await waitForMsg(received, (m) => m.type === 'approval_request' && m.prompt.includes('perm-b'), 'perm-b 审批卡');
+    const approvals = received.filter((m) => m.type === 'approval_request');
+    assert.equal(approvals.length, 2, '两张审批卡都应下发到客户端');
+    assert.notEqual(approvals[0].approvalId, approvals[1].approvalId, '并发审批 ID 必须独立');
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.pendingApprovals.length, 2, '服务端待审批队列应同时登记两项');
+
+    // 先应答第二张卡，再应答第一张卡：先答者不得因登记顺序被丢弃
+    ws.send(JSON.stringify({ type: 'approval_response', approvalId: approvals[1].approvalId, approved: false }));
+    ws.send(JSON.stringify({ type: 'approval_response', approvalId: approvals[0].approvalId, approved: true }));
+
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
+    const allDeltas = received.filter((m) => m.type === 'event_chunk' && m.delta).map((m) => m.delta).join('');
+    assert.ok(allDeltas.includes('double-selected-selected'), '两个审批都应送达引擎各自的授权选择');
+    assert.equal(session.pendingApprovals.length, 0, '全部应答后待审批队列应清空');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
 });
 
 

@@ -166,6 +166,10 @@ function createMockEngineApp(options = {}) {
                     toolCall: { toolCallId: 'permission-tool', title: 'Permission tool', kind: 'shell' },
                     options: permissionOptions,
                 });
+                if (options.hangOnPermissionTimeout && permission.outcome.outcome === 'cancelled') {
+                    // 审批被超时取消后引擎对收尾无响应（病态挂死），验证停止回收兜底
+                    await new Promise(() => {});
+                }
                 const text = permission.outcome.outcome === 'selected'
                     ? `permission-selected-${permission.outcome.optionId}`
                     : 'permission-cancelled';
@@ -199,9 +203,12 @@ function buildManager(agentOptions = {}, managerOptions = {}) {
         }
         connectionCount++;
         const engineOptions = { ...agentOptions, sessionStore };
-        // promptNeverEnds 只让首个引擎卡死（复现无响应），懒重启后的新引擎须正常应答以验证会话可恢复
+        // promptNeverEnds / hangOnPermissionTimeout 只让首个引擎卡死（复现无响应），
+        // 懒重启后的新引擎须正常应答（含跳过审批路径）以验证会话可恢复
         if (connectionCount > 1) {
             delete engineOptions.promptNeverEnds;
+            delete engineOptions.hangOnPermissionTimeout;
+            delete engineOptions.enablePermission;
         }
         const engineApp = createMockEngineApp(engineOptions);
         let resolveContext;
@@ -450,7 +457,7 @@ test('停止后到达的迟到审批请求被直接拒绝，不弹审批卡', as
     assert.strictEqual(events.filter((e) => e.kind === 'approval').length, 0, '迟到审批不应转发为审批卡');
     const session = sessionManager.getOrCreateSession('main');
     assert.strictEqual(session.taskState, 'stopped', '任务应保持停止而非回到等待审批');
-    assert.strictEqual(session.pendingApproval, undefined, '不应登记待审批项');
+    assert.strictEqual(session.pendingApprovals.length, 0, '不应登记待审批项');
 });
 
 test('工具失败时终态为 failed，且不被后续事件覆盖为成功', async () => {
@@ -662,4 +669,42 @@ test('并发审批其一超时：其余审批一并取消，任务停止后不�
     assert.deepStrictEqual(outcomeLog, ['cancelled|cancelled'], '超时后同会话其余审批不得向引擎传递授权选择');
     const stoppedEvent = [...events].reverse().find((e) => e.kind === 'status' && e.status === 'stopped');
     assert.ok(stoppedEvent, '超时审批应广播 stopped 终态');
+});
+
+test('任务占用看门狗：占用超时强制回收连接，任务以错误终态释放会话', async () => {
+    const { manager, sessionManager } = buildManager(
+        { promptNeverEnds: true },
+        { taskTimeoutMs: 100 }
+    );
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    await manager.execute('main', 'asst-1', '静默挂死任务', collectCallbacks(events));
+
+    assert.strictEqual(manager.isRunning('main'), false, '看门狗回收后必须释放会话占用');
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'error');
+    assert.strictEqual(lastStatus(events), 'error', '占用超时应以错误终态收尾而非永久占用');
+
+    // 引擎随下次请求懒重启，会话可继续使用
+    const events2 = [];
+    await manager.execute('main', 'asst-2', '回收后的新任务', collectCallbacks(events2));
+    assert.strictEqual(lastStatus(events2), 'done', '看门狗回收后应能重建引擎并继续执行');
+});
+
+test('审批超时且引擎无响应：停止回收兜底释放会话占用', async () => {
+    const { manager, sessionManager } = buildManager(
+        { chunkCount: 1, enablePermission: true, hangOnPermissionTimeout: true },
+        { approvalTimeoutMs: 100, stopTimeoutMs: 100 }
+    );
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    await manager.execute('main', 'asst-1', '审批挂死任务', collectCallbacks(events));
+
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'stopped');
+    assert.strictEqual(manager.isRunning('main'), false, '审批超时回收后必须释放会话占用');
+    const stoppedEvent = [...events].reverse().find((e) => e.kind === 'status' && e.status === 'stopped');
+    assert.ok(stoppedEvent, '审批超时应广播 stopped 终态');
+
+    const events2 = [];
+    await manager.execute('main', 'asst-2', '回收后的新任务', collectCallbacks(events2));
+    assert.strictEqual(lastStatus(events2), 'done', '回收后应能重建引擎并继续执行');
 });

@@ -47,8 +47,10 @@ export interface EngineConnection {
 export interface AcpEngineManagerOptions {
     /** 审批挂起超时（毫秒），超时自动拒绝；默认 5 分钟，测试可用环境变量 LVTIAN_APPROVAL_TIMEOUT_MS 覆盖 */
     approvalTimeoutMs?: number;
-    /** 停止后引擎无响应的强制回收超时（毫秒），默认 2000，对齐旧 DshRunner 停止保障水位 */
+    /** 停止后引擎无响应的强制回收超时（毫秒），默认 2000，对齐旧 headless 执行器的停止保障水位 */
     stopTimeoutMs?: number;
+    /** 单次任务执行的总占用看门狗（毫秒）：会话占用（含引擎启动、执行、审批全程）超过该时长视为卡死，强制回收引擎连接；默认 30 分钟，设为 0 或负数禁用 */
+    taskTimeoutMs?: number;
     /** 引擎连接工厂，默认 spawn dsh --profile acp；测试注入进程内模拟连接 */
     connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
 }
@@ -79,8 +81,29 @@ interface AcpPermissionRequest {
     options: Array<{ optionId: string; name: string; kind: string }>;
 }
 
+/** 引擎连接建立与 initialize 握手的总限时：进程活着但协议挂死时按启动失败回收 */
+const ENGINE_START_TIMEOUT_MS = 30_000;
+
 /** dsh-acp 对 NewSessionRequest 的 mcpServers 字段强制必填（比标准更严格），空对象表示不挂载 */
 const EMPTY_MCP: Record<string, never> = {};
+
+/** 为挂起风险的上游 promise 加限时：到点 reject，正常完成/失败原样透传 */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${label}超时（${timeoutMs}ms）`)), timeoutMs);
+        timer.unref?.();
+        promise.then(
+            (value) => {
+                clearTimeout(timer);
+                resolve(value);
+            },
+            (err: unknown) => {
+                clearTimeout(timer);
+                reject(err instanceof Error ? err : new Error(String(err)));
+            }
+        );
+    });
+}
 
 /**
  * 定位服务端本地安装的 @deepseek-ai/dsh 二进制或 JS 入口，
@@ -124,6 +147,7 @@ export class AcpEngineManager {
     private sessionManager: SessionManager;
     private approvalTimeoutMs: number;
     private stopTimeoutMs: number;
+    private taskTimeoutMs: number;
     private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
 
     private connection: EngineConnection | null = null;
@@ -143,6 +167,8 @@ export class AcpEngineManager {
     private approvalSeq = 0;
     /** 停止回收计时器（键为会话 ID）：执行结束即取消，防止误杀同会话的后续请求 */
     private stopRecoveryTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+    /** 任务占用看门狗计时器（键为会话 ID）：执行结束即取消 */
+    private taskWatchdogTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
     constructor(
         workspace: string,
@@ -157,6 +183,7 @@ export class AcpEngineManager {
         this.approvalTimeoutMs = options?.approvalTimeoutMs
             ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5 * 60 * 1000);
         this.stopTimeoutMs = options?.stopTimeoutMs ?? 2000;
+        this.taskTimeoutMs = options?.taskTimeoutMs ?? 30 * 60 * 1000;
         this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
     }
 
@@ -218,8 +245,8 @@ export class AcpEngineManager {
     /**
      * 停止后的超时兜底：引擎收到取消通知仍未结束当前轮（进程或工具卡死）时，
      * 强制关闭引擎连接——挂起的 prompt 请求随连接断开 reject，各占用会话经 execute
-     * 的 stopped 分支收尾并释放预留；引擎在下次请求时懒重启。对齐旧 DshRunner 停止后 2 秒强制终止的保障水位。
-     * 计时器绑定被停止的那次执行（以助理消息 ID 为身份）：窗口内该执行已结束、同会话开启新请求时不误杀新连接。
+     * 的 stopped 分支收尾并释放预留。计时器绑定被停止的那次执行（以助理消息 ID 为身份）：
+     * 窗口内该执行已结束、同会话开启新请求时不误杀新连接。
      */
     private scheduleStopRecovery(sessionId: string, assistantMessageId: string): void {
         clearTimeout(this.stopRecoveryTimers.get(sessionId));
@@ -229,18 +256,44 @@ export class AcpEngineManager {
                 return; // 被停止的执行已结束（同会话新请求占用或空闲），不属于本次回收范围
             }
             console.warn(`[AcpEngine] 停止后 ${this.stopTimeoutMs}ms 引擎仍未结束，强制回收引擎连接`);
-            // 与 stopAll 相同模式：同步置空连接并清理映射再关闭。
-            // closed 清理是异步回调，若不先置空，下一个请求会抢在清理前复用已关闭的死连接
-            const conn = this.connection;
-            this.connection = null;
-            this.engineSessionIndex.clear();
-            conn?.close().catch((err: unknown) => {
-                console.warn(`[AcpEngine] 强制回收连接失败: ${err instanceof Error ? err.message : String(err)}`);
-            });
+            this.reclaimConnection();
         }, this.stopTimeoutMs);
         // 计时器不得阻止进程退出（Node Timeout 专属能力，其他环境安全跳过）
         timer.unref?.();
         this.stopRecoveryTimers.set(sessionId, timer);
+    }
+
+    /**
+     * 任务占用看门狗：单次任务受理起的总占用时长（含引擎启动、执行、审批全程）超过阈值即视为
+     * 病态卡死，强制回收引擎连接——挂起的启动/执行请求随连接断开走各自错误终态，覆盖
+     * 手动停止与审批超时未覆盖到的路径（如任务执行中引擎静默挂死且用户不在场）。
+     * 正常长任务不受影响：执行收尾即取消计时器。
+     */
+    private scheduleTaskWatchdog(sessionId: string, assistantMessageId: string): void {
+        if (this.taskTimeoutMs <= 0) {
+            return;
+        }
+        clearTimeout(this.taskWatchdogTimers.get(sessionId));
+        const timer = setTimeout(() => {
+            this.taskWatchdogTimers.delete(sessionId);
+            if (this.activeSessions.get(sessionId) !== assistantMessageId) {
+                return; // 该执行已结束，不属于本次回收范围
+            }
+            console.warn(`[AcpEngine] 会话 ${sessionId} 任务占用超过 ${this.taskTimeoutMs}ms，看门狗强制回收引擎连接`);
+            this.reclaimConnection();
+        }, this.taskTimeoutMs);
+        timer.unref?.();
+        this.taskWatchdogTimers.set(sessionId, timer);
+    }
+
+    /** 强制回收引擎连接：同步置空连接并清理映射再异步关闭，防止下一个请求抢在清理前复用已关闭的死连接 */
+    private reclaimConnection(): void {
+        const conn = this.connection;
+        this.connection = null;
+        this.engineSessionIndex.clear();
+        conn?.close().catch((err: unknown) => {
+            console.warn(`[AcpEngine] 强制回收连接失败: ${err instanceof Error ? err.message : String(err)}`);
+        });
     }
 
     /** 优雅关停：停止全部受理中的任务（含引擎启动窗口）、等待启动中的引擎就位后关闭连接 */
@@ -276,6 +329,7 @@ export class AcpEngineManager {
             return;
         }
         this.activeSessions.set(sessionId, assistantMessageId);
+        this.scheduleTaskWatchdog(sessionId, assistantMessageId);
 
         try {
             // 初始状态更新须在预留的释放范围内：落盘或回调抛错时 finally 仍会释放预留，
@@ -351,11 +405,16 @@ ${userPrompt}`;
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
             this.activeSessions.delete(sessionId);
-            // 执行已收尾：取消停止回收计时器，避免误杀同会话的后续请求
+            // 执行已收尾：取消停止回收与占用看门狗计时器，避免误杀同会话的后续请求
             const recoveryTimer = this.stopRecoveryTimers.get(sessionId);
             if (recoveryTimer) {
                 clearTimeout(recoveryTimer);
                 this.stopRecoveryTimers.delete(sessionId);
+            }
+            const watchdogTimer = this.taskWatchdogTimers.get(sessionId);
+            if (watchdogTimer) {
+                clearTimeout(watchdogTimer);
+                this.taskWatchdogTimers.delete(sessionId);
             }
         }
     }
@@ -503,14 +562,18 @@ ${userPrompt}`;
 
         let context: acp.ClientContext;
         try {
-            context = await contextReady;
-            await handshakeReady;
+            // 启动与握手限时：进程活着但协议挂死（握手永不返回）时按启动失败回收，
+            // 防止启动窗口卡死把会话永久锁在占用状态（执行/审批路径由看门狗兜底）
+            context = await withTimeout(contextReady, ENGINE_START_TIMEOUT_MS, '引擎连接建立');
+            await withTimeout(handshakeReady, ENGINE_START_TIMEOUT_MS, '引擎握手');
         } catch (err) {
-            // 启动失败（握手被拒或进程秒退）：此时连接尚未登记到实例，stopAll 无法回收，
-            // 必须先结束传输并终止子进程再上抛，否则引擎进程泄漏且后续请求继续叠加新进程
+            // 启动失败（握手被拒、进程秒退或握手挂死超时）：连接尚未登记到实例，stopAll 无法回收，
+            // 必须回收后上抛，否则引擎进程泄漏且后续请求继续叠加新进程。
+            // 握手挂死时回调卡在 initialize 请求上，stopSignal 无法让回调结束——
+            // 须先终止子进程断开传输，挂起的握手请求随连接关闭 reject，run 才能 settle
             resolveStop();
-            await closed;
             await terminateChild(child);
+            await closed;
             throw err;
         }
 
@@ -730,6 +793,8 @@ ${userPrompt}`;
             this.sessionManager.setTaskState(sessionId, 'stopped');
             // 持久化之外必须经回调广播终态，否则客户端实时视图停留在等待审批，直到重连对账才能修正
             runtime.callbacks.onStatusChange('stopped', { code: 'approval_timeout' });
+            // 引擎对取消通知也可能无响应（审批挂死场景）：任务已终止，走停止回收兜底防止会话被挂死的 prompt 永久占用
+            this.scheduleStopRecovery(sessionId, runtime.assistantMessageId);
             return { outcome: { outcome: 'cancelled' } };
         }
 

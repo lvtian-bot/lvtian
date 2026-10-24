@@ -30,8 +30,22 @@ import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage } from '../types/assistantProtocol';
 import { RootStackParamList } from '../types/navigation';
+import i18n from '../i18n';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+
+/** 服务端稳定错误码 → i18n 键：按码本地化渲染，未知码与历史中文文案按原文兜底显示 */
+const ERROR_CODE_I18N_KEYS: Record<string, string> = {
+    task_stopped: 'assistant.errorTaskStopped',
+    approval_timeout: 'assistant.errorApprovalTimeout',
+    engine_refusal: 'assistant.errorEngineRefusal',
+    engine_error: 'assistant.errorEngineError',
+};
+
+const translateErrorMessage = (message: string): string => {
+    const key = ERROR_CODE_I18N_KEYS[message];
+    return key ? i18n.t(key, { defaultValue: message }) : message;
+};
 type ChatListMetrics = {
     contentHeight: number;
     viewportHeight: number;
@@ -113,7 +127,7 @@ export const ChatScreen = () => {
         connectionError,
         messages,
         taskState,
-        pendingApproval,
+        pendingApprovals,
         setServerConfig,
     } = useAssistantStore();
 
@@ -148,9 +162,8 @@ export const ChatScreen = () => {
         }
     };
 
-    const handleApproval = (approved: boolean) => {
-        if (!pendingApproval) return;
-        const sent = AssistantClient.getInstance().respondApproval(pendingApproval.approvalId, approved);
+    const handleApproval = (approvalId: string, approved: boolean) => {
+        const sent = AssistantClient.getInstance().respondApproval(approvalId, approved);
         if (!sent) {
             Alert.alert(t('common.notice', '提示'), t('assistant.approvalFailedOffline', '当前网络未就绪，审批指令未送达'));
         }
@@ -325,10 +338,17 @@ export const ChatScreen = () => {
                                             </Markdown>
                                         )}
 
-                                        {/* 错误提示 */}
+                                        {/* 错误提示：稳定错误码按码本地化，未知码按原文兜底 */}
                                         {item.status === 'error' && item.errorMessage && (
                                             <Text style={styles.errorText}>
-                                                {item.errorMessage}
+                                                {translateErrorMessage(item.errorMessage)}
+                                            </Text>
+                                        )}
+
+                                        {/* 回复截断提示（引擎 stopReason 本地化展示） */}
+                                        {item.status === 'done' && item.stopReason && item.stopReason !== 'end_turn' && (
+                                            <Text style={styles.truncatedText}>
+                                                {t('assistant.replyTruncated', '回复因达到最大长度被截断')}
                                             </Text>
                                         )}
                                     </View>
@@ -375,35 +395,35 @@ export const ChatScreen = () => {
                 style={styles.keyboardSticky}
                 offset={{ opened: tabBarHeight }}
             >
-                {/* 人工审批卡片 */}
-            {pendingApproval && (
-                <View style={styles.approvalCard}>
+                {/* 人工审批卡片：并发审批按登记顺序逐卡展示，各自独立应答 */}
+            {pendingApprovals.map((approval) => (
+                <View key={approval.approvalId} style={styles.approvalCard}>
                     <View style={styles.approvalHeader}>
                         <Icon name="warning" size={20} color={theme.colors.warnText} />
                         <Text style={styles.approvalTitle}>{t('assistant.approvalRequired', '需要人工审批')}</Text>
                     </View>
-                    <Text style={styles.approvalPrompt}>{pendingApproval.prompt}</Text>
-                    {pendingApproval.toolName && (
+                    <Text style={styles.approvalPrompt}>{approval.prompt}</Text>
+                    {approval.toolName && (
                         <Text style={styles.approvalSub}>
-                            {t('assistant.toolRequested', '请求调用的工具')}: {pendingApproval.toolName}
+                            {t('assistant.toolRequested', '请求调用的工具')}: {approval.toolName}
                         </Text>
                     )}
                     <View style={styles.approvalBtnRow}>
                         <TouchableOpacity
                             style={[styles.approvalBtn, styles.rejectBtn]}
-                            onPress={() => handleApproval(false)}
+                            onPress={() => handleApproval(approval.approvalId, false)}
                         >
                             <Text style={styles.rejectBtnText}>{t('assistant.reject', '拒绝')}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={[styles.approvalBtn, styles.approveBtn]}
-                            onPress={() => handleApproval(true)}
+                            onPress={() => handleApproval(approval.approvalId, true)}
                         >
                             <Text style={styles.approveBtnText}>{t('assistant.approve', '同意执行')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
-            )}
+            ))}
 
             {/* 停止执行悬浮条 */}
             {(taskState === 'processing' || taskState === 'awaiting_approval') && (
@@ -659,6 +679,11 @@ const styles = StyleSheet.create({
     errorText: {
         fontSize: 12,
         color: theme.colors.dangerText,
+        marginTop: 6,
+    },
+    truncatedText: {
+        fontSize: 12,
+        color: theme.colors.warnText,
         marginTop: 6,
     },
     msgFooter: {
