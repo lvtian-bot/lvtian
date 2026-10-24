@@ -19,7 +19,8 @@ interface AssistantState {
     connectionError: string | null;
     messages: AssistantMessage[];
     taskState: TaskExecutionState;
-    pendingApproval: ApprovalRequest | null;
+    /** 待审批队列：同一会话并发多个工具各自请求审批时按序展示与应答 */
+    pendingApprovals: ApprovalRequest[];
     currentSeq: number;
     hasHydrated: boolean;
 
@@ -33,7 +34,9 @@ interface AssistantState {
     appendDeltaToMessage: (messageId: string, delta: string) => void;
     setToolCallForMessage: (messageId: string, toolCall: ToolCallState) => void;
     setTaskState: (state: TaskExecutionState) => void;
-    setPendingApproval: (approval: ApprovalRequest | null) => void;
+    setPendingApprovals: (approvals: ApprovalRequest[]) => void;
+    addPendingApproval: (approval: ApprovalRequest) => void;
+    removePendingApproval: (approvalId: string) => void;
     setCurrentSeq: (seq: number) => void;
     clearChat: () => void;
 }
@@ -47,7 +50,7 @@ export const useAssistantStore = create<AssistantState>()(
             connectionError: null,
             messages: [],
             taskState: 'idle',
-            pendingApproval: null,
+            pendingApprovals: [],
             currentSeq: 0,
             hasHydrated: false,
 
@@ -79,7 +82,7 @@ export const useAssistantStore = create<AssistantState>()(
                         messages: [],
                         currentSeq: 0,
                         taskState: 'idle',
-                        pendingApproval: null,
+                        pendingApprovals: [],
                     });
                 } else {
                     set({ serverUrl: cleanUrl, serverToken: cleanToken });
@@ -162,11 +165,23 @@ export const useAssistantStore = create<AssistantState>()(
 
             setTaskState: (taskState) => set({ taskState }),
 
-            setPendingApproval: (pendingApproval) => set({ pendingApproval }),
+            setPendingApprovals: (pendingApprovals) => set({ pendingApprovals }),
+
+            addPendingApproval: (approval) =>
+                set((state) => ({
+                    pendingApprovals: state.pendingApprovals.some((a) => a.approvalId === approval.approvalId)
+                        ? state.pendingApprovals
+                        : [...state.pendingApprovals, approval],
+                })),
+
+            removePendingApproval: (approvalId) =>
+                set((state) => ({
+                    pendingApprovals: state.pendingApprovals.filter((a) => a.approvalId !== approvalId),
+                })),
 
             setCurrentSeq: (currentSeq) => set({ currentSeq }),
 
-            clearChat: () => set({ messages: [], currentSeq: 0, taskState: 'idle', pendingApproval: null }),
+            clearChat: () => set({ messages: [], currentSeq: 0, taskState: 'idle', pendingApprovals: [] }),
         }),
         {
             name: 'lvtian-assistant-storage',

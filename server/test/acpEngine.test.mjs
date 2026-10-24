@@ -457,7 +457,7 @@ test('停止后到达的迟到审批请求被直接拒绝，不弹审批卡', as
     assert.strictEqual(events.filter((e) => e.kind === 'approval').length, 0, '迟到审批不应转发为审批卡');
     const session = sessionManager.getOrCreateSession('main');
     assert.strictEqual(session.taskState, 'stopped', '任务应保持停止而非回到等待审批');
-    assert.strictEqual(session.pendingApproval, undefined, '不应登记待审批项');
+    assert.strictEqual(session.pendingApprovals.length, 0, '不应登记待审批项');
 });
 
 test('工具失败时终态为 failed，且不被后续事件覆盖为成功', async () => {

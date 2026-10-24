@@ -7,7 +7,8 @@ export interface SessionData {
     currentSeq: number;
     messages: AssistantMessage[];
     taskState: TaskExecutionState;
-    pendingApproval?: ApprovalRequest;
+    /** 待审批队列：协议允许同一会话并发多个工具各自请求审批，按登记顺序展示与应答 */
+    pendingApprovals: ApprovalRequest[];
     dshSessionId?: string;
     updatedAt: number;
 }
@@ -23,10 +24,10 @@ export interface SessionData {
  * - snapshot：全量快照，只会作为某个日志文件的首行出现（建会话或轮换时写入）
  */
 type SessionLogEvent =
-    | { t: 'snapshot'; at: number; seq: number; taskState: TaskExecutionState; approval?: ApprovalRequest | null; dshSessionId?: string; msgs: AssistantMessage[] }
+    | { t: 'snapshot'; at: number; seq: number; taskState: TaskExecutionState; approvals?: ApprovalRequest[]; dshSessionId?: string; msgs: AssistantMessage[] }
     | { t: 'msg'; at: number; seq: number; m: AssistantMessage }
     | { t: 'delta'; at: number; seq: number; id: string; d: string }
-    | { t: 'state'; at: number; seq: number; taskState: TaskExecutionState; approval?: ApprovalRequest | null }
+    | { t: 'state'; at: number; seq: number; taskState: TaskExecutionState; approvals?: ApprovalRequest[] }
     | { t: 'dsh'; at: number; dshSessionId: string }
     | { t: 'seq'; at: number; seq: number };
 
@@ -103,6 +104,7 @@ export class SessionManager {
             currentSeq: 0,
             messages: [],
             taskState: 'idle',
+            pendingApprovals: [],
             updatedAt: Date.now(),
         };
     }
@@ -113,7 +115,7 @@ export class SessionManager {
             at: Date.now(),
             seq: session.currentSeq,
             taskState: session.taskState,
-            approval: session.pendingApproval ?? null,
+            approvals: session.pendingApprovals,
             dshSessionId: session.dshSessionId,
             msgs: session.messages,
         };
@@ -278,13 +280,21 @@ export class SessionManager {
         }
     }
 
+    /** 兼容旧版事件日志的单审批字段：approvals 为现行队列格式，approval 为旧版单对象 */
+    private normalizeApprovals(ev: { approvals?: ApprovalRequest[]; approval?: ApprovalRequest | null }): ApprovalRequest[] {
+        if (ev.approvals) {
+            return [...ev.approvals];
+        }
+        return ev.approval ? [ev.approval] : [];
+    }
+
     private applyEvent(session: SessionData, ev: SessionLogEvent): void {
         switch (ev.t) {
             case 'snapshot':
                 session.currentSeq = ev.seq;
                 session.messages = ev.msgs.map((m) => ({ ...m }));
                 session.taskState = ev.taskState;
-                session.pendingApproval = ev.approval ?? undefined;
+                session.pendingApprovals = this.normalizeApprovals(ev);
                 session.dshSessionId = ev.dshSessionId;
                 session.updatedAt = ev.at;
                 break;
@@ -314,7 +324,7 @@ export class SessionManager {
             }
             case 'state':
                 session.taskState = ev.taskState;
-                session.pendingApproval = ev.approval ?? undefined;
+                session.pendingApprovals = this.normalizeApprovals(ev);
                 session.currentSeq = Math.max(session.currentSeq, ev.seq);
                 session.updatedAt = ev.at;
                 break;
@@ -336,13 +346,13 @@ export class SessionManager {
     private repairAfterLoad(session: SessionData): void {
         if (session.taskState === 'processing' || session.taskState === 'awaiting_approval') {
             session.taskState = 'stopped';
-            session.pendingApproval = undefined;
+            session.pendingApprovals = [];
             this.appendEvent(session.sessionId, {
                 t: 'state',
                 at: Date.now(),
                 seq: session.currentSeq,
                 taskState: session.taskState,
-                approval: null,
+                approvals: [],
             });
         }
         for (const m of session.messages) {
@@ -608,6 +618,10 @@ export class SessionManager {
         );
     }
 
+    /**
+     * 更新任务执行状态：传入 approval 时向待审批队列追加登记；
+     * 状态落入终态（stopped/completed/error）时清空待审批队列——任务已终止，未决审批不再有意义。
+     */
     public setTaskState(
         sessionId: string,
         state: TaskExecutionState,
@@ -615,7 +629,11 @@ export class SessionManager {
     ): number {
         const session = this.getOrCreateSession(sessionId);
         session.taskState = state;
-        session.pendingApproval = approval;
+        if (state === 'stopped' || state === 'completed' || state === 'error') {
+            session.pendingApprovals = [];
+        } else if (approval) {
+            session.pendingApprovals.push(approval);
+        }
         session.currentSeq += 1;
         session.updatedAt = Date.now();
         this.appendEvent(sessionId, {
@@ -623,25 +641,28 @@ export class SessionManager {
             at: Date.now(),
             seq: session.currentSeq,
             taskState: state,
-            approval: approval ?? null,
+            approvals: session.pendingApprovals,
         });
         return session.currentSeq;
     }
 
     public getPendingApproval(sessionId: string): ApprovalRequest | undefined {
         const session = this.getOrCreateSession(sessionId);
-        return session.pendingApproval;
+        return session.pendingApprovals[0];
     }
 
-    public clearPendingApproval(sessionId: string): void {
+    /** 清除待审批登记：带 approvalId 时仅移除该项（并发审批互不影响），不带时清空队列 */
+    public clearPendingApproval(sessionId: string, approvalId?: string): void {
         const session = this.getOrCreateSession(sessionId);
-        session.pendingApproval = undefined;
+        session.pendingApprovals = approvalId
+            ? session.pendingApprovals.filter((a) => a.approvalId !== approvalId)
+            : [];
         this.appendEvent(sessionId, {
             t: 'state',
             at: Date.now(),
             seq: session.currentSeq,
             taskState: session.taskState,
-            approval: null,
+            approvals: session.pendingApprovals,
         });
     }
 
@@ -663,6 +684,8 @@ export class SessionManager {
     ): {
         messages: AssistantMessage[];
         taskState: TaskExecutionState;
+        pendingApprovals: ApprovalRequest[];
+        /** 兼容保留：待审批队列的第一项 */
         pendingApproval?: ApprovalRequest;
         currentSeq: number;
     } {
@@ -675,7 +698,8 @@ export class SessionManager {
         return {
             messages,
             taskState: session.taskState,
-            pendingApproval: session.pendingApproval,
+            pendingApprovals: session.pendingApprovals,
+            pendingApproval: session.pendingApprovals[0],
             currentSeq: session.currentSeq,
         };
     }

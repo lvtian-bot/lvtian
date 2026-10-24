@@ -29,6 +29,8 @@ export interface AssistantMessage {
     toolCalls?: ToolCallState[];
     approval?: ApprovalRequest;
     errorMessage?: string;
+    /** 引擎结束原因（如 max_tokens），客户端据此本地化展示截断提示 */
+    stopReason?: string;
 }
 
 // 客户端发往服务端的报文
@@ -57,7 +59,10 @@ export type ServerMessage =
           sessionId: string;
           messages: AssistantMessage[];
           taskState: TaskExecutionState;
+          /** 兼容旧服务端：仅返回单审批时的回退字段 */
           pendingApproval?: ApprovalRequest;
+          /** 待审批队列：同一会话并发多个工具各自请求审批时按序展示 */
+          pendingApprovals?: ApprovalRequest[];
           currentSeq: number;
       }
     | {
@@ -94,6 +99,7 @@ export type ServerMessage =
           sessionId: string;
           state: TaskExecutionState;
           error?: string;
+          stopReason?: string;
       }
     | { type: 'pong' };
 

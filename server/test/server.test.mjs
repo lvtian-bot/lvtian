@@ -722,6 +722,22 @@ function createMockEngine(options = {}) {
                     content: { type: 'text', text: `permission-${permission.outcome.outcome}-${permission.outcome.optionId ?? ''}` },
                 });
             }
+            if (options.doublePermission) {
+                // 同一会话并发两个审批请求（模拟重叠工具各自请求审批）
+                const askPermission = (toolCallId) => c.client.request(acp.methods.client.session.requestPermission, {
+                    sessionId,
+                    toolCall: { toolCallId, title: `Permission ${toolCallId}`, kind: 'shell' },
+                    options: [
+                        { kind: 'allow_once', name: 'Allow once', optionId: 'allow' },
+                        { kind: 'reject_once', name: 'Reject once', optionId: 'reject' },
+                    ],
+                });
+                const [p1, p2] = await Promise.all([askPermission('perm-a'), askPermission('perm-b')]);
+                await notify({
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: `double-${p1.outcome.outcome}-${p2.outcome.outcome}` },
+                });
+            }
             return { stopReason: 'end_turn' };
         })
         .onNotification(acp.methods.agent.session.cancel, () => {});
@@ -933,7 +949,38 @@ test('审批超时自动拒绝：广播 stopped 终态并携带稳定错误码',
     assert.equal(session.taskState, 'stopped');
     const asstMsg = session.messages.find((m) => m.id.startsWith('asst-'));
     assert.equal(asstMsg.errorMessage, 'approval_timeout');
-    assert.equal(session.pendingApproval, undefined, '超时后待审批登记应清空');
+    assert.equal(session.pendingApprovals.length, 0, '超时后待审批登记应清空');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('同一会话并发审批：两卡独立下发、各自应答互不丢弃', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ doublePermission: true });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '并发审批任务' }));
+
+    // 两个审批卡先后到达（并发请求经服务端逐个广播）
+    await waitForMsg(received, (m) => m.type === 'approval_request' && m.prompt.includes('perm-a'), 'perm-a 审批卡');
+    await waitForMsg(received, (m) => m.type === 'approval_request' && m.prompt.includes('perm-b'), 'perm-b 审批卡');
+    const approvals = received.filter((m) => m.type === 'approval_request');
+    assert.equal(approvals.length, 2, '两张审批卡都应下发到客户端');
+    assert.notEqual(approvals[0].approvalId, approvals[1].approvalId, '并发审批 ID 必须独立');
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.pendingApprovals.length, 2, '服务端待审批队列应同时登记两项');
+
+    // 先应答第二张卡，再应答第一张卡：先答者不得因登记顺序被丢弃
+    ws.send(JSON.stringify({ type: 'approval_response', approvalId: approvals[1].approvalId, approved: false }));
+    ws.send(JSON.stringify({ type: 'approval_response', approvalId: approvals[0].approvalId, approved: true }));
+
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
+    const allDeltas = received.filter((m) => m.type === 'event_chunk' && m.delta).map((m) => m.delta).join('');
+    assert.ok(allDeltas.includes('double-selected-selected'), '两个审批都应送达引擎各自的授权选择');
+    assert.equal(session.pendingApprovals.length, 0, '全部应答后待审批队列应清空');
 
     ws.close();
     await server.stop();

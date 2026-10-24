@@ -567,11 +567,13 @@ ${userPrompt}`;
             context = await withTimeout(contextReady, ENGINE_START_TIMEOUT_MS, '引擎连接建立');
             await withTimeout(handshakeReady, ENGINE_START_TIMEOUT_MS, '引擎握手');
         } catch (err) {
-            // 启动失败（握手被拒或进程秒退）：此时连接尚未登记到实例，stopAll 无法回收，
-            // 必须先结束传输并终止子进程再上抛，否则引擎进程泄漏且后续请求继续叠加新进程
+            // 启动失败（握手被拒、进程秒退或握手挂死超时）：连接尚未登记到实例，stopAll 无法回收，
+            // 必须回收后上抛，否则引擎进程泄漏且后续请求继续叠加新进程。
+            // 握手挂死时回调卡在 initialize 请求上，stopSignal 无法让回调结束——
+            // 须先终止子进程断开传输，挂起的握手请求随连接关闭 reject，run 才能 settle
             resolveStop();
-            await closed;
             await terminateChild(child);
+            await closed;
             throw err;
         }
 

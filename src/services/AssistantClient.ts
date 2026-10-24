@@ -296,7 +296,8 @@ export class AssistantClient {
             reason,
         });
         if (sent) {
-            store.setPendingApproval(null);
+            // 仅移除已应答的这张卡，同一会话的其余并发审批保持展示
+            store.removePendingApproval(approvalId);
             return true;
         }
         return false;
@@ -344,17 +345,17 @@ export class AssistantClient {
             case 'sync_result': {
                 store.setCurrentSeq(msg.currentSeq);
                 store.setTaskState(msg.taskState);
-                if (msg.pendingApproval) {
-                    store.setPendingApproval({
-                        approvalId: msg.pendingApproval.approvalId,
-                        prompt: msg.pendingApproval.prompt,
-                        toolName: msg.pendingApproval.toolName,
-                        params: msg.pendingApproval.params,
+                // 队列字段优先；回退兼容仅返回单审批的旧服务端
+                const approvals = msg.pendingApprovals ?? (msg.pendingApproval ? [msg.pendingApproval] : []);
+                store.setPendingApprovals(
+                    approvals.map((a) => ({
+                        approvalId: a.approvalId,
+                        prompt: a.prompt,
+                        toolName: a.toolName,
+                        params: a.params,
                         status: 'pending',
-                    });
-                } else {
-                    store.setPendingApproval(null);
-                }
+                    }))
+                );
 
                 // 收集服务端确认返回的所有消息 ID
                 const serverIdSet = new Set(msg.messages.map((m) => m.id));
@@ -436,7 +437,8 @@ export class AssistantClient {
 
             case 'approval_request': {
                 store.setCurrentSeq(msg.seq);
-                store.setPendingApproval({
+                // 追加到待审批队列：同一会话并发多个工具各自请求审批时逐卡展示
+                store.addPendingApproval({
                     approvalId: msg.approvalId,
                     prompt: msg.prompt,
                     toolName: msg.toolName,
@@ -451,6 +453,8 @@ export class AssistantClient {
                 store.setCurrentSeq(msg.seq);
                 store.setTaskState(msg.state);
                 if (msg.state === 'completed' || msg.state === 'stopped' || msg.state === 'error') {
+                    // 任务已终态：未决审批卡随任务结束一并撤除
+                    store.setPendingApprovals([]);
                     // 精准定位会话中最新一条处于 processing 的助理消息，避免被并发或被拦截的用户气泡干扰
                     const messages = store.messages;
                     const asstMsg = [...messages].reverse().find(
@@ -461,6 +465,7 @@ export class AssistantClient {
                             ...asstMsg,
                             status: msg.state === 'completed' ? 'done' : msg.state === 'error' ? 'error' : 'done',
                             errorMessage: msg.error,
+                            stopReason: msg.stopReason,
                         });
                     }
                 }

@@ -385,6 +385,7 @@ export class LvtianServer {
                     sessionId,
                     messages: reconcile.messages,
                     taskState: reconcile.taskState,
+                    pendingApprovals: reconcile.pendingApprovals,
                     pendingApproval: reconcile.pendingApproval,
                     currentSeq: reconcile.currentSeq,
                 });
@@ -428,23 +429,21 @@ export class LvtianServer {
             }
 
             case 'approval_response': {
-                // 人工审批响应
+                // 人工审批响应：应答按 approvalId 直接路由给引擎管理器（并发审批各自独立记账），
+                // 待审批登记按 ID 移除——并发场景登记队列中其余审批不受影响
                 const sessionId = ws.sessionId || 'main';
-                const pending = this.sessionManager.getPendingApproval(sessionId);
-                if (pending && pending.approvalId === msg.approvalId) {
-                    this.sessionManager.clearPendingApproval(sessionId);
-                    // ACP 引擎下拒绝审批不终止任务（引擎收到拒绝后自行收尾），
-                    // 允许与拒绝均恢复执行中状态，最终由引擎终态回调修正；审批已被
-                    // 引擎管理器移除（超时/停止竞态）时不得覆盖其终态
-                    if (this.acpEngine.handleApproval(sessionId, msg.approvalId, msg.approved)) {
-                        const seq = this.sessionManager.setTaskState(sessionId, 'processing');
-                        this.broadcastSession(sessionId, {
-                            type: 'task_status',
-                            seq,
-                            sessionId,
-                            state: 'processing',
-                        });
-                    }
+                this.sessionManager.clearPendingApproval(sessionId, msg.approvalId);
+                // ACP 引擎下拒绝审批不终止任务（引擎收到拒绝后自行收尾），
+                // 允许与拒绝均恢复执行中状态，最终由引擎终态回调修正；审批已被
+                // 引擎管理器移除（超时/停止竞态）时不得覆盖其终态
+                if (this.acpEngine.handleApproval(sessionId, msg.approvalId, msg.approved)) {
+                    const seq = this.sessionManager.setTaskState(sessionId, 'processing');
+                    this.broadcastSession(sessionId, {
+                        type: 'task_status',
+                        seq,
+                        sessionId,
+                        state: 'processing',
+                    });
                 }
                 break;
             }
@@ -589,10 +588,12 @@ export class LvtianServer {
                 }
 
                 // done/error 终态：消息状态与稳定错误码由此处落盘（引擎管理器只终态化任务状态），
-                // error 字段与持久化一致存稳定码，客户端按码本地化渲染、未知码按原文兜底
+                // error 字段与持久化一致存稳定码，客户端按码本地化渲染、未知码按原文兜底；
+                // stopReason 一并持久化，重连对账后截断提示不丢失
                 this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
                     m.status = status === 'done' ? 'done' : 'error';
                     if (payload?.code) m.errorMessage = payload.code;
+                    if (payload?.stopReason) m.stopReason = payload.stopReason;
                 });
 
                 const taskState: TaskExecutionState = status === 'done' ? 'completed' : 'error';
