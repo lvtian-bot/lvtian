@@ -71,6 +71,29 @@ function createMockEngineApp(options = {}) {
                 });
                 throw new Error('engine boom');
             }
+            if (options.overlappingTools) {
+                // 协议允许的重叠工具：A 启动后 B 启动，随后 A 才回报失败
+                await notify({
+                    sessionUpdate: 'tool_call',
+                    toolCallId: 'tool-a',
+                    title: 'Tool A',
+                    kind: 'shell',
+                    status: 'in_progress',
+                });
+                await notify({
+                    sessionUpdate: 'tool_call',
+                    toolCallId: 'tool-b',
+                    title: 'Tool B',
+                    kind: 'shell',
+                    status: 'in_progress',
+                });
+                await notify({
+                    sessionUpdate: 'tool_call_update',
+                    toolCallId: 'tool-a',
+                    status: 'failed',
+                });
+                return { stopReason: 'end_turn' };
+            }
             if (options.toolRunningMs) {
                 // 工具长时间运行后以正常响应结束当前轮（模拟引擎对 cancel 无感知、正常收尾）
                 await notify({
@@ -91,13 +114,21 @@ function createMockEngineApp(options = {}) {
                 });
             }
             if (options.enablePermission) {
+                // allowAlwaysFirst 模拟引擎把持久授权排在最前的选项顺序
+                const permissionOptions = options.allowAlwaysFirst
+                    ? [
+                        { kind: 'allow_always', name: 'Always allow', optionId: 'allow-always' },
+                        { kind: 'allow_once', name: 'Allow once', optionId: 'allow' },
+                        { kind: 'reject_once', name: 'Reject once', optionId: 'reject' },
+                    ]
+                    : [
+                        { kind: 'allow_once', name: 'Allow once', optionId: 'allow' },
+                        { kind: 'reject_once', name: 'Reject once', optionId: 'reject' },
+                    ];
                 const permission = await c.client.request(acp.methods.client.session.requestPermission, {
                     sessionId,
                     toolCall: { toolCallId: 'permission-tool', title: 'Permission tool', kind: 'shell' },
-                    options: [
-                        { kind: 'allow_once', name: 'Allow once', optionId: 'allow' },
-                        { kind: 'reject_once', name: 'Reject once', optionId: 'reject' },
-                    ],
+                    options: permissionOptions,
                 });
                 const text = permission.outcome.outcome === 'selected'
                     ? `permission-selected-${permission.outcome.optionId}`
@@ -110,7 +141,7 @@ function createMockEngineApp(options = {}) {
                     },
                 });
             }
-            return { stopReason: 'end_turn' };
+            return { stopReason: options.stopReason ?? 'end_turn' };
         })
         .onNotification(acp.methods.agent.session.cancel, () => {});
 }
@@ -161,7 +192,7 @@ function collectCallbacks(sink) {
         onDelta: (delta) => sink.push({ kind: 'delta', delta }),
         onToolCall: (toolCall) => sink.push({ kind: 'tool', toolCall }),
         onApprovalRequest: (request) => sink.push({ kind: 'approval', request }),
-        onStatusChange: (status, error) => sink.push({ kind: 'status', status, error }),
+        onStatusChange: (status, payload) => sink.push({ kind: 'status', status, payload }),
     };
 }
 
@@ -229,8 +260,9 @@ test('审批超时：自动拒绝并终态为 stopped，消息标注终止原因
     assert.strictEqual(session.taskState, 'stopped', '超时后终态应为 stopped 而非被 end_turn 覆盖');
     const msg = session.messages.find((m) => m.id === 'asst-1');
     assert.strictEqual(msg.status, 'error');
-    assert.match(msg.errorMessage, /审批超时/);
-    assert.strictEqual(lastStatus(events), 'stopped', '超时应经回调广播终态而非仅改持久化');
+    assert.strictEqual(msg.errorMessage, 'approval_timeout', '持久化的应为稳定错误码而非固定语言文案');
+    const stoppedEvent = events.find((e) => e.kind === 'status' && e.status === 'stopped');
+    assert.strictEqual(stoppedEvent?.payload?.code, 'approval_timeout', '超时应经回调广播结构化终态而非仅改持久化');
 });
 
 test('手动停止：消息标错、任务终态 stopped', async () => {
@@ -248,7 +280,7 @@ test('手动停止：消息标错、任务终态 stopped', async () => {
     assert.strictEqual(session.taskState, 'stopped');
     const msg = session.messages.find((m) => m.id === 'asst-1');
     assert.strictEqual(msg.status, 'error');
-    assert.match(msg.errorMessage, /手动终止/);
+    assert.strictEqual(msg.errorMessage, 'task_stopped');
 });
 
 test('会话恢复失败时自动新建并更新绑定（旧 ID 不通用场景）', async () => {
@@ -309,7 +341,7 @@ test('引擎启动期间手动停止：不发送 prompt，消息与任务同步�
     assert.strictEqual(session.taskState, 'stopped');
     const msg = session.messages.find((m) => m.id === 'asst-1');
     assert.strictEqual(msg.status, 'error', '占位消息应随停止立即终态化而非停留处理中');
-    assert.match(msg.errorMessage, /手动终止/);
+    assert.strictEqual(msg.errorMessage, 'task_stopped');
     assert.strictEqual(promptLog.length, 0, '停止后不应向引擎发送 prompt');
 });
 
@@ -452,4 +484,45 @@ test('stopAll 后可再次执行（引擎随下次请求懒重启）', async () 
     const events2 = [];
     await manager.execute('main', 'asst-2', '重启后的第一轮', collectCallbacks(events2));
     assert.strictEqual(lastStatus(events2), 'done', '懒重启后应能正常执行新任务');
+});
+
+test('重叠工具各自按 ID 收尾：后启动的工具不掩盖前一个的失败', async () => {
+    const { manager } = buildManager({ overlappingTools: true });
+    const events = [];
+    await manager.execute('main', 'asst-1', '并发工具任务', collectCallbacks(events));
+
+    const statusesOf = (id) => events
+        .filter((e) => e.kind === 'tool' && e.toolCall.id === id)
+        .map((e) => e.toolCall.status);
+    assert.deepStrictEqual(statusesOf('tool-a'), ['running', 'failed'], 'A 的失败不得被 B 的启动误标为成功');
+    assert.deepStrictEqual(statusesOf('tool-b'), ['running', 'done'], '无终态回报的 B 由收尾兜底终态化');
+    assert.strictEqual(lastStatus(events), 'done');
+});
+
+test('审批选项含持久授权时，单一同意意图仍选中「仅本次」', async () => {
+    const { manager } = buildManager({ chunkCount: 0, enablePermission: true, allowAlwaysFirst: true });
+    const events = [];
+    const executing = manager.execute('main', 'asst-1', '执行操作', collectCallbacks(events));
+
+    const approval = await new Promise((resolve) => {
+        const timer = setInterval(() => {
+            const found = events.find((e) => e.kind === 'approval');
+            if (found) { clearInterval(timer); resolve(found.request); }
+        }, 10);
+    });
+    manager.handleApproval('main', approval.approvalId, true);
+    await executing;
+
+    assert.ok(deltas(events).includes('permission-selected-allow'), '应选中 allow_once 而非排列在前的 allow_always');
+    assert.ok(!deltas(events).includes('allow-always'), '不得静默升级为持久授权');
+});
+
+test('回复被截断时经 done 载荷透出 stopReason，由客户端本地化提示', async () => {
+    const { manager } = buildManager({ chunkCount: 1, stopReason: 'max_tokens' });
+    const events = [];
+    await manager.execute('main', 'asst-1', '长回复', collectCallbacks(events));
+
+    assert.strictEqual(lastStatus(events), 'done');
+    const doneEvent = events.find((e) => e.kind === 'status' && e.status === 'done');
+    assert.strictEqual(doneEvent?.payload?.stopReason, 'max_tokens', '截断原因应结构化透出而非服务端内嵌文案');
 });

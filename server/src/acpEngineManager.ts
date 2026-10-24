@@ -9,13 +9,30 @@ import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { ToolCallState, ApprovalRequest } from './protocol.js';
 
+/**
+ * 引擎模块用户可见消息的错误码：客户端按码本地化渲染（i18n），码值是持久化与流式的稳定契约。
+ * 服务端不内嵌展示文案，未知码按原文兜底显示（兼容历史中文消息数据）。
+ */
+export type EngineMessageCode =
+    | 'task_stopped' // 任务被用户手动终止
+    | 'approval_timeout' // 审批超时未应答，任务已终止
+    | 'engine_refusal' // 模型拒绝了本次请求
+    | 'engine_error'; // 引擎执行异常，detail 透传技术原因
+
+/** onStatusChange 的结构化载荷：code 供客户端本地化，stopReason 为引擎结束原因（如 max_tokens 截断） */
+export interface EngineStatusPayload {
+    code?: EngineMessageCode;
+    detail?: string;
+    stopReason?: string;
+}
+
 export interface EngineCallbacks {
     onDelta: (delta: string) => void;
     onFinalText?: (fullText: string) => void;
     onToolCall: (toolCall: ToolCallState) => void;
     onApprovalRequest?: (request: ApprovalRequest) => void;
     /** stopped 为模块内部终态（如审批超时自动拒绝），无对应客户端报文触发，须主动广播 */
-    onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error' | 'stopped', error?: string) => void;
+    onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error' | 'stopped', payload?: EngineStatusPayload) => void;
 }
 
 /** 已建立的引擎连接：生产环境为 dsh 子进程的 stdio 流，测试可注入进程内模拟 */
@@ -39,7 +56,8 @@ interface SessionRuntime {
     assistantMessageId: string;
     engineSessionId: string;
     callbacks: EngineCallbacks;
-    currentToolCall: ToolCallState | null;
+    /** 进行中的工具（按 toolCallId 追踪）：协议允许工具重叠执行，各自从自己的终态更新收尾 */
+    outstandingTools: Map<string, ToolCallState>;
     toolSeq: number;
     committedText: string;
 }
@@ -152,11 +170,11 @@ export class AcpEngineManager {
         const runtime = this.runtimes.get(sessionId);
         if (runtime) {
             this.stoppedSessions.add(sessionId);
-            this.rejectPendingPermission(sessionId, '任务已被手动终止');
+            this.rejectPendingPermission(sessionId, 'task_stopped');
             this.sessionManager.setTaskState(sessionId, 'stopped');
             this.sessionManager.updateMessage(sessionId, runtime.assistantMessageId, (m) => {
                 m.status = 'error';
-                m.errorMessage = '任务已被手动终止';
+                m.errorMessage = 'task_stopped';
             });
             this.connection?.context.notify('session/cancel', { sessionId: runtime.engineSessionId }).catch((err) => {
                 console.warn(`[AcpEngine] 发送取消通知失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -172,7 +190,7 @@ export class AcpEngineManager {
             if (messageId) {
                 this.sessionManager.updateMessage(sessionId, messageId, (m) => {
                     m.status = 'error';
-                    m.errorMessage = '任务已被手动终止';
+                    m.errorMessage = 'task_stopped';
                 });
             }
             this.sessionManager.setTaskState(sessionId, 'stopped');
@@ -248,7 +266,7 @@ export class AcpEngineManager {
                 assistantMessageId,
                 engineSessionId,
                 callbacks,
-                currentToolCall: null,
+                outstandingTools: new Map(),
                 toolSeq: 0,
                 committedText: '',
             };
@@ -274,10 +292,10 @@ ${userPrompt}`;
             // 异常退出时先把进行中的工具终态化为失败，避免消息已标错而工具状态永远停留运行中
             const runtime = this.runtimes.get(sessionId);
             if (runtime) {
-                this.finalizeTool(runtime, 'failed');
+                this.finalizeTools(runtime, 'failed');
             }
             this.runtimes.delete(sessionId);
-            this.rejectPendingPermission(sessionId, message);
+            this.rejectPendingPermission(sessionId, 'engine_error');
 
             if (this.stoppedSessions.has(sessionId)) {
                 this.stoppedSessions.delete(sessionId);
@@ -285,7 +303,7 @@ ${userPrompt}`;
                 return;
             }
             console.error(`[AcpEngine] 执行任务异常: ${message}`);
-            callbacks.onStatusChange('error', message);
+            callbacks.onStatusChange('error', { code: 'engine_error', detail: message });
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
             this.activeSessions.delete(sessionId);
@@ -524,7 +542,7 @@ ${userPrompt}`;
                 const content = (update as { content?: { type?: string; text?: string } }).content;
                 const text = content?.type === 'text' && typeof content.text === 'string' ? content.text : '';
                 if (text) {
-                    this.finalizeTool(runtime, 'done');
+                    // 文本不隐式终结进行中的工具：工具只从自己的终态更新收尾（协议允许重叠），未终结的由任务收尾兜底
                     runtime.committedText += text;
                     runtime.callbacks.onDelta(text);
                 }
@@ -534,31 +552,34 @@ ${userPrompt}`;
                 runtime.callbacks.onStatusChange('thinking');
                 break;
             case 'tool_call': {
-                this.finalizeTool(runtime, 'done');
                 const t = update as { toolCallId?: string; title?: string; kind?: string; status?: string };
                 runtime.toolSeq++;
-                runtime.currentToolCall = {
+                const toolCall: ToolCallState = {
                     id: t.toolCallId ?? `tool-${engineSessionId}-${runtime.toolSeq}`,
                     name: t.kind ?? t.title ?? '系统工具',
                     status: 'running',
                     summary: (t.title ?? t.kind ?? '').slice(0, 100),
                 };
-                runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
+                runtime.outstandingTools.set(toolCall.id, toolCall);
+                runtime.callbacks.onToolCall({ ...toolCall });
                 runtime.callbacks.onStatusChange('running_tool');
                 break;
             }
             case 'tool_call_update': {
                 const t = update as { toolCallId?: string; status?: string };
-                if (runtime.currentToolCall && t.toolCallId === runtime.currentToolCall.id) {
-                    if (t.status === 'completed' || t.status === 'failed') {
-                        // 终态（完成/失败）即清空当前工具，防止后续文本或收尾事件把失败结果覆盖为成功
-                        runtime.currentToolCall.status = t.status === 'completed' ? 'done' : 'failed';
-                        runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
-                        runtime.currentToolCall = null;
-                    } else {
-                        runtime.currentToolCall.status = 'running';
-                        runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
-                    }
+                const tool = t.toolCallId ? runtime.outstandingTools.get(t.toolCallId) : undefined;
+                // 未知工具或已终结工具的迟到更新：忽略，防止覆盖已收尾的终态
+                if (!tool) {
+                    break;
+                }
+                if (t.status === 'completed' || t.status === 'failed') {
+                    // 终态（完成/失败）即从进行中集合移除，防止后续文本或收尾事件把失败结果覆盖为成功
+                    tool.status = t.status === 'completed' ? 'done' : 'failed';
+                    runtime.outstandingTools.delete(tool.id);
+                    runtime.callbacks.onToolCall({ ...tool });
+                } else {
+                    tool.status = 'running';
+                    runtime.callbacks.onToolCall({ ...tool });
                 }
                 break;
             }
@@ -568,12 +589,13 @@ ${userPrompt}`;
         }
     }
 
-    private finalizeTool(runtime: SessionRuntime, status: 'done' | 'failed'): void {
-        if (runtime.currentToolCall && runtime.currentToolCall.status === 'running') {
-            runtime.currentToolCall.status = status;
-            runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
-            runtime.currentToolCall = null;
+    /** 收尾兜底：引擎未回报终态的进行中工具统一终态化（正常收尾标 done，停止/异常标 failed） */
+    private finalizeTools(runtime: SessionRuntime, status: 'done' | 'failed'): void {
+        for (const tool of runtime.outstandingTools.values()) {
+            tool.status = status;
+            runtime.callbacks.onToolCall({ ...tool });
         }
+        runtime.outstandingTools.clear();
     }
 
     private finalizeRun(sessionId: string, runtime: SessionRuntime, stopReason: string): void {
@@ -581,7 +603,7 @@ ${userPrompt}`;
         // 已停止任务的进行中工具是被动中断，终态化为失败；无条件 done 会把中断的工具误标为成功，
         // 且停止守卫拦截后续事件，虚假的成功结果无法再被修正
         const stopped = this.stoppedSessions.has(sessionId);
-        this.finalizeTool(runtime, stopped ? 'failed' : 'done');
+        this.finalizeTools(runtime, stopped ? 'failed' : 'done');
 
         if (stopped) {
             this.stoppedSessions.delete(sessionId);
@@ -590,16 +612,13 @@ ${userPrompt}`;
         }
 
         if (stopReason === 'refusal') {
-            runtime.callbacks.onStatusChange('error', '模型拒绝了本次请求');
+            runtime.callbacks.onStatusChange('error', { code: 'engine_refusal' });
             this.sessionManager.setTaskState(sessionId, 'error');
             return;
         }
 
-        if (stopReason === 'max_tokens') {
-            runtime.callbacks.onDelta('\n\n> ⚠️ [执行反馈]：回复因长度上限被截断。');
-        }
-
-        runtime.callbacks.onStatusChange('done');
+        // 截断提示由客户端按 stopReason 本地化插入，服务端不内嵌展示文案
+        runtime.callbacks.onStatusChange('done', stopReason === 'max_tokens' ? { stopReason } : undefined);
         this.sessionManager.setTaskState(sessionId, 'completed');
         try {
             const recordedAnswer = runtime.committedText.trim().slice(0, 300);
@@ -647,17 +666,19 @@ ${userPrompt}`;
             this.stoppedSessions.add(sessionId);
             this.sessionManager.updateMessage(sessionId, runtime.assistantMessageId, (m) => {
                 m.status = 'error';
-                m.errorMessage = '审批超时未应答，任务已终止';
+                m.errorMessage = 'approval_timeout';
             });
             this.sessionManager.setTaskState(sessionId, 'stopped');
             // 持久化之外必须经回调广播终态，否则客户端实时视图停留在等待审批，直到重连对账才能修正
-            runtime.callbacks.onStatusChange('stopped', '审批超时未应答，任务已终止');
+            runtime.callbacks.onStatusChange('stopped', { code: 'approval_timeout' });
             return { outcome: { outcome: 'cancelled' } };
         }
 
+        // 客户端审批只有「同意/拒绝」单一意图，须优先匹配「仅本次」选项，
+        // 防止选项顺序把单一授权扩大为持久授权（allow_always）
         const wanted = approved ? 'allow' : 'reject';
-        const option = params.options?.find((o) => o.kind.startsWith(wanted))
-            ?? params.options?.find((o) => o.kind.startsWith(approved ? 'allow' : 'reject'));
+        const option = params.options?.find((o) => o.kind === `${wanted}_once`)
+            ?? params.options?.find((o) => o.kind.startsWith(wanted));
         if (!option) {
             return { outcome: { outcome: 'cancelled' } };
         }
