@@ -1,0 +1,588 @@
+import { spawn, ChildProcess } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { Writable, Readable } from 'node:stream';
+import path from 'node:path';
+import fs from 'node:fs';
+import * as acp from '@agentclientprotocol/sdk';
+import { MemoryManager } from './memoryManager.js';
+import { SessionManager } from './sessionManager.js';
+import { ToolCallState, ApprovalRequest } from './protocol.js';
+
+export interface EngineCallbacks {
+    onDelta: (delta: string) => void;
+    onFinalText?: (fullText: string) => void;
+    onToolCall: (toolCall: ToolCallState) => void;
+    onApprovalRequest?: (request: ApprovalRequest) => void;
+    onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error', error?: string) => void;
+}
+
+/** 已建立的引擎连接：生产环境为 dsh 子进程的 stdio 流，测试可注入进程内模拟 */
+export interface EngineConnection {
+    context: acp.ClientContext;
+    /** 连接关闭（引擎退出或被停）时 resolve，用于崩溃清理 */
+    closed: Promise<void>;
+    /** 主动关停连接并回收子进程 */
+    close: () => Promise<void>;
+}
+
+export interface AcpEngineManagerOptions {
+    /** 审批挂起超时（毫秒），超时自动拒绝；默认 5 分钟，测试可用环境变量 LVTIAN_APPROVAL_TIMEOUT_MS 覆盖 */
+    approvalTimeoutMs?: number;
+    /** 引擎连接工厂，默认 spawn dsh --profile acp；测试注入进程内模拟连接 */
+    connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+}
+
+/** 会话任务运行时状态：一次 prompt 执行期间的聚合上下文 */
+interface SessionRuntime {
+    assistantMessageId: string;
+    engineSessionId: string;
+    callbacks: EngineCallbacks;
+    currentToolCall: ToolCallState | null;
+    toolSeq: number;
+    committedText: string;
+}
+
+/** 挂起中的审批：等待客户端应答或超时 */
+interface PendingPermission {
+    approvalId: string;
+    settle: (approved: boolean | 'timeout') => void;
+    timer: ReturnType<typeof setTimeout>;
+}
+
+/** ACP 引擎审批请求参数（session/request_permission） */
+interface AcpPermissionRequest {
+    sessionId: string;
+    toolCall: { toolCallId: string; title: string; kind: string };
+    options: Array<{ optionId: string; name: string; kind: string }>;
+}
+
+/** dsh-acp 对 NewSessionRequest 的 mcpServers 字段强制必填（比标准更严格），空对象表示不挂载 */
+const EMPTY_MCP: Record<string, never> = {};
+
+/**
+ * 定位服务端本地安装的 @deepseek-ai/dsh 二进制或 JS 入口，
+ * 避免因 childProcess cwd 设置在 workspace 目录而导致 npx 回退联网下载或查找全局缓存
+ */
+function resolveDshInvocation(): { command: string; argsPrefix: string[] } {
+    try {
+        const require = createRequire(import.meta.url);
+        const pkgJsonPath = require.resolve('@deepseek-ai/dsh/package.json');
+        const dshDir = path.dirname(pkgJsonPath);
+        const binJs = path.join(dshDir, 'lib', 'bin.js');
+        if (fs.existsSync(binJs)) {
+            return { command: process.execPath, argsPrefix: [binJs] };
+        }
+    } catch {
+        // ignore
+    }
+
+    const localBin = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../node_modules/.bin',
+        process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
+    );
+    if (fs.existsSync(localBin)) {
+        return { command: localBin, argsPrefix: [] };
+    }
+
+    return {
+        command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
+        argsPrefix: ['-y', '@deepseek-ai/dsh'],
+    };
+}
+
+/**
+ * ACP 常驻引擎管理器：通过 dsh --profile acp 子进程以 JSON-RPC 长连接驱动 AI 助理，
+ * 取代 headless 每轮拉起子进程的模式。单连接承载全部会话，引擎崩溃后随下次请求懒重启。
+ */
+export class AcpEngineManager {
+    private workspace: string;
+    private memoryManager: MemoryManager;
+    private sessionManager: SessionManager;
+    private approvalTimeoutMs: number;
+    private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+
+    private connection: EngineConnection | null = null;
+    private engineStarting: Promise<void> | null = null;
+    private engineDead = false;
+    private engineSystemPrompt = '';
+
+    private runtimes: Map<string, SessionRuntime> = new Map();
+    /** 引擎侧会话 ID → 绿天会话 ID 反查（审批请求与事件路由使用） */
+    private engineSessionIndex: Map<string, string> = new Map();
+    private pendingPermissions: Map<string, PendingPermission> = new Map();
+    private stoppedSessions: Set<string> = new Set();
+
+    constructor(
+        workspace: string,
+        memoryManager: MemoryManager,
+        sessionManager: SessionManager,
+        options?: AcpEngineManagerOptions
+    ) {
+        this.workspace = workspace;
+        this.memoryManager = memoryManager;
+        this.sessionManager = sessionManager;
+        const envTimeout = Number.parseInt(process.env.LVTIAN_APPROVAL_TIMEOUT_MS ?? '', 10);
+        this.approvalTimeoutMs = options?.approvalTimeoutMs
+            ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5 * 60 * 1000);
+        this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
+    }
+
+    public isRunning(sessionId: string): boolean {
+        return this.runtimes.has(sessionId);
+    }
+
+    public handleApproval(sessionId: string, approvalId: string, approved: boolean): boolean {
+        const pending = this.pendingPermissions.get(sessionId);
+        if (!pending || pending.approvalId !== approvalId) {
+            return false;
+        }
+        clearTimeout(pending.timer);
+        this.pendingPermissions.delete(sessionId);
+        pending.settle(approved);
+        return true;
+    }
+
+    /** 手动停止：通知引擎取消当前轮次，并就地终态化消息状态（引擎侧 cancelled 响应到达后跳过重复终态） */
+    public stop(sessionId: string): boolean {
+        const runtime = this.runtimes.get(sessionId);
+        if (!runtime) {
+            return false;
+        }
+        this.stoppedSessions.add(sessionId);
+        this.rejectPendingPermission(sessionId, '任务已被手动终止');
+        this.sessionManager.setTaskState(sessionId, 'stopped');
+        this.sessionManager.updateMessage(sessionId, runtime.assistantMessageId, (m) => {
+            m.status = 'error';
+            m.errorMessage = '任务已被手动终止';
+        });
+        this.connection?.context.notify('session/cancel', { sessionId: runtime.engineSessionId }).catch((err) => {
+            console.warn(`[AcpEngine] 发送取消通知失败: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        return true;
+    }
+
+    /** 优雅关停：应答全部挂起审批、取消全部任务、关闭引擎连接 */
+    public async stopAll(): Promise<void> {
+        for (const sessionId of [...this.runtimes.keys()]) {
+            this.stop(sessionId);
+        }
+        const conn = this.connection;
+        this.connection = null;
+        if (conn) {
+            await conn.close().catch((err: unknown) => {
+                console.warn(`[AcpEngine] 关闭引擎连接失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
+    }
+
+    public async execute(
+        sessionId: string,
+        assistantMessageId: string,
+        userPrompt: string,
+        callbacks: EngineCallbacks
+    ): Promise<void> {
+        if (this.isRunning(sessionId)) {
+            return;
+        }
+
+        this.sessionManager.setTaskState(sessionId, 'processing');
+        callbacks.onStatusChange('thinking');
+
+        try {
+            await this.ensureEngine();
+            if (!this.connection) {
+                throw new Error('引擎连接不可用（启动失败或已退出）');
+            }
+            const context = this.connection.context;
+            const engineSessionId = await this.resolveEngineSession(sessionId);
+
+            const runtime: SessionRuntime = {
+                assistantMessageId,
+                engineSessionId,
+                callbacks,
+                currentToolCall: null,
+                toolSeq: 0,
+                committedText: '',
+            };
+            this.runtimes.set(sessionId, runtime);
+
+            const fullPrompt = `[系统人设与主人记忆背景]
+${this.engineSystemPrompt}
+
+[主人当前提问与指令]
+${userPrompt}`;
+
+            const response = await context.request<{ stopReason?: string }>(
+                'session/prompt',
+                {
+                    sessionId: engineSessionId,
+                    prompt: [{ type: 'text', text: fullPrompt }],
+                }
+            );
+
+            this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.runtimes.delete(sessionId);
+            this.rejectPendingPermission(sessionId, message);
+
+            if (this.stoppedSessions.has(sessionId)) {
+                this.stoppedSessions.delete(sessionId);
+                this.sessionManager.setTaskState(sessionId, 'stopped');
+                return;
+            }
+            console.error(`[AcpEngine] 执行任务异常: ${message}`);
+            callbacks.onStatusChange('error', message);
+            this.sessionManager.setTaskState(sessionId, 'error');
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 引擎生命周期
+    // ------------------------------------------------------------------
+
+    private async ensureEngine(): Promise<void> {
+        if (this.connection) {
+            return;
+        }
+        if (!this.engineStarting) {
+            this.engineStarting = this.startEngine().finally(() => {
+                this.engineStarting = null;
+            });
+        }
+        await this.engineStarting;
+    }
+
+    private async startEngine(): Promise<void> {
+        // 记忆与人设在引擎启动时加载一次，经环境变量注入（进程级生效），并保留给每轮 prompt 前缀兜底
+        const memoryContext = this.memoryManager.loadContext();
+        const systemSections = [
+            memoryContext.soul ? `[系统背景]\n${memoryContext.soul}` : '',
+            memoryContext.memory ? `[主人记忆]\n${memoryContext.memory}` : '',
+            memoryContext.user ? `[主人档案]\n${memoryContext.user}` : '',
+        ].filter(Boolean).join('\n\n');
+        this.engineSystemPrompt = systemSections;
+        this.engineDead = false;
+
+        const app = acp.client({ name: 'lvtian-server' });
+
+        app.onRequest<Record<string, unknown>, Record<string, unknown>>(
+            'session/request_permission',
+            passthroughParser,
+            (ctx) => this.handleRequestPermission(ctx.params as unknown as AcpPermissionRequest)
+        );
+        app.onNotification<Record<string, unknown>>(
+            'session/update',
+            passthroughParser,
+            (ctx) => {
+                const params = ctx.params as { sessionId?: string; update?: { sessionUpdate?: string } };
+                if (params.sessionId && params.update) {
+                    this.handleSessionUpdate(params.sessionId, params.update);
+                }
+            }
+        );
+
+        console.log(`[AcpEngine] 启动引擎 (工作区: ${this.workspace})...`);
+        const connection = await this.connectEngineImpl(app, this.engineSystemPrompt);
+        this.connection = connection;
+        console.log('[AcpEngine] 引擎连接已建立');
+
+        // 引擎退出（崩溃或被杀）时的清理：不在此重复广播错误，prompt 请求会因连接关闭 reject 并走各自终态
+        connection.closed.then(() => {
+            if (this.connection === connection) {
+                this.connection = null;
+                this.engineDead = true;
+                this.engineSessionIndex.clear();
+                for (const sessionId of [...this.runtimes.keys()]) {
+                    this.rejectPendingPermission(sessionId, '引擎进程已退出');
+                }
+                console.warn('[AcpEngine] 引擎连接已断开，将在下次请求时自动重启');
+            }
+        });
+    }
+
+    private async spawnDshEngine(app: acp.ClientApp, systemPrompt: string): Promise<EngineConnection> {
+        const { command, argsPrefix } = resolveDshInvocation();
+        const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp'], {
+            cwd: this.workspace,
+            env: {
+                ...process.env,
+                DSH_WORKSPACE: this.workspace,
+                DSH_SYSTEM_PROMPT: systemPrompt,
+                DEEPSEEK_SYSTEM_PROMPT: systemPrompt,
+            },
+            shell: false,
+        });
+        child.stdin?.on('error', (err: Error) => {
+            console.warn(`[AcpEngine] stdin 管道异常 (子进程可能已退出): ${err.message}`);
+        });
+        child.stderr?.on('data', (chunk: Buffer) => {
+            const text = chunk.toString('utf8').trim();
+            if (text) {
+                console.log(`[AcpEngine:stderr] ${text.slice(0, 500)}`);
+            }
+        });
+
+        if (!child.stdin || !child.stdout) {
+            child.kill();
+            throw new Error('引擎子进程标准流不可用');
+        }
+
+        // 保活信号：close() 主动关停时结束 connectWith 回调（回调结束即连接关闭）
+        let resolveStop!: () => void;
+        const stopSignal = new Promise<void>((resolve) => {
+            resolveStop = resolve;
+        });
+        // onConnect 在连接建立时同步回调，借此把连接内的 ClientContext 透出
+        let resolveContext!: (ctx: acp.ClientContext) => void;
+        const contextReady = new Promise<acp.ClientContext>((resolve) => {
+            resolveContext = resolve;
+        });
+        app.onConnect((conn) => resolveContext(conn.agent));
+
+        // Node 与 SDK 的 Web 流泛型声明存在库间差异（运行时行为一致），此处收窄类型
+        const stdinWeb = Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>;
+        const stdoutWeb = Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>;
+        const stream = acp.ndJsonStream(stdinWeb, stdoutWeb);
+        const run = app.connectWith(stream, async (context) => {
+            await context.request('initialize', {
+                protocolVersion: acp.PROTOCOL_VERSION,
+                clientInfo: { name: 'lvtian-server', version: '0.1.0' },
+            });
+            await stopSignal;
+        });
+        // 连接结束信号：回调正常结束或流断开（进程崩溃）均会让 run settle
+        const closed = run.catch(() => undefined);
+
+        return {
+            context: await contextReady,
+            closed,
+            close: async () => {
+                resolveStop();
+                await closed;
+                if (child.exitCode === null) {
+                    child.kill();
+                    await new Promise<void>((resolve) => {
+                        const killTimer = setTimeout(() => {
+                            try {
+                                child.kill('SIGKILL');
+                            } catch {
+                                // ignore
+                            }
+                            resolve();
+                        }, 2000);
+                        child.once('close', () => {
+                            clearTimeout(killTimer);
+                            resolve();
+                        });
+                    });
+                }
+            },
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // 会话解析与事件路由
+    // ------------------------------------------------------------------
+
+    /**
+     * 取得引擎侧会话：
+     * 1. 同一连接内的活跃会话直接复用（resume 仅适用于恢复跨连接的非活跃会话，活跃会话 resume 会报 already active）；
+     * 2. 连接重建后（引擎重启）尝试 resume 恢复持久化会话；
+     * 3. resume 失败（如旧 headless 会话 ID 不通用）则新建并更新绑定。
+     */
+    private async resolveEngineSession(sessionId: string): Promise<string> {
+        if (!this.connection) {
+            throw new Error('引擎连接不可用');
+        }
+        const context = this.connection.context;
+        const saved = this.sessionManager.getDshSessionId(sessionId);
+
+        if (saved && this.engineSessionIndex.has(saved)) {
+            return saved;
+        }
+
+        if (saved) {
+            try {
+                const resumed = await context.request<{ sessionId?: string }>('session/resume', {
+                    sessionId: saved,
+                    cwd: this.workspace,
+                });
+                if (resumed?.sessionId) {
+                    this.engineSessionIndex.set(resumed.sessionId, sessionId);
+                    return resumed.sessionId;
+                }
+            } catch (err: unknown) {
+                console.warn(
+                    `[AcpEngine] 恢复会话 ${saved} 失败，改为新建 (历史消息仍在服务端日志可查): ${err instanceof Error ? err.message : String(err)}`
+                );
+            }
+        }
+
+        const created = await context.request<{ sessionId?: string }>('session/new', {
+            cwd: this.workspace,
+            mcpServers: EMPTY_MCP,
+        });
+        if (!created?.sessionId) {
+            throw new Error('引擎未返回会话 ID');
+        }
+        this.sessionManager.setDshSessionId(sessionId, created.sessionId);
+        this.engineSessionIndex.set(created.sessionId, sessionId);
+        return created.sessionId;
+    }
+
+    private handleSessionUpdate(engineSessionId: string, update: { sessionUpdate?: string }): void {
+        const sessionId = this.engineSessionIndex.get(engineSessionId);
+        const runtime = sessionId ? this.runtimes.get(sessionId) : undefined;
+        if (!runtime) {
+            return;
+        }
+
+        switch (update.sessionUpdate) {
+            case 'agent_message_chunk': {
+                const content = (update as { content?: { type?: string; text?: string } }).content;
+                const text = content?.type === 'text' && typeof content.text === 'string' ? content.text : '';
+                if (text) {
+                    this.finalizeTool(runtime, 'done');
+                    runtime.committedText += text;
+                    runtime.callbacks.onDelta(text);
+                }
+                break;
+            }
+            case 'agent_thought_chunk':
+                runtime.callbacks.onStatusChange('thinking');
+                break;
+            case 'tool_call': {
+                this.finalizeTool(runtime, 'done');
+                const t = update as { toolCallId?: string; title?: string; kind?: string; status?: string };
+                runtime.toolSeq++;
+                runtime.currentToolCall = {
+                    id: t.toolCallId ?? `tool-${engineSessionId}-${runtime.toolSeq}`,
+                    name: t.kind ?? t.title ?? '系统工具',
+                    status: 'running',
+                    summary: (t.title ?? t.kind ?? '').slice(0, 100),
+                };
+                runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
+                runtime.callbacks.onStatusChange('running_tool');
+                break;
+            }
+            case 'tool_call_update': {
+                const t = update as { toolCallId?: string; status?: string };
+                if (runtime.currentToolCall && t.toolCallId === runtime.currentToolCall.id) {
+                    runtime.currentToolCall.status = t.status === 'completed' ? 'done' : 'running';
+                    runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
+                    if (t.status === 'completed') {
+                        runtime.currentToolCall = null;
+                    }
+                }
+                break;
+            }
+            default:
+                // usage_update / plan / user_message_chunk 等暂不消费
+                break;
+        }
+    }
+
+    private finalizeTool(runtime: SessionRuntime, status: 'done' | 'failed'): void {
+        if (runtime.currentToolCall && runtime.currentToolCall.status === 'running') {
+            runtime.currentToolCall.status = status;
+            runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
+            runtime.currentToolCall = null;
+        }
+    }
+
+    private finalizeRun(sessionId: string, runtime: SessionRuntime, stopReason: string): void {
+        this.runtimes.delete(sessionId);
+        this.finalizeTool(runtime, 'done');
+
+        if (this.stoppedSessions.has(sessionId)) {
+            this.stoppedSessions.delete(sessionId);
+            this.sessionManager.setTaskState(sessionId, 'stopped');
+            return;
+        }
+
+        if (stopReason === 'refusal') {
+            runtime.callbacks.onStatusChange('error', '模型拒绝了本次请求');
+            this.sessionManager.setTaskState(sessionId, 'error');
+            return;
+        }
+
+        if (stopReason === 'max_tokens') {
+            runtime.callbacks.onDelta('\n\n> ⚠️ [执行反馈]：回复因长度上限被截断。');
+        }
+
+        runtime.callbacks.onStatusChange('done');
+        this.sessionManager.setTaskState(sessionId, 'completed');
+        try {
+            const recordedAnswer = runtime.committedText.trim().slice(0, 300);
+            this.memoryManager.appendDailyLog('对话与任务完成', `答：${recordedAnswer}...`);
+        } catch (logErr: unknown) {
+            console.warn(`[AcpEngine] 写入每日流水失败 (非致命): ${logErr instanceof Error ? logErr.message : String(logErr)}`);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 审批流
+    // ------------------------------------------------------------------
+
+    private async handleRequestPermission(params: AcpPermissionRequest): Promise<{ outcome: { outcome: string; optionId?: string } }> {
+        const sessionId = this.engineSessionIndex.get(params.sessionId);
+        const runtime = sessionId ? this.runtimes.get(sessionId) : undefined;
+        if (!sessionId || !runtime || !runtime.callbacks.onApprovalRequest) {
+            return { outcome: { outcome: 'cancelled' } };
+        }
+
+        const approvalId = `apr-${Date.now()}`;
+        const request: ApprovalRequest = {
+            approvalId,
+            prompt: params.toolCall?.title ?? '助理请求执行操作',
+            toolName: params.toolCall?.kind,
+            params: { options: params.options?.map((o) => ({ id: o.optionId, name: o.name, kind: o.kind })) ?? [] },
+            status: 'pending',
+        };
+
+        const approved = await new Promise<boolean | 'timeout'>((resolve) => {
+            const timer = setTimeout(() => resolve('timeout'), this.approvalTimeoutMs);
+            this.pendingPermissions.set(sessionId, { approvalId, settle: resolve, timer });
+            runtime.callbacks.onApprovalRequest!(request);
+        });
+        this.pendingPermissions.delete(sessionId);
+
+        if (approved === 'timeout') {
+            console.warn(`[AcpEngine] 审批 ${approvalId} 超时未应答，自动拒绝`);
+            // 引擎收到拒绝后会走完当前轮（end_turn），标记停止以防终态被覆盖为 completed
+            this.stoppedSessions.add(sessionId);
+            this.sessionManager.updateMessage(sessionId, runtime.assistantMessageId, (m) => {
+                m.status = 'error';
+                m.errorMessage = '审批超时未应答，任务已终止';
+            });
+            this.sessionManager.setTaskState(sessionId, 'stopped');
+            return { outcome: { outcome: 'cancelled' } };
+        }
+
+        const wanted = approved ? 'allow' : 'reject';
+        const option = params.options?.find((o) => o.kind.startsWith(wanted))
+            ?? params.options?.find((o) => o.kind.startsWith(approved ? 'allow' : 'reject'));
+        if (!option) {
+            return { outcome: { outcome: 'cancelled' } };
+        }
+        return { outcome: { outcome: 'selected', optionId: option.optionId } };
+    }
+
+    /** 引擎取消或异常退出时，拒绝挂起中的审批（引擎侧随后以 cancelled 终止当前轮） */
+    private rejectPendingPermission(sessionId: string, reason: string): void {
+        const pending = this.pendingPermissions.get(sessionId);
+        if (pending) {
+            clearTimeout(pending.timer);
+            this.pendingPermissions.delete(sessionId);
+            console.warn(`[AcpEngine] 审批 ${pending.approvalId} 被终止: ${reason}`);
+            pending.settle(false);
+        }
+    }
+}
+
+const passthroughParser = {
+    parse: (value: unknown): Record<string, unknown> => value as Record<string, unknown>,
+};
