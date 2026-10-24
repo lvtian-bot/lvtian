@@ -167,6 +167,7 @@
     "placeholder": "Start writing..."
   },
   "common": {
+    "actions": "Quick Actions",
     "back": "Back",
     "save": "Save",
     "cancel": "Cancel",
@@ -348,7 +349,7 @@
     "statusReconnecting": "Reconnecting...",
     "statusDisconnected": "Disconnected",
     "statusError": "Connection Error",
-    "inputPlaceholder": "Type instructions or thoughts for Lvtian...",
+    "inputPlaceholder": "Message",
     "approvalRequired": "Approval Required",
     "toolRequested": "Requested Tool",
     "approve": "Approve",

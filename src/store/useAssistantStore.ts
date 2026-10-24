@@ -38,6 +38,7 @@ interface AssistantState {
     addPendingApproval: (approval: ApprovalRequest) => void;
     removePendingApproval: (approvalId: string) => void;
     setCurrentSeq: (seq: number) => void;
+    clearedSeq: number;
     clearChat: () => void;
 }
 
@@ -52,6 +53,7 @@ export const useAssistantStore = create<AssistantState>()(
             taskState: 'idle',
             pendingApprovals: [],
             currentSeq: 0,
+            clearedSeq: 0,
             hasHydrated: false,
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
@@ -73,7 +75,7 @@ export const useAssistantStore = create<AssistantState>()(
                     throw new Error('安全凭据存储失败，请检查系统安全存储或权限');
                 }
 
-                // 如果切换了不同的服务器地址或访问令牌（代表新服务实例），重置本地旧服务器的对话与对账序列状态
+                // 如果切换了不同的服务器地址或访问令牌（代表新服务实例），重置本地旧服务器的对话与对账序列状态（含清空截断线）
                 const currentToken = get().serverToken;
                 if ((currentUrl && currentUrl !== cleanUrl) || (currentToken && currentToken !== cleanToken)) {
                     set({
@@ -81,6 +83,7 @@ export const useAssistantStore = create<AssistantState>()(
                         serverToken: cleanToken,
                         messages: [],
                         currentSeq: 0,
+                        clearedSeq: 0,
                         taskState: 'idle',
                         pendingApprovals: [],
                     });
@@ -181,7 +184,21 @@ export const useAssistantStore = create<AssistantState>()(
 
             setCurrentSeq: (currentSeq) => set({ currentSeq }),
 
-            clearChat: () => set({ messages: [], currentSeq: 0, taskState: 'idle', pendingApprovals: [] }),
+            clearChat: () =>
+                set((state) => {
+                    const maxSeq = Math.max(
+                        state.currentSeq,
+                        state.clearedSeq,
+                        ...state.messages.map((m) => m.seq ?? 0)
+                    );
+                    return {
+                        messages: [],
+                        currentSeq: 0,
+                        clearedSeq: maxSeq,
+                        taskState: 'idle',
+                        pendingApprovals: [],
+                    };
+                }),
         }),
         {
             name: 'lvtian-assistant-storage',
@@ -202,6 +219,7 @@ export const useAssistantStore = create<AssistantState>()(
                     // 仅持久化非 processing 状态的已确认消息，避免流式打字期间每个 chunk 触发全量 AsyncStorage 序列化导致 UI 卡顿
                     messages: persistedMessages,
                     currentSeq: durableSeq,
+                    clearedSeq: state.clearedSeq ?? 0,
                 };
             },
             onRehydrateStorage: () => (state) => {
