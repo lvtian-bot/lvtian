@@ -35,5 +35,9 @@ jest.mock('react-native-keyboard-controller', () => {
     KeyboardStickyView: (props) => React.createElement(View, props),
     KeyboardAwareScrollView: (props) => React.createElement(View, props),
     KeyboardProvider: (props) => React.createElement(View, props),
+    useReanimatedKeyboardAnimation: () => ({
+      height: { value: 0 },
+      progress: { value: 0 },
+    }),
   };
 });

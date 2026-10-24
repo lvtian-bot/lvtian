@@ -14,10 +14,15 @@ import {
     type NativeSyntheticEvent,
     type NativeScrollEvent,
 } from 'react-native';
-import { useSharedValue } from 'react-native-reanimated';
+import Animated, {
+    useSharedValue,
+    useAnimatedStyle,
+    interpolate,
+} from 'react-native-reanimated';
 import {
     KeyboardChatScrollView,
     KeyboardStickyView,
+    useReanimatedKeyboardAnimation,
     type KeyboardChatScrollViewProps,
 } from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
@@ -103,6 +108,20 @@ export const ChatScreen = () => {
         bottomInset: 0,
     });
     const extraContentPadding = useSharedValue(0);
+    const composerHeight = useSharedValue(60);
+    const handleComposerLayout = useCallback((event: LayoutChangeEvent) => {
+        composerHeight.value = event.nativeEvent.layout.height;
+    }, [composerHeight]);
+
+    const { height: keyboardHeight, progress: keyboardProgress } = useReanimatedKeyboardAnimation();
+    const animatedScrollBottomStyle = useAnimatedStyle(() => {
+        const offset = interpolate(keyboardProgress.value, [0, 1], [0, tabBarHeight]);
+        const translateY = -(composerHeight.value + 12) + (keyboardHeight.value + offset);
+        return {
+            transform: [{ translateY }],
+        };
+    }, [tabBarHeight]);
+
     const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
         extraContentPadding.value = Math.max(event.nativeEvent.layout.height - 40, 0);
     }, [extraContentPadding]);
@@ -443,20 +462,26 @@ export const ChatScreen = () => {
                 }}
             />
 
-            {/* 向上滚动时出现的快速回到底部悬浮小圆钮：置于主容器内保证触摸响应边界完整 */}
+            {/* 向上滚动时出现的快速回到底部悬浮小圆钮：置于主容器内保证触摸响应边界完整，并跟随键盘与输入框高度平滑位移 */}
             {showScrollBottom && (
-                <TouchableOpacity
-                    style={styles.scrollBottomBtn}
-                    onPress={scrollToEnd}
-                    activeOpacity={0.85}
+                <Animated.View
+                    style={[styles.scrollBottomContainer, animatedScrollBottomStyle]}
+                    pointerEvents="box-none"
                 >
-                    <Icon name="arrow-downward" size={18} color="#2563EB" />
-                </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.scrollBottomBtn}
+                        onPress={scrollToEnd}
+                        activeOpacity={0.85}
+                    >
+                        <Icon name="arrow-downward" size={18} color="#2563EB" />
+                    </TouchableOpacity>
+                </Animated.View>
             )}
 
             <KeyboardStickyView
                 style={styles.keyboardSticky}
                 offset={{ opened: tabBarHeight }}
+                onLayout={handleComposerLayout}
             >
                 {/* 人工审批卡片：并发审批按登记顺序逐卡展示，各自独立应答 */}
             {pendingApprovals.map((approval) => (
@@ -963,10 +988,15 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginLeft: 4,
     },
-    scrollBottomBtn: {
+    scrollBottomContainer: {
         position: 'absolute',
-        bottom: 74,
-        alignSelf: 'center',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        zIndex: 10,
+    },
+    scrollBottomBtn: {
         width: 36,
         height: 36,
         borderRadius: 18,
@@ -978,6 +1008,5 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.15,
         shadowRadius: 4,
-        zIndex: 10,
     },
 });
