@@ -141,7 +141,12 @@ export const ChatScreen = () => {
 
     const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
-        const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+        const endOffset = getChatListEndOffset(
+            contentSize.height,
+            layoutMeasurement.height,
+            listMetricsRef.current.bottomInset,
+        );
+        const distanceFromBottom = endOffset - contentOffset.y;
         setShowScrollBottom(distanceFromBottom > 160);
     }, []);
 
@@ -415,7 +420,7 @@ export const ChatScreen = () => {
                                         })}
                                     </Text>
                                     {isUser && item.status === 'sending' && (
-                                        <ActivityIndicator size={10} color="#fff" style={styles.statusMargin} />
+                                        <ActivityIndicator size={10} color={theme.colors.primaryDark} style={styles.statusMargin} />
                                     )}
                                     {isUser && item.status === 'error' && (
                                         <TouchableOpacity
@@ -426,7 +431,7 @@ export const ChatScreen = () => {
                                             <Icon
                                                 name="error-outline"
                                                 size={14}
-                                                color="rgba(255, 255, 255, 0.85)"
+                                                color={theme.colors.dangerStrong}
                                                 style={styles.statusMargin}
                                             />
                                         </TouchableOpacity>

@@ -38,6 +38,7 @@ interface AssistantState {
     addPendingApproval: (approval: ApprovalRequest) => void;
     removePendingApproval: (approvalId: string) => void;
     setCurrentSeq: (seq: number) => void;
+    clearedSeq: number;
     clearChat: () => void;
 }
 
@@ -52,6 +53,7 @@ export const useAssistantStore = create<AssistantState>()(
             taskState: 'idle',
             pendingApprovals: [],
             currentSeq: 0,
+            clearedSeq: 0,
             hasHydrated: false,
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
@@ -181,7 +183,21 @@ export const useAssistantStore = create<AssistantState>()(
 
             setCurrentSeq: (currentSeq) => set({ currentSeq }),
 
-            clearChat: () => set({ messages: [], currentSeq: 0, taskState: 'idle', pendingApprovals: [] }),
+            clearChat: () =>
+                set((state) => {
+                    const maxSeq = Math.max(
+                        state.currentSeq,
+                        state.clearedSeq,
+                        ...state.messages.map((m) => m.seq ?? 0)
+                    );
+                    return {
+                        messages: [],
+                        currentSeq: 0,
+                        clearedSeq: maxSeq,
+                        taskState: 'idle',
+                        pendingApprovals: [],
+                    };
+                }),
         }),
         {
             name: 'lvtian-assistant-storage',
@@ -202,6 +218,7 @@ export const useAssistantStore = create<AssistantState>()(
                     // 仅持久化非 processing 状态的已确认消息，避免流式打字期间每个 chunk 触发全量 AsyncStorage 序列化导致 UI 卡顿
                     messages: persistedMessages,
                     currentSeq: durableSeq,
+                    clearedSeq: state.clearedSeq ?? 0,
                 };
             },
             onRehydrateStorage: () => (state) => {

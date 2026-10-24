@@ -151,7 +151,7 @@ export class AssistantClient {
                 if (token) {
                     this.sendRaw({ type: 'auth', token });
                 }
-                const lastSeq = store.currentSeq;
+                const lastSeq = Math.max(store.currentSeq, store.clearedSeq ?? 0);
                 this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq });
             };
 
@@ -357,8 +357,11 @@ export class AssistantClient {
                     }))
                 );
 
-                // 收集服务端确认返回的所有消息 ID
-                const serverIdSet = new Set(msg.messages.map((m) => m.id));
+                // 过滤掉小于等于 clearedSeq 的历史消息（用户已清空的历史边界）
+                const validServerMessages = msg.messages.filter(
+                    (m) => (m.seq ?? 0) > (store.clearedSeq ?? 0)
+                );
+                const serverIdSet = new Set(validServerMessages.map((m) => m.id));
                 const localMessages = store.messages;
 
                 const msgMap = new Map<string, AssistantMessage>();
@@ -374,8 +377,8 @@ export class AssistantClient {
                         msgMap.set(m.id, m);
                     }
                 }
-                // 服务端下发的消息优先覆盖更新
-                for (const m of msg.messages) {
+                // 服务端下发的有效消息优先覆盖更新
+                for (const m of validServerMessages) {
                     msgMap.set(m.id, m);
                 }
 

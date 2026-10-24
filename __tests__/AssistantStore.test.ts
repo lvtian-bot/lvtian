@@ -55,10 +55,20 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(partial.currentSeq).toBe(1);
     });
 
-    test('empty messages partialize currentSeq to 0', () => {
+    test('empty messages partialize currentSeq to 0 and records clearedSeq', () => {
         const store = useAssistantStore.getState();
+        const userMsg: AssistantMessage = {
+            id: 'user-1',
+            seq: 12,
+            role: 'user',
+            content: '你好',
+            timestamp: Date.now(),
+            status: 'sent',
+        };
+        store.addOrUpdateMessage(userMsg);
+        store.setCurrentSeq(12);
+
         store.clearChat();
-        store.setCurrentSeq(10);
 
         const persistOptions = (
             useAssistantStore as unknown as {
@@ -67,6 +77,7 @@ describe('useAssistantStore persistence cursor and messages', () => {
                         partialize: (state: unknown) => {
                             messages: AssistantMessage[];
                             currentSeq: number;
+                            clearedSeq: number;
                         };
                     };
                 };
@@ -76,5 +87,6 @@ describe('useAssistantStore persistence cursor and messages', () => {
         const partial = persistOptions.partialize(useAssistantStore.getState());
         expect(partial.messages.length).toBe(0);
         expect(partial.currentSeq).toBe(0);
+        expect(partial.clearedSeq).toBe(12);
     });
 });
