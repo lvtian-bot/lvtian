@@ -8,8 +8,11 @@ import {
     FlatList,
     ActivityIndicator,
     Alert,
+    Platform,
     type LayoutChangeEvent,
     type ScrollViewProps,
+    type NativeSyntheticEvent,
+    type NativeScrollEvent,
 } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 import {
@@ -129,10 +132,50 @@ export const ChatScreen = () => {
         taskState,
         pendingApprovals,
         setServerConfig,
+        clearChat,
     } = useAssistantStore();
 
     const [inputContent, setInputContent] = useState('');
+    const [showScrollBottom, setShowScrollBottom] = useState(false);
     const lastMessageContent = messages[messages.length - 1]?.content;
+
+    const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
+        const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+        setShowScrollBottom(distanceFromBottom > 160);
+    }, []);
+
+    const handlePlusAction = useCallback(() => {
+        Alert.alert(
+            t('common.actions', '快捷操作'),
+            undefined,
+            [
+                {
+                    text: t('assistant.clearHistory', '清空聊天记录'),
+                    style: 'destructive',
+                    onPress: () => {
+                        Alert.alert(
+                            t('assistant.clearHistory', '清空聊天记录'),
+                            t('assistant.clearConfirm', '确定要清空当前的聊天记录吗？这不会影响服务端的记忆文件。'),
+                            [
+                                { text: t('common.cancel', '取消'), style: 'cancel' },
+                                {
+                                    text: t('common.confirm', '确定'),
+                                    style: 'destructive',
+                                    onPress: () => clearChat(),
+                                },
+                            ],
+                        );
+                    },
+                },
+                {
+                    text: t('assistant.assistantConfig', '助理服务配置'),
+                    onPress: () => navigation.navigate('AssistantConfig'),
+                },
+                { text: t('common.cancel', '取消'), style: 'cancel' },
+            ],
+        );
+    }, [clearChat, navigation, t]);
 
     useEffect(() => {
         // 自动连接
@@ -263,6 +306,8 @@ export const ChatScreen = () => {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
                 renderScrollComponent={renderChatScrollComponent}
                 renderItem={({ item }) => {
                     const isUser = item.role === 'user';
@@ -273,11 +318,6 @@ export const ChatScreen = () => {
                                 isUser ? styles.userRow : styles.assistantRow,
                             ]}
                         >
-                            {!isUser && (
-                                <View style={styles.assistantAvatar}>
-                                    <Icon name="smart-toy" size={18} color="#fff" />
-                                </View>
-                            )}
                             <View
                                 style={[
                                     styles.bubble,
@@ -395,6 +435,17 @@ export const ChatScreen = () => {
                 style={styles.keyboardSticky}
                 offset={{ opened: tabBarHeight }}
             >
+                {/* 向上滚动时出现的快速回到底部悬浮小圆钮 */}
+                {showScrollBottom && (
+                    <TouchableOpacity
+                        style={styles.scrollBottomBtn}
+                        onPress={scrollToEnd}
+                        activeOpacity={0.85}
+                    >
+                        <Icon name="arrow-downward" size={18} color="#2563EB" />
+                    </TouchableOpacity>
+                )}
+
                 {/* 人工审批卡片：并发审批按登记顺序逐卡展示，各自独立应答 */}
             {pendingApprovals.map((approval) => (
                 <View key={approval.approvalId} style={styles.approvalCard}>
@@ -438,26 +489,38 @@ export const ChatScreen = () => {
 
             {/* 底部输入区 */}
             <View style={styles.inputArea}>
-                <TextInput
-                    style={styles.chatInput}
-                    placeholder={t('assistant.inputPlaceholder', '向绿天助理输入想法或指令...')}
-                    placeholderTextColor={theme.colors.textSecondary}
-                    value={inputContent}
-                    onChangeText={setInputContent}
-                    multiline
-                    maxLength={2000}
-                    onLayout={handleInputLayout}
-                />
-                <TouchableOpacity
-                    style={[
-                        styles.sendBtn,
-                        !inputContent.trim() ? styles.sendBtnDisabled : styles.sendBtnActive,
-                    ]}
-                    onPress={handleSend}
-                    disabled={!inputContent.trim()}
-                >
-                    <Icon name="send" size={20} color="#fff" />
-                </TouchableOpacity>
+                <View style={styles.inputCapsule}>
+                    <TouchableOpacity
+                        style={styles.plusBtn}
+                        onPress={handlePlusAction}
+                        activeOpacity={0.7}
+                    >
+                        <Icon name="add" size={24} color="#374151" />
+                    </TouchableOpacity>
+                    <TextInput
+                        style={styles.chatInput}
+                        placeholder={t('assistant.inputPlaceholder', '消息')}
+                        placeholderTextColor="#9CA3AF"
+                        value={inputContent}
+                        onChangeText={setInputContent}
+                        multiline
+                        maxLength={2000}
+                        onLayout={handleInputLayout}
+                    />
+                    {inputContent.trim() ? (
+                        <TouchableOpacity
+                            style={styles.sendBtnActive}
+                            onPress={handleSend}
+                            activeOpacity={0.8}
+                        >
+                            <Icon name="arrow-upward" size={18} color="#fff" />
+                        </TouchableOpacity>
+                    ) : (
+                        <View style={styles.micBtn}>
+                            <Icon name="mic" size={22} color="#4B5563" />
+                        </View>
+                    )}
+                </View>
             </View>
             </KeyboardStickyView>
         </View>
@@ -466,22 +529,81 @@ export const ChatScreen = () => {
 
 const markdownStyles = {
     body: {
-        color: theme.colors.text,
+        color: '#111827',
         fontSize: 15,
         lineHeight: 22,
     },
+    heading1: {
+        color: '#111827',
+        fontSize: 18,
+        fontWeight: '700' as const,
+        marginTop: 10,
+        marginBottom: 6,
+    },
+    heading2: {
+        color: '#111827',
+        fontSize: 16,
+        fontWeight: '700' as const,
+        marginTop: 8,
+        marginBottom: 4,
+    },
+    heading3: {
+        color: '#111827',
+        fontSize: 15,
+        fontWeight: '700' as const,
+        marginTop: 6,
+        marginBottom: 4,
+    },
+    paragraph: {
+        marginTop: 2,
+        marginBottom: 4,
+    },
+    list_item: {
+        marginVertical: 2,
+    },
+    bullet_list: {
+        marginVertical: 4,
+    },
+    ordered_list: {
+        marginVertical: 4,
+    },
     code_inline: {
-        color: theme.colors.text,
-        backgroundColor: theme.colors.inputBg,
+        color: '#111827',
+        backgroundColor: '#E5E7EB',
         borderRadius: 4,
-        paddingHorizontal: 4,
+        paddingHorizontal: 5,
+        paddingVertical: 2,
         fontSize: 13,
+        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
     },
     fence: {
-        backgroundColor: theme.colors.inputBg,
-        borderRadius: 6,
-        padding: 8,
+        backgroundColor: '#E5E7EB',
+        borderRadius: 8,
+        padding: 10,
         fontSize: 13,
+        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+        color: '#111827',
+        marginVertical: 6,
+        borderWidth: 0,
+    },
+    code_block: {
+        backgroundColor: '#E5E7EB',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 13,
+        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+        color: '#111827',
+        marginVertical: 6,
+        borderWidth: 0,
+    },
+    hr: {
+        backgroundColor: '#E5E7EB',
+        height: 1,
+        marginVertical: 8,
+    },
+    strong: {
+        fontWeight: '700' as const,
+        color: '#111827',
     },
 };
 
@@ -604,12 +726,13 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
     },
     messageList: {
-        padding: 16,
+        paddingHorizontal: 16,
+        paddingTop: 12,
         paddingBottom: 24,
     },
     messageRow: {
         flexDirection: 'row',
-        marginBottom: 16,
+        marginBottom: 12,
     },
     userRow: {
         justifyContent: 'flex-end',
@@ -617,34 +740,21 @@ const styles = StyleSheet.create({
     assistantRow: {
         justifyContent: 'flex-start',
     },
-    assistantAvatar: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: theme.colors.primary,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 8,
-        marginTop: 4,
-    },
     bubble: {
-        maxWidth: '82%',
-        borderRadius: 18,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
+        borderRadius: 20,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
     },
     userBubble: {
-        backgroundColor: theme.colors.primary,
-        borderBottomRightRadius: 6,
+        backgroundColor: '#D9EAFD',
+        maxWidth: '85%',
     },
     assistantBubble: {
-        backgroundColor: theme.colors.surface,
-        borderBottomLeftRadius: 6,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
+        backgroundColor: '#F0F2F5',
+        maxWidth: '92%',
     },
     userText: {
-        color: '#fff',
+        color: '#111827',
         fontSize: 15,
         lineHeight: 22,
     },
@@ -654,7 +764,7 @@ const styles = StyleSheet.create({
     toolTag: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: theme.colors.inputBg,
+        backgroundColor: '#E5E7EB',
         borderRadius: 8,
         paddingHorizontal: 10,
         paddingVertical: 5,
@@ -663,7 +773,7 @@ const styles = StyleSheet.create({
     },
     toolText: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: '#4B5563',
         marginLeft: 6,
     },
     thinkingRow: {
@@ -699,14 +809,14 @@ const styles = StyleSheet.create({
         marginLeft: 4,
     },
     userTime: {
-        color: 'rgba(255, 255, 255, 0.7)',
+        color: 'rgba(17, 24, 39, 0.5)',
     },
     assistantTime: {
-        color: theme.colors.textSecondary,
+        color: '#9CA3AF',
     },
     approvalCard: {
         backgroundColor: theme.colors.warnBgStrong,
-        borderRadius: 12,
+        borderRadius: 16,
         padding: 14,
         marginHorizontal: 16,
         marginBottom: 8,
@@ -791,40 +901,71 @@ const styles = StyleSheet.create({
         marginLeft: 4,
     },
     inputArea: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 8,
         backgroundColor: theme.colors.surface,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.divider,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#E5E7EB',
+    },
+    inputCapsule: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F0F2F5',
+        borderRadius: 24,
+        paddingHorizontal: 8,
+        paddingVertical: Platform.OS === 'ios' ? 6 : 2,
+        minHeight: 46,
+    },
+    plusBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 4,
+    },
+    micBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 4,
     },
     chatInput: {
         flex: 1,
-        maxHeight: 100,
-        minHeight: 40,
-        backgroundColor: theme.colors.inputBg,
-        borderRadius: 21,
-        paddingHorizontal: 16,
-        paddingTop: 9,
-        paddingBottom: 9,
+        maxHeight: 120,
+        minHeight: 36,
+        paddingHorizontal: 8,
+        paddingVertical: 6,
         fontSize: 15,
-        color: theme.colors.text,
-        marginRight: 10,
+        color: '#111827',
         lineHeight: 20,
     },
-    sendBtn: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
+    sendBtnActive: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: theme.colors.primary,
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: 1,
+        marginLeft: 4,
     },
-    sendBtnActive: {
-        backgroundColor: theme.colors.primary,
-    },
-    sendBtnDisabled: {
-        backgroundColor: theme.colors.border,
+    scrollBottomBtn: {
+        position: 'absolute',
+        top: -46,
+        alignSelf: 'center',
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        backgroundColor: '#D9EAFD',
+        justifyContent: 'center',
+        alignItems: 'center',
+        elevation: 4,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 4,
+        zIndex: 10,
     },
 });

@@ -348,7 +348,7 @@
     "statusReconnecting": "正在重连...",
     "statusDisconnected": "服务未连接",
     "statusError": "连接异常",
-    "inputPlaceholder": "向绿天助理输入想法或指令...",
+    "inputPlaceholder": "消息",
     "approvalRequired": "需要人工审批",
     "toolRequested": "请求调用的工具",
     "approve": "同意执行",

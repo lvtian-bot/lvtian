@@ -348,7 +348,7 @@
     "statusReconnecting": "Reconnecting...",
     "statusDisconnected": "Disconnected",
     "statusError": "Connection Error",
-    "inputPlaceholder": "Type instructions or thoughts for Lvtian...",
+    "inputPlaceholder": "Message",
     "approvalRequired": "Approval Required",
     "toolRequested": "Requested Tool",
     "approve": "Approve",
