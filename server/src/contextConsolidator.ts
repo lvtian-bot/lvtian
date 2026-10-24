@@ -16,6 +16,8 @@ export interface ContextConsolidatorOptions {
     idleTimeoutMs?: number;
     /** 判定容量门禁（上下文窗口占比），默认 0.2 (20%) */
     minCapacityRatio?: number;
+    /** 提炼输入对话文本的最大字符预算，默认 50,000 字符，预留上下文与输出容量 */
+    maxDialogueChars?: number;
     /** 测试注入自定义 fetch 实现 */
     fetchFn?: typeof fetch;
 }
@@ -140,8 +142,12 @@ export class ContextConsolidator {
         return this.cachedPrompt;
     }
 
-    /** 检查会话是否达到双重门禁（时间 3h AND 容量 20%） */
+    /** 检查会话是否达到双重门禁（时间 3h AND 容量 20%，执行中或等待审批的任务排除） */
     public isEligible(sessionId: string): boolean {
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        if (session.taskState === 'processing' || session.taskState === 'awaiting_approval') {
+            return false;
+        }
         const idleMs = this.options.idleTimeoutMs ?? (
             process.env.LVTIAN_SESSION_IDLE_MS
                 ? parseInt(process.env.LVTIAN_SESSION_IDLE_MS, 10)
@@ -185,7 +191,16 @@ export class ContextConsolidator {
         this.inFlight.add(sessionId);
 
         try {
-            const dialogue = this.sessionManager.getRecentDialogue(sessionId);
+            const startSession = this.sessionManager.getOrCreateSession(sessionId);
+            if (startSession.taskState === 'processing' || startSession.taskState === 'awaiting_approval') {
+                return null;
+            }
+
+            const dialogue = this.sessionManager.getRecentDialogue(
+                sessionId,
+                30,
+                this.options.maxDialogueChars ?? 50_000
+            );
             if (!dialogue || dialogue.trim().length === 0) {
                 return null;
             }
@@ -197,7 +212,6 @@ export class ContextConsolidator {
             }
 
             // 记录发起提炼前的会话状态指纹，用于识别网络请求期间是否有新交互或已发生轮换
-            const startSession = this.sessionManager.getOrCreateSession(sessionId);
             const startLastActiveAt = this.sessionManager.getLastActiveAt(sessionId);
             const startSeq = startSession.currentSeq;
             const startDshSessionId = startSession.dshSessionId;
@@ -242,15 +256,17 @@ export class ContextConsolidator {
                 return null;
             }
 
-            // 校验在外部网络请求等待期间，会话是否产生了新交互或被执行了轮换
+            // 校验在外部网络请求等待期间，会话是否处于执行状态、产生了新交互或被执行了轮换
             const currentLastActiveAt = this.sessionManager.getLastActiveAt(sessionId);
             const currentSession = this.sessionManager.getOrCreateSession(sessionId);
             if (
+                currentSession.taskState === 'processing' ||
+                currentSession.taskState === 'awaiting_approval' ||
                 currentLastActiveAt !== startLastActiveAt ||
                 currentSession.currentSeq !== startSeq ||
                 currentSession.dshSessionId !== startDshSessionId
             ) {
-                console.log(`[ContextConsolidator] 会话 ${sessionId} 提炼期间已产生新交互或轮换，丢弃过时提炼结果`);
+                console.log(`[ContextConsolidator] 会话 ${sessionId} 提炼期间处于执行中、已产生新交互或发生轮换，丢弃提炼结果`);
                 return null;
             }
 

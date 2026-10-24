@@ -345,6 +345,9 @@ export class AcpEngineManager {
         this.activeSessions.set(sessionId, assistantMessageId);
         this.scheduleTaskWatchdog(sessionId, assistantMessageId);
 
+        let pendingBackground: string | null = null;
+        let shouldRotate = false;
+
         try {
             // 初始状态更新须在预留的释放范围内：落盘或回调抛错时 finally 仍会释放预留，
             // 否则失败的请求会把会话永久锁在「进行中」，后续消息全部被静默拒绝
@@ -367,13 +370,13 @@ export class AcpEngineManager {
             const context = this.connection.context;
 
             // 检查基于人脑记忆模型的底层会话轮换门禁
-            const pendingBackground = this.sessionManager.getPendingBackground(sessionId);
+            pendingBackground = this.sessionManager.getPendingBackground(sessionId);
             const isEligible = this.sessionManager.isRotationEligible(
                 sessionId,
                 this.idleTimeoutMs,
                 this.minCapacityRatio
             );
-            const shouldRotate = pendingBackground !== null || isEligible;
+            shouldRotate = pendingBackground !== null || isEligible;
 
             if (shouldRotate) {
                 // 抛弃旧 DSH 会话绑定，重置为新会话建立
@@ -406,10 +409,7 @@ export class AcpEngineManager {
             // 构建 Prompt：轮换时注入预制背景提要与关键原文锚定，温热心流期沿用常规 Prompt
             let fullPrompt: string;
             if (shouldRotate) {
-                // 在发起新会话请求前，消费/清理提要，并重置新 DSH 会话的用量起点
-                if (pendingBackground) {
-                    this.sessionManager.clearPendingBackground(sessionId);
-                }
+                // 重置新 DSH 会话的用量起点（提要在首轮 prompt 成功交接后清理，若请求异常失败则保留提要供下次重试注入）
                 const session = this.sessionManager.getOrCreateSession(sessionId);
                 const asstIdx = session.messages.findIndex((m) => m.id === assistantMessageId);
                 const turnStartSeq = asstIdx > 0 && session.messages[asstIdx - 1]?.role === 'user'
@@ -443,8 +443,17 @@ export class AcpEngineManager {
                 }
             );
 
+            // 成功交接后消费/清理提要
+            if (shouldRotate && pendingBackground) {
+                this.sessionManager.clearPendingBackground(sessionId);
+            }
+
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
         } catch (err: unknown) {
+            // 若轮换首轮请求异常失败，恢复提要文件以支持用户后续重试注入
+            if (shouldRotate && pendingBackground) {
+                this.sessionManager.setPendingBackground(sessionId, pendingBackground);
+            }
             const message = err instanceof Error ? err.message : String(err);
             // 异常退出时先把进行中的工具终态化为失败，避免消息已标错而工具状态永远停留运行中
             const runtime = this.runtimes.get(sessionId);

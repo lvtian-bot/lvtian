@@ -905,15 +905,56 @@ export class SessionManager {
         }
     }
 
-    /** 提取近期对话文本供后台模型提炼心智接力备忘录 */
-    public getRecentDialogue(sessionId: string, maxMessages = 30): string {
+    /**
+     * 提取近期对话文本供后台模型提炼心智接力备忘录
+     * - 按消息轮次（默认最近 30 条）与字符预算上限（默认 50,000 字符）倒序截取并保持时间线正序
+     * - 单条超长消息截断并计入分隔符，预留模板与模型输出预算
+     */
+    public getRecentDialogue(
+        sessionId: string,
+        maxMessages = 30,
+        maxChars = 50_000
+    ): string {
         const session = this.getOrCreateSession(sessionId);
-        const validMsgs = session.messages
-            .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim().length > 0)
-            .slice(-maxMessages);
-        return validMsgs
-            .map((m) => `${m.role === 'user' ? '主人' : '助理'}: ${m.content.trim()}`)
-            .join('\n\n');
+        const validMsgs = session.messages.filter(
+            (m) => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim().length > 0
+        );
+        if (validMsgs.length === 0) {
+            return '';
+        }
+
+        const selected: string[] = [];
+        let accumulatedLength = 0;
+
+        for (let i = validMsgs.length - 1; i >= 0; i--) {
+            const m = validMsgs[i];
+            const speaker = m.role === 'user' ? '主人' : '助理';
+            let line = `${speaker}: ${m.content.trim()}`;
+
+            if (selected.length === 0) {
+                if (line.length > maxChars) {
+                    line = line.slice(0, Math.max(0, maxChars - 3)) + '...';
+                    selected.unshift(line);
+                    accumulatedLength = line.length;
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength = line.length;
+            } else {
+                const delimiterLength = 2; // '\n\n'
+                if (accumulatedLength + delimiterLength + line.length > maxChars) {
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength += delimiterLength + line.length;
+            }
+
+            if (selected.length >= maxMessages) {
+                break;
+            }
+        }
+
+        return selected.join('\n\n');
     }
 
     /**

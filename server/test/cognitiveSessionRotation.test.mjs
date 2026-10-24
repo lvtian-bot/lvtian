@@ -666,3 +666,115 @@ test('SessionManager resetSessionUsage 设定 activeSessionStartSeq，无上报�
         cleanupTempDir(tmpDir);
     }
 });
+
+test('SessionManager getRecentDialogue 对超长对话历史执行输入预算上限截取（默认 50,000 字符）', () => {
+    const tmpDir = createTempDir('lvtian-dialogue-budget-');
+    try {
+        const sm = new SessionManager(tmpDir);
+
+        // 构造多条各 60,000 字符的长消息（模拟 30 条各 60,000 字符的大体量历史对话）
+        const bigContent = '大容量上下文文本'.repeat(7500); // 60,000 字符
+        for (let i = 1; i <= 5; i++) {
+            sm.addMessage('main', { id: `u-${i}`, role: 'user', content: bigContent, timestamp: i * 10, status: 'sent' });
+            sm.addMessage('main', { id: `a-${i}`, role: 'assistant', content: bigContent, timestamp: i * 10 + 1, status: 'done' });
+        }
+
+        // 测试提取文本严格受控于 50,000 字符上限，避免提炼请求打爆下游 LLM 上下文窗口
+        const dialogue = sm.getRecentDialogue('main', 30, 50000);
+        assert.ok(dialogue.length <= 50000, `实际字符数 ${dialogue.length} 超过预算 50000`);
+        assert.ok(dialogue.endsWith('...'));
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('ContextConsolidator 排除正在执行 (processing/awaiting_approval) 的会话', async () => {
+    const tmpDir = createTempDir('lvtian-consolidate-running-');
+    try {
+        const sm = new SessionManager(tmpDir);
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '之前的问题', timestamp: 100, status: 'sent' });
+        // 上次真实交互时间为 4 小时前，但当前任务正在运行中（例如长时工具调用跨过 3 小时）
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
+        sm.setUsage('main', 40000, 128000);
+        sm.setTaskState('main', 'processing');
+
+        const consolidator = new ContextConsolidator(sm, {
+            apiKey: 'test-key',
+            fetchFn: async () => ({
+                ok: true,
+                status: 200,
+                json: async () => ({ choices: [{ message: { content: '提要内容' } }] }),
+            }),
+        });
+
+        // isEligible 与 consolidate 直接拦截排除运行中的会话
+        assert.strictEqual(consolidator.isEligible('main'), false);
+        const res = await consolidator.consolidate('main');
+        assert.strictEqual(res, null);
+        assert.strictEqual(sm.hasPendingBackground('main'), false);
+
+        // scanAllSessions 也跳过运行中的会话
+        const scanned = await consolidator.scanAllSessions();
+        assert.deepStrictEqual(scanned, []);
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支持重试注入', async () => {
+    const tmpDir = createTempDir('lvtian-engine-retry-memo-');
+    try {
+        const mm = new MemoryManager(tmpDir);
+        const sm = new SessionManager(tmpDir);
+        let shouldFailPrompt = true;
+
+        const mockEngine = acp.agent({ name: 'mock-failing-engine' })
+            .onRequest(acp.methods.agent.initialize, () => ({
+                protocolVersion: acp.PROTOCOL_VERSION,
+                agentCapabilities: {},
+            }))
+            .onRequest(acp.methods.agent.authenticate, () => ({}))
+            .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'engine-new-1' }))
+            .onRequest(acp.methods.agent.session.prompt, async (c) => {
+                if (shouldFailPrompt) {
+                    throw new Error('Connection reset by peer');
+                }
+                return { stopReason: 'end_turn' };
+            });
+
+        const engine = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(mockEngine),
+        });
+
+        // 预设背景提要
+        const memo = '### 1. 核心共识\n重要备忘录';
+        sm.setPendingBackground('main', memo);
+        assert.strictEqual(sm.hasPendingBackground('main'), true);
+
+        // 首轮请求触发轮换，但在发送 prompt 时失败
+        await engine.execute('main', 'asst-1', '你好', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+
+        // 重点：请求失败后提要文件依然保留在磁盘上（支持重试注入）
+        assert.strictEqual(sm.hasPendingBackground('main'), true);
+        assert.strictEqual(sm.getPendingBackground('main'), memo);
+
+        // 用户发起重试：底层连接恢复
+        shouldFailPrompt = false;
+        await engine.execute('main', 'asst-2', '你好（重试）', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+
+        // 成功交接后提要被正常消费清理
+        assert.strictEqual(sm.hasPendingBackground('main'), false);
+
+        await engine.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
