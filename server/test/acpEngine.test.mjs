@@ -90,6 +90,7 @@ function createMockEngineApp(options = {}) {
                     ],
                 });
                 const [p1, p2] = await Promise.all([askPermission('perm-a'), askPermission('perm-b')]);
+                options.permissionOutcomeLog?.push(`${p1.outcome.outcome}|${p2.outcome.outcome}`);
                 await notify({
                     sessionUpdate: 'agent_message_chunk',
                     content: { type: 'text', text: `double-${p1.outcome.outcome}-${p2.outcome.outcome}` },
@@ -599,4 +600,44 @@ test('停止后引擎无响应：超时强制回收连接并释放会话占用',
     const events2 = [];
     await manager.execute('main', 'asst-2', '回收后的新任务', collectCallbacks(events2));
     assert.strictEqual(lastStatus(events2), 'done', '强制回收后应能重建引擎并继续执行');
+});
+
+test('停止后引擎快速收尾时：回收计时器不误杀同会话的后续请求', async () => {
+    const { manager, sessionManager } = buildManager(
+        { toolRunningMs: 300 }, // 引擎 300ms 后自行结束当前轮（短于回收窗口）
+        { stopTimeoutMs: 500 }
+    );
+    const events1 = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing = manager.execute('main', 'asst-1', '长任务', collectCallbacks(events1));
+
+    await delay(100);
+    manager.stop('main');
+    await executing; // 引擎在回收窗口内正常收尾，连接保持存活
+
+    // 立即在同会话发起新请求：旧回收计时器（500ms）到点时不得关闭新请求的连接
+    const events2 = [];
+    sessionManager.addMessage('main', { id: 'asst-2', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing2 = manager.execute('main', 'asst-2', '回收窗口内的新任务', collectCallbacks(events2));
+    await delay(600); // 跨过旧计时器的触发点
+    await executing2;
+
+    assert.strictEqual(lastStatus(events2), 'done', '旧回收计时器不得中断同会话的后续请求');
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'completed');
+});
+
+test('并发审批其一超时：其余审批一并取消，任务停止后不再授权', async () => {
+    const outcomeLog = [];
+    const { manager, sessionManager } = buildManager(
+        { doublePermission: true, permissionOutcomeLog: outcomeLog },
+        { approvalTimeoutMs: 100 }
+    );
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    await manager.execute('main', 'asst-1', '并发审批任务', collectCallbacks(events));
+
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'stopped', '任一审批超时即终止任务');
+    assert.deepStrictEqual(outcomeLog, ['cancelled|cancelled'], '超时后同会话其余审批不得向引擎传递授权选择');
+    const stoppedEvent = [...events].reverse().find((e) => e.kind === 'status' && e.status === 'stopped');
+    assert.ok(stoppedEvent, '超时审批应广播 stopped 终态');
 });

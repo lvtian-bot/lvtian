@@ -141,6 +141,8 @@ export class AcpEngineManager {
     private stoppedSessions: Set<string> = new Set();
     /** 审批 ID 序号：Date.now() 毫秒精度不足，并发审批需序列号保证唯一 */
     private approvalSeq = 0;
+    /** 停止回收计时器（键为会话 ID）：执行结束即取消，防止误杀同会话的后续请求 */
+    private stopRecoveryTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
     constructor(
         workspace: string,
@@ -163,6 +165,10 @@ export class AcpEngineManager {
     }
 
     public handleApproval(sessionId: string, approvalId: string, approved: boolean): boolean {
+        // 任务已停止：审批已在停止时被统一拒绝，不再受理应答
+        if (this.stoppedSessions.has(sessionId)) {
+            return false;
+        }
         const pending = this.pendingPermissions.get(approvalId);
         if (!pending || pending.sessionId !== sessionId) {
             return false;
@@ -188,7 +194,7 @@ export class AcpEngineManager {
                 console.warn(`[AcpEngine] 发送取消通知失败: ${err instanceof Error ? err.message : String(err)}`);
             });
             // 引擎可能对取消通知无响应（卡死），超时兜底强制回收连接，防止会话被挂死的 prompt 永久占用
-            this.scheduleStopRecovery(sessionId);
+            this.scheduleStopRecovery(sessionId, runtime.assistantMessageId);
             return true;
         }
 
@@ -213,11 +219,14 @@ export class AcpEngineManager {
      * 停止后的超时兜底：引擎收到取消通知仍未结束当前轮（进程或工具卡死）时，
      * 强制关闭引擎连接——挂起的 prompt 请求随连接断开 reject，各占用会话经 execute
      * 的 stopped 分支收尾并释放预留；引擎在下次请求时懒重启。对齐旧 DshRunner 停止后 2 秒强制终止的保障水位。
+     * 计时器绑定被停止的那次执行（以助理消息 ID 为身份）：窗口内该执行已结束、同会话开启新请求时不误杀新连接。
      */
-    private scheduleStopRecovery(sessionId: string): void {
+    private scheduleStopRecovery(sessionId: string, assistantMessageId: string): void {
+        clearTimeout(this.stopRecoveryTimers.get(sessionId));
         const timer = setTimeout(() => {
-            if (!this.activeSessions.has(sessionId)) {
-                return; // 引擎已在超时窗口内正常结束，无需回收
+            this.stopRecoveryTimers.delete(sessionId);
+            if (this.activeSessions.get(sessionId) !== assistantMessageId) {
+                return; // 被停止的执行已结束（同会话新请求占用或空闲），不属于本次回收范围
             }
             console.warn(`[AcpEngine] 停止后 ${this.stopTimeoutMs}ms 引擎仍未结束，强制回收引擎连接`);
             // 与 stopAll 相同模式：同步置空连接并清理映射再关闭。
@@ -231,6 +240,7 @@ export class AcpEngineManager {
         }, this.stopTimeoutMs);
         // 计时器不得阻止进程退出（Node Timeout 专属能力，其他环境安全跳过）
         timer.unref?.();
+        this.stopRecoveryTimers.set(sessionId, timer);
     }
 
     /** 优雅关停：停止全部受理中的任务（含引擎启动窗口）、等待启动中的引擎就位后关闭连接 */
@@ -341,6 +351,12 @@ ${userPrompt}`;
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
             this.activeSessions.delete(sessionId);
+            // 执行已收尾：取消停止回收计时器，避免误杀同会话的后续请求
+            const recoveryTimer = this.stopRecoveryTimers.get(sessionId);
+            if (recoveryTimer) {
+                clearTimeout(recoveryTimer);
+                this.stopRecoveryTimers.delete(sessionId);
+            }
         }
     }
 
@@ -700,6 +716,8 @@ ${userPrompt}`;
             console.warn(`[AcpEngine] 审批 ${approvalId} 超时未应答，自动拒绝`);
             // 引擎收到拒绝后会走完当前轮（end_turn），标记停止以防终态被覆盖为 completed
             this.stoppedSessions.add(sessionId);
+            // 任务已因超时终止：同会话其余挂起审批一并取消，不得再向引擎传递任何授权
+            this.rejectPendingPermission(sessionId, 'approval_timeout');
             this.sessionManager.updateMessage(sessionId, runtime.assistantMessageId, (m) => {
                 m.status = 'error';
                 m.errorMessage = 'approval_timeout';
@@ -707,6 +725,11 @@ ${userPrompt}`;
             this.sessionManager.setTaskState(sessionId, 'stopped');
             // 持久化之外必须经回调广播终态，否则客户端实时视图停留在等待审批，直到重连对账才能修正
             runtime.callbacks.onStatusChange('stopped', { code: 'approval_timeout' });
+            return { outcome: { outcome: 'cancelled' } };
+        }
+
+        // 任务已被停止（手动终止或并发审批超时终止）：应答作废，不向引擎传递授权选择
+        if (this.stoppedSessions.has(sessionId)) {
             return { outcome: { outcome: 'cancelled' } };
         }
 
