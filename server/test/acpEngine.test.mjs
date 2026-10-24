@@ -218,6 +218,7 @@ test('审批超时：自动拒绝并终态为 stopped，消息标注终止原因
     const msg = session.messages.find((m) => m.id === 'asst-1');
     assert.strictEqual(msg.status, 'error');
     assert.match(msg.errorMessage, /审批超时/);
+    assert.strictEqual(lastStatus(events), 'stopped', '超时应经回调广播终态而非仅改持久化');
 });
 
 test('手动停止：消息标错、任务终态 stopped', async () => {

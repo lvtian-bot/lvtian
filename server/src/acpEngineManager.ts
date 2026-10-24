@@ -14,7 +14,8 @@ export interface EngineCallbacks {
     onFinalText?: (fullText: string) => void;
     onToolCall: (toolCall: ToolCallState) => void;
     onApprovalRequest?: (request: ApprovalRequest) => void;
-    onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error', error?: string) => void;
+    /** stopped 为模块内部终态（如审批超时自动拒绝），无对应客户端报文触发，须主动广播 */
+    onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error' | 'stopped', error?: string) => void;
 }
 
 /** 已建立的引擎连接：生产环境为 dsh 子进程的 stdio 流，测试可注入进程内模拟 */
@@ -644,6 +645,8 @@ ${userPrompt}`;
                 m.errorMessage = '审批超时未应答，任务已终止';
             });
             this.sessionManager.setTaskState(sessionId, 'stopped');
+            // 持久化之外必须经回调广播终态，否则客户端实时视图停留在等待审批，直到重连对账才能修正
+            runtime.callbacks.onStatusChange('stopped', '审批超时未应答，任务已终止');
             return { outcome: { outcome: 'cancelled' } };
         }
 
