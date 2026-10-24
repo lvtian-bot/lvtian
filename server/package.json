@@ -1,6 +1,6 @@
 {
   "name": "lvtian-server",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "Lvtian Personal Assistant Independent Server",
   "type": "module",

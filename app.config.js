@@ -155,11 +155,11 @@ module.exports = {
         ios: {
             supportsTablet: true,
             bundleIdentifier: "com.lvtian",
-            buildNumber: "21"
+            buildNumber: "22"
         },
         android: {
             package: "com.lvtian",
-            versionCode: 21,
+            versionCode: 22,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",
