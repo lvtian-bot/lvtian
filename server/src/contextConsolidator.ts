@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { SessionManager } from './sessionManager.js';
 
 export interface ContextConsolidatorOptions {
-    /** 模型 API 访问密钥，默认从 DEEPSEEK_API_KEY 或 OPENAI_API_KEY 获取 */
+    /** 模型 API 访问密钥，默认成组从 DEEPSEEK_API_KEY 或 OPENAI_API_KEY 获取 */
     apiKey?: string;
-    /** 模型接口 Base URL，默认 https://api.deepseek.com */
+    /** 模型接口 Base URL，默认根据提供方匹配 https://api.deepseek.com 或 https://api.openai.com */
     baseUrl?: string;
-    /** 模型名称，默认 deepseek-chat */
+    /** 模型名称，默认根据提供方匹配 deepseek-chat 或 gpt-4o-mini */
     model?: string;
     /** 外置提示词模板文件绝对路径，默认指向 server/prompts/context_consolidation.md */
     promptPath?: string;
@@ -18,6 +18,50 @@ export interface ContextConsolidatorOptions {
     minCapacityRatio?: number;
     /** 测试注入自定义 fetch 实现 */
     fetchFn?: typeof fetch;
+}
+
+export interface ResolvedProviderConfig {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+}
+
+export function resolveProviderConfig(
+    options: ContextConsolidatorOptions = {}
+): ResolvedProviderConfig | null {
+    // 1. 如果调用方显式提供了 apiKey
+    if (options.apiKey) {
+        const isOpenAiHint =
+            Boolean(options.model?.toLowerCase().startsWith('gpt')) ||
+            Boolean(options.baseUrl && options.baseUrl.includes('openai.com'));
+        const defaultBaseUrl = isOpenAiHint ? 'https://api.openai.com' : 'https://api.deepseek.com';
+        const defaultModel = isOpenAiHint ? 'gpt-4o-mini' : 'deepseek-chat';
+        return {
+            apiKey: options.apiKey,
+            baseUrl: options.baseUrl ?? defaultBaseUrl,
+            model: options.model ?? defaultModel,
+        };
+    }
+
+    // 2. 优先按 DeepSeek 环境变量成组读取
+    if (process.env.DEEPSEEK_API_KEY) {
+        return {
+            apiKey: process.env.DEEPSEEK_API_KEY,
+            baseUrl: options.baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com',
+            model: options.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
+        };
+    }
+
+    // 3. 其次按 OpenAI 环境变量成组读取 (严禁跨厂商错位发送凭据)
+    if (process.env.OPENAI_API_KEY) {
+        return {
+            apiKey: process.env.OPENAI_API_KEY,
+            baseUrl: options.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com',
+            model: options.model ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+        };
+    }
+
+    return null;
 }
 
 const DEFAULT_CONSOLIDATION_PROMPT = `你是一位深谙主人心意的私人机要参谋。
@@ -146,33 +190,30 @@ export class ContextConsolidator {
                 return null;
             }
 
-            const apiKey = this.options.apiKey
-                ?? process.env.DEEPSEEK_API_KEY
-                ?? process.env.OPENAI_API_KEY;
-            if (!apiKey) {
+            const providerConfig = resolveProviderConfig(this.options);
+            if (!providerConfig) {
                 console.log(`[ContextConsolidator] 未配置 DEEPSEEK_API_KEY / OPENAI_API_KEY，跳过后台背景提炼`);
                 return null;
             }
 
+            // 记录发起提炼前的会话状态指纹，用于识别网络请求期间是否有新交互或已发生轮换
+            const startSession = this.sessionManager.getOrCreateSession(sessionId);
+            const startLastActiveAt = this.sessionManager.getLastActiveAt(sessionId);
+            const startSeq = startSession.currentSeq;
+            const startDshSessionId = startSession.dshSessionId;
+
             const promptTemplate = await this.loadPromptTemplate();
-            const baseUrl = this.options.baseUrl
-                ?? process.env.DEEPSEEK_BASE_URL
-                ?? process.env.OPENAI_BASE_URL
-                ?? 'https://api.deepseek.com';
-            const endpoint = normalizeChatCompletionsUrl(baseUrl);
-            const model = this.options.model
-                ?? process.env.DEEPSEEK_MODEL
-                ?? 'deepseek-chat';
+            const endpoint = normalizeChatCompletionsUrl(providerConfig.baseUrl);
 
             const fetchFn = this.options.fetchFn ?? globalThis.fetch;
             const res = await fetchFn(endpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    Authorization: `Bearer ${apiKey}`,
+                    Authorization: `Bearer ${providerConfig.apiKey}`,
                 },
                 body: JSON.stringify({
-                    model,
+                    model: providerConfig.model,
                     messages: [
                         { role: 'system', content: promptTemplate },
                         {
@@ -198,6 +239,18 @@ export class ContextConsolidator {
             const extracted = data.choices?.[0]?.message?.content?.trim();
             if (!extracted) {
                 console.warn('[ContextConsolidator] 模型未返回有效提要内容');
+                return null;
+            }
+
+            // 校验在外部网络请求等待期间，会话是否产生了新交互或被执行了轮换
+            const currentLastActiveAt = this.sessionManager.getLastActiveAt(sessionId);
+            const currentSession = this.sessionManager.getOrCreateSession(sessionId);
+            if (
+                currentLastActiveAt !== startLastActiveAt ||
+                currentSession.currentSeq !== startSeq ||
+                currentSession.dshSessionId !== startDshSessionId
+            ) {
+                console.log(`[ContextConsolidator] 会话 ${sessionId} 提炼期间已产生新交互或轮换，丢弃过时提炼结果`);
                 return null;
             }
 

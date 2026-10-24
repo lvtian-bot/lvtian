@@ -17,6 +17,8 @@ export interface SessionData {
     contextTokens?: number;
     /** 上下文窗口总大小 (tokens)，默认 128_000 */
     contextWindowSize?: number;
+    /** 当前 DSH 实例建立时的 seq 起点，用于无 usage_update 时准确估算新会话增量 */
+    activeSessionStartSeq?: number;
 }
 
 /**
@@ -43,6 +45,7 @@ type SessionLogEvent =
           lastActiveAt?: number;
           contextTokens?: number;
           contextWindowSize?: number;
+          activeSessionStartSeq?: number;
       }
     | { t: 'msg'; at: number; seq: number; m: AssistantMessage }
     | { t: 'delta'; at: number; seq: number; id: string; d: string }
@@ -50,7 +53,7 @@ type SessionLogEvent =
     | { t: 'dsh'; at: number; dshSessionId: string }
     | { t: 'seq'; at: number; seq: number }
     | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
-    | { t: 'usage'; at: number; contextTokens: number; contextWindowSize?: number };
+    | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number };
 
 const ACTIVE_LOG = 'events.jsonl';
 const SEGMENT_PREFIX = 'seg.';
@@ -130,6 +133,7 @@ export class SessionManager {
             lastActiveAt: undefined,
             contextTokens: undefined,
             contextWindowSize: undefined,
+            activeSessionStartSeq: 0,
         };
     }
 
@@ -145,6 +149,7 @@ export class SessionManager {
             lastActiveAt: session.lastActiveAt,
             contextTokens: session.contextTokens,
             contextWindowSize: session.contextWindowSize,
+            activeSessionStartSeq: session.activeSessionStartSeq,
         };
     }
 
@@ -327,6 +332,7 @@ export class SessionManager {
                 session.lastActiveAt = ev.lastActiveAt;
                 session.contextTokens = ev.contextTokens;
                 session.contextWindowSize = ev.contextWindowSize;
+                session.activeSessionStartSeq = ev.activeSessionStartSeq;
                 break;
             case 'msg': {
                 const idx = session.messages.findIndex((m) => m.id === ev.m.id);
@@ -375,6 +381,7 @@ export class SessionManager {
             case 'usage':
                 session.contextTokens = ev.contextTokens;
                 if (ev.contextWindowSize !== undefined) session.contextWindowSize = ev.contextWindowSize;
+                if (ev.activeSessionStartSeq !== undefined) session.activeSessionStartSeq = ev.activeSessionStartSeq;
                 session.updatedAt = ev.at;
                 break;
         }
@@ -789,27 +796,33 @@ export class SessionManager {
         });
     }
 
-    /** 会话轮换到新 DSH 实例时，重置底层 Token 统计 */
-    public resetSessionUsage(sessionId: string): void {
+    /** 会话轮换到新 DSH 实例时，重置底层 Token 统计与估算起点 */
+    public resetSessionUsage(sessionId: string, startSeq?: number): void {
         const session = this.getOrCreateSession(sessionId);
-        session.contextTokens = 0;
+        session.contextTokens = undefined;
+        const resolvedStartSeq = startSeq ?? (session.currentSeq + 1);
+        session.activeSessionStartSeq = resolvedStartSeq;
         this.appendEvent(sessionId, {
             t: 'usage',
             at: Date.now(),
-            contextTokens: 0,
+            contextTokens: undefined,
             contextWindowSize: session.contextWindowSize,
+            activeSessionStartSeq: resolvedStartSeq,
         });
     }
 
-    /** 估算当前会话累积字符折合 Token（中英混合按约 2 字符/Token 估算） */
+    /** 估算当前会话累积字符折合 Token（中英混合按约 2 字符/Token 估算，仅统计当前 DSH 实例的消息） */
     public estimateTokens(sessionId: string): number {
         const session = this.getOrCreateSession(sessionId);
+        const startSeq = session.activeSessionStartSeq ?? 0;
         let totalChars = 0;
         for (const msg of session.messages) {
-            totalChars += msg.content?.length ?? 0;
-            if (msg.toolCalls) {
-                for (const t of msg.toolCalls) {
-                    totalChars += (t.name?.length ?? 0) + (t.summary?.length ?? 0);
+            if ((msg.seq ?? 0) >= startSeq) {
+                totalChars += msg.content?.length ?? 0;
+                if (msg.toolCalls) {
+                    for (const t of msg.toolCalls) {
+                        totalChars += (t.name?.length ?? 0) + (t.summary?.length ?? 0);
+                    }
                 }
             }
         }
@@ -905,19 +918,36 @@ export class SessionManager {
 
     /**
      * 关键原文物理锚定规则（Verbatim Anchoring）：
-     * 回溯最近 5~8 轮交互，字数封顶 1500~2000 字（默认 1800），倒序自适应追加截断并保持时间线正序
+     * 回溯最近 5~8 轮交互，字数封顶 1500~2000 字（默认 1800），倒序自适应追加截断并保持时间线正序。
+     * - 对首条超长消息执行有界截取（maxChars - 3 + '...'）
+     * - 将分隔符（\n\n，2字符）计入字符预算
+     * - 支持排除当前轮次输入（避免在提示词中重复出现）
      */
     public getVerbatimExcerpts(
         sessionId: string,
         maxTurns = 8,
-        maxChars = 1800
+        maxChars = 1800,
+        options?: { excludePrompt?: string }
     ): string {
         const session = this.getOrCreateSession(sessionId);
-        const dialogue = session.messages.filter(
+        let dialogue = session.messages.filter(
             (m) => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim().length > 0 && m.status !== 'error'
         );
         if (dialogue.length === 0) {
             return '';
+        }
+
+        if (options?.excludePrompt) {
+            const trimmedPrompt = options.excludePrompt.trim();
+            for (let i = dialogue.length - 1; i >= 0; i--) {
+                if (dialogue[i].role === 'user' && dialogue[i].content.trim() === trimmedPrompt) {
+                    dialogue = dialogue.slice(0, i).concat(dialogue.slice(i + 1));
+                    break;
+                }
+            }
+            if (dialogue.length === 0) {
+                return '';
+            }
         }
 
         const selected: string[] = [];
@@ -927,12 +957,26 @@ export class SessionManager {
         for (let i = dialogue.length - 1; i >= 0; i--) {
             const m = dialogue[i];
             const speaker = m.role === 'user' ? '主人' : '助理';
-            const line = `${speaker}: ${m.content.trim()}`;
-            if (accumulatedLength + line.length > maxChars && selected.length > 0) {
-                break;
+            let line = `${speaker}: ${m.content.trim()}`;
+
+            if (selected.length === 0) {
+                if (line.length > maxChars) {
+                    line = line.slice(0, Math.max(0, maxChars - 3)) + '...';
+                    selected.unshift(line);
+                    accumulatedLength = line.length;
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength = line.length;
+            } else {
+                const delimiterLength = 2; // '\n\n'
+                if (accumulatedLength + delimiterLength + line.length > maxChars) {
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength += delimiterLength + line.length;
             }
-            selected.unshift(line);
-            accumulatedLength += line.length;
+
             if (m.role === 'user') {
                 turnsCount++;
                 if (turnsCount >= maxTurns) {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { SessionManager } from '../dist/sessionManager.js';
-import { ContextConsolidator } from '../dist/contextConsolidator.js';
+import { ContextConsolidator, resolveProviderConfig } from '../dist/contextConsolidator.js';
 import { AcpEngineManager } from '../dist/acpEngineManager.js';
 import { MemoryManager } from '../dist/memoryManager.js';
 
@@ -517,8 +517,151 @@ test('AcpEngineManager 消费 usage_update 并按双重门禁在唤醒时切新�
         const secondSession = sm.getDshSessionId('main');
         assert.notStrictEqual(secondSession, firstSession);
         assert.strictEqual(tracker.createdSessions.length, 2);
+        // 重点：轮换后当轮引擎上报的真实用量（35000）被完整保留，未被后置 reset 错误清零
+        assert.strictEqual(sm.getUsage('main').tokens, 35000);
 
         await engine.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('resolveProviderConfig 成组绑定提供方：OPENAI 凭据与 DeepSeek 严格隔离', () => {
+    const prevEnv = { ...process.env };
+    try {
+        // 场景 1: 仅配置 OPENAI_API_KEY，严禁向 DeepSeek 地址错位发送
+        delete process.env.DEEPSEEK_API_KEY;
+        delete process.env.DEEPSEEK_BASE_URL;
+        delete process.env.DEEPSEEK_MODEL;
+        process.env.OPENAI_API_KEY = 'sk-openai-secret';
+
+        const openAiConfig = resolveProviderConfig();
+        assert.ok(openAiConfig);
+        assert.strictEqual(openAiConfig.apiKey, 'sk-openai-secret');
+        assert.strictEqual(openAiConfig.baseUrl, 'https://api.openai.com');
+        assert.strictEqual(openAiConfig.model, 'gpt-4o-mini');
+
+        // 场景 2: 配置 DEEPSEEK_API_KEY，成组解析 DeepSeek 地址与模型
+        process.env.DEEPSEEK_API_KEY = 'sk-deepseek-secret';
+        const deepseekConfig = resolveProviderConfig();
+        assert.ok(deepseekConfig);
+        assert.strictEqual(deepseekConfig.apiKey, 'sk-deepseek-secret');
+        assert.strictEqual(deepseekConfig.baseUrl, 'https://api.deepseek.com');
+        assert.strictEqual(deepseekConfig.model, 'deepseek-chat');
+
+        // 场景 3: 显式传入 apiKey 且带有 openai/gpt 特征时正确归属
+        const customOpenAi = resolveProviderConfig({
+            apiKey: 'sk-custom',
+            model: 'gpt-4o',
+        });
+        assert.strictEqual(customOpenAi?.baseUrl, 'https://api.openai.com');
+        assert.strictEqual(customOpenAi?.model, 'gpt-4o');
+    } finally {
+        process.env = prevEnv;
+    }
+});
+
+test('ContextConsolidator 在提炼等待期间发生新交互或轮换时丢弃过时结果，杜绝污染温热期新会话', async () => {
+    const tmpDir = createTempDir('lvtian-consolidation-race-');
+    try {
+        const sm = new SessionManager(tmpDir);
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '先前的交流记录', timestamp: 1000, status: 'sent' });
+        sm.recordActivity('main', 1000);
+
+        let resolveFetch;
+        const fetchGate = new Promise((resolve) => { resolveFetch = resolve; });
+
+        const mockFetch = async () => {
+            await fetchGate;
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    choices: [{ message: { content: '过时的旧对话提炼备忘录' } }],
+                }),
+            };
+        };
+
+        const consolidator = new ContextConsolidator(sm, {
+            apiKey: 'test-key',
+            fetchFn: mockFetch,
+        });
+
+        // 启动异步提炼（在 mockFetch 处挂起等待）
+        const consolidationPromise = consolidator.consolidate('main');
+
+        // 在网络请求等待期间，用户发送了新消息并刷新了真实活跃时间
+        await delay(10);
+        sm.addMessage('main', { id: 'u-2', role: 'user', content: '用户回来了并提问', timestamp: 2000, status: 'sent' });
+        sm.recordActivity('main', 2000);
+
+        // 此时网络请求返回
+        resolveFetch();
+        const result = await consolidationPromise;
+
+        // 结果应被识别为过时并丢弃，不写入 pending_background.txt
+        assert.strictEqual(result, null);
+        assert.strictEqual(sm.hasPendingBackground('main'), false);
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('SessionManager 原文锚定（Verbatim Anchoring）对超长消息执行有界截取并排除当前轮输入', () => {
+    const tmpDir = createTempDir('lvtian-verbatim-bounds-');
+    try {
+        const sm = new SessionManager(tmpDir);
+
+        // 历史消息 1
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '较早的问题', timestamp: 100, status: 'sent' });
+        sm.addMessage('main', { id: 'a-1', role: 'assistant', content: '较早的回答', timestamp: 101, status: 'done' });
+
+        // 超长消息（模拟用户粘贴的 60,000 字符长文）
+        const hugeContent = '长文本内容'.repeat(12000); // 60,000 字符
+        sm.addMessage('main', { id: 'u-2', role: 'user', content: hugeContent, timestamp: 200, status: 'sent' });
+
+        // 1. 测试单条超长消息截断：上限 1800 字符，且不得绕过字符限制
+        const excerpt = sm.getVerbatimExcerpts('main', 8, 1800);
+        assert.ok(excerpt.length <= 1800, `实际字符数 ${excerpt.length} 超过预算 1800`);
+        assert.ok(excerpt.endsWith('...'));
+
+        // 2. 测试排除当前指令选项：当前指令不应在关键原文锚定与当前提问中重复出现
+        const excerptExcludingPrompt = sm.getVerbatimExcerpts('main', 8, 1800, {
+            excludePrompt: hugeContent,
+        });
+        assert.ok(!excerptExcludingPrompt.includes('长文本内容'));
+        assert.ok(excerptExcludingPrompt.includes('较早的问题'));
+        assert.ok(excerptExcludingPrompt.includes('较早的回答'));
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('SessionManager resetSessionUsage 设定 activeSessionStartSeq，无上报时动态累加新会话增量', () => {
+    const tmpDir = createTempDir('lvtian-usage-reset-');
+    try {
+        const sm = new SessionManager(tmpDir);
+
+        // 旧会话累积了若干历史消息
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '旧消息1 (历史长文本) '.repeat(50), timestamp: 100, status: 'sent' });
+        sm.addMessage('main', { id: 'a-1', role: 'assistant', content: '旧回复1 (历史长文本) '.repeat(50), timestamp: 101, status: 'done' });
+
+        // 此时估算 Token 包含了旧消息
+        const oldEstimate = sm.getUsage('main').tokens;
+        assert.ok(oldEstimate > 200);
+
+        // 轮换至新 DSH 实例：重置用量
+        sm.resetSessionUsage('main');
+        assert.strictEqual(sm.getUsage('main').tokens, 0);
+
+        // 新会话产生第一轮交互
+        sm.addMessage('main', { id: 'u-2', role: 'user', content: '新会话第一轮提问：测试估算逻辑', timestamp: 200, status: 'sent' });
+        sm.addMessage('main', { id: 'a-2', role: 'assistant', content: '新会话第一轮回答：成功返回', timestamp: 201, status: 'done' });
+
+        // 此时在无 usage_update 上报的情况下，估算 Token 仅统计新会话增量，不混入旧会话的 200+ tokens
+        const newEstimate = sm.getUsage('main').tokens;
+        assert.ok(newEstimate > 0);
+        assert.ok(newEstimate < oldEstimate);
     } finally {
         cleanupTempDir(tmpDir);
     }

@@ -406,7 +406,20 @@ export class AcpEngineManager {
             // 构建 Prompt：轮换时注入预制背景提要与关键原文锚定，温热心流期沿用常规 Prompt
             let fullPrompt: string;
             if (shouldRotate) {
-                const verbatim = this.sessionManager.getVerbatimExcerpts(sessionId);
+                // 在发起新会话请求前，消费/清理提要，并重置新 DSH 会话的用量起点
+                if (pendingBackground) {
+                    this.sessionManager.clearPendingBackground(sessionId);
+                }
+                const session = this.sessionManager.getOrCreateSession(sessionId);
+                const asstIdx = session.messages.findIndex((m) => m.id === assistantMessageId);
+                const turnStartSeq = asstIdx > 0 && session.messages[asstIdx - 1]?.role === 'user'
+                    ? (session.messages[asstIdx - 1].seq ?? session.currentSeq)
+                    : (asstIdx >= 0 ? (session.messages[asstIdx].seq ?? session.currentSeq) : session.currentSeq);
+                this.sessionManager.resetSessionUsage(sessionId, turnStartSeq);
+
+                const verbatim = this.sessionManager.getVerbatimExcerpts(sessionId, 8, 1800, {
+                    excludePrompt: userPrompt,
+                });
                 const sections: string[] = [
                     `[系统背景与主人长期档案]\n${this.engineSystemPrompt}`,
                 ];
@@ -429,14 +442,6 @@ export class AcpEngineManager {
                     prompt: [{ type: 'text', text: fullPrompt }],
                 }
             );
-
-            // 成功下发后消费/清理提要，并重置新 DSH 会话的用量
-            if (shouldRotate) {
-                if (pendingBackground) {
-                    this.sessionManager.clearPendingBackground(sessionId);
-                }
-                this.sessionManager.resetSessionUsage(sessionId);
-            }
 
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
         } catch (err: unknown) {
