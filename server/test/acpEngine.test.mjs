@@ -349,6 +349,22 @@ test('停止后到达的引擎迟到事件不回写消息状态', async () => {
     assert.strictEqual(session.taskState, 'stopped');
 });
 
+test('停止后到达的迟到审批请求被直接拒绝，不弹审批卡', async () => {
+    const { manager, sessionManager } = buildManager({ chunkCount: 1, chunkDelayMs: 200, enablePermission: true });
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing = manager.execute('main', 'asst-1', '长任务', collectCallbacks(events));
+
+    await new Promise((resolve) => setTimeout(resolve, 100)); // chunk 尚未发出，任务执行中
+    manager.stop('main');
+    await executing; // mock 引擎无取消感知，继续发 chunk 与审批请求
+
+    assert.strictEqual(events.filter((e) => e.kind === 'approval').length, 0, '迟到审批不应转发为审批卡');
+    const session = sessionManager.getOrCreateSession('main');
+    assert.strictEqual(session.taskState, 'stopped', '任务应保持停止而非回到等待审批');
+    assert.strictEqual(session.pendingApproval, undefined, '不应登记待审批项');
+});
+
 test('工具失败时终态为 failed，且不被后续事件覆盖为成功', async () => {
     const { manager } = buildManager({ chunkCount: 1, emitFailedTool: true });
     const events = [];

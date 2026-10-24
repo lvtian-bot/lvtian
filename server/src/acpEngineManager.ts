@@ -614,6 +614,11 @@ ${userPrompt}`;
             return { outcome: { outcome: 'cancelled' } };
         }
 
+        // 用户已停止：迟到的审批请求不注册不广播，直接拒绝，防止任务被改回等待审批
+        if (this.stoppedSessions.has(sessionId)) {
+            return { outcome: { outcome: 'cancelled' } };
+        }
+
         const approvalId = `apr-${Date.now()}`;
         const request: ApprovalRequest = {
             approvalId,
