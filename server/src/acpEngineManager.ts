@@ -108,6 +108,8 @@ export class AcpEngineManager {
     private engineDead = false;
     private engineSystemPrompt = '';
 
+    /** 已受理（含引擎启动、建会话窗口）的全部会话：execute 入口同步注册，用于并发去重与 stop 响应 */
+    private activeSessions: Set<string> = new Set();
     private runtimes: Map<string, SessionRuntime> = new Map();
     /** 引擎侧会话 ID → 绿天会话 ID 反查（审批请求与事件路由使用） */
     private engineSessionIndex: Map<string, string> = new Map();
@@ -130,7 +132,7 @@ export class AcpEngineManager {
     }
 
     public isRunning(sessionId: string): boolean {
-        return this.runtimes.has(sessionId);
+        return this.activeSessions.has(sessionId);
     }
 
     public handleApproval(sessionId: string, approvalId: string, approved: boolean): boolean {
@@ -147,20 +149,27 @@ export class AcpEngineManager {
     /** 手动停止：通知引擎取消当前轮次，并就地终态化消息状态（引擎侧 cancelled 响应到达后跳过重复终态） */
     public stop(sessionId: string): boolean {
         const runtime = this.runtimes.get(sessionId);
-        if (!runtime) {
-            return false;
+        if (runtime) {
+            this.stoppedSessions.add(sessionId);
+            this.rejectPendingPermission(sessionId, '任务已被手动终止');
+            this.sessionManager.setTaskState(sessionId, 'stopped');
+            this.sessionManager.updateMessage(sessionId, runtime.assistantMessageId, (m) => {
+                m.status = 'error';
+                m.errorMessage = '任务已被手动终止';
+            });
+            this.connection?.context.notify('session/cancel', { sessionId: runtime.engineSessionId }).catch((err) => {
+                console.warn(`[AcpEngine] 发送取消通知失败: ${err instanceof Error ? err.message : String(err)}`);
+            });
+            return true;
         }
-        this.stoppedSessions.add(sessionId);
-        this.rejectPendingPermission(sessionId, '任务已被手动终止');
-        this.sessionManager.setTaskState(sessionId, 'stopped');
-        this.sessionManager.updateMessage(sessionId, runtime.assistantMessageId, (m) => {
-            m.status = 'error';
-            m.errorMessage = '任务已被手动终止';
-        });
-        this.connection?.context.notify('session/cancel', { sessionId: runtime.engineSessionId }).catch((err) => {
-            console.warn(`[AcpEngine] 发送取消通知失败: ${err instanceof Error ? err.message : String(err)}`);
-        });
-        return true;
+
+        // 引擎启动/建会话窗口：任务已受理但 prompt 尚未发出，标记停止由 execute 的检查点终态化
+        if (this.activeSessions.has(sessionId)) {
+            this.stoppedSessions.add(sessionId);
+            this.sessionManager.setTaskState(sessionId, 'stopped');
+            return true;
+        }
+        return false;
     }
 
     /** 优雅关停：应答全部挂起审批、取消全部任务、关闭引擎连接 */
@@ -170,6 +179,9 @@ export class AcpEngineManager {
         }
         const conn = this.connection;
         this.connection = null;
+        // 主动关停将 connection 置空，closed 处理器的连接比对不再命中，
+        // 连接级会话映射须在此显式清理，否则下次懒重启后会话被误判为本连接活跃会话
+        this.engineSessionIndex.clear();
         if (conn) {
             await conn.close().catch((err: unknown) => {
                 console.warn(`[AcpEngine] 关闭引擎连接失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
@@ -183,9 +195,12 @@ export class AcpEngineManager {
         userPrompt: string,
         callbacks: EngineCallbacks
     ): Promise<void> {
-        if (this.isRunning(sessionId)) {
+        // 入口同步预留（任何 await 之前）：同一会话的并发消息在此被拒绝，
+        // 否则引擎启动/建会话窗口内两次调用都会通过检查、互踩运行时状态
+        if (this.activeSessions.has(sessionId)) {
             return;
         }
+        this.activeSessions.add(sessionId);
 
         this.sessionManager.setTaskState(sessionId, 'processing');
         callbacks.onStatusChange('thinking');
@@ -197,6 +212,13 @@ export class AcpEngineManager {
             }
             const context = this.connection.context;
             const engineSessionId = await this.resolveEngineSession(sessionId);
+
+            // 启动/建会话窗口内收到手动停止：不再发送 prompt，直接终态化退出
+            if (this.stoppedSessions.has(sessionId)) {
+                this.stoppedSessions.delete(sessionId);
+                this.sessionManager.setTaskState(sessionId, 'stopped');
+                return;
+            }
 
             const runtime: SessionRuntime = {
                 assistantMessageId,
@@ -236,6 +258,8 @@ ${userPrompt}`;
             console.error(`[AcpEngine] 执行任务异常: ${message}`);
             callbacks.onStatusChange('error', message);
             this.sessionManager.setTaskState(sessionId, 'error');
+        } finally {
+            this.activeSessions.delete(sessionId);
         }
     }
 
@@ -335,29 +359,55 @@ ${userPrompt}`;
         const stopSignal = new Promise<void>((resolve) => {
             resolveStop = resolve;
         });
-        // onConnect 在连接建立时同步回调，借此把连接内的 ClientContext 透出
         let resolveContext!: (ctx: acp.ClientContext) => void;
-        const contextReady = new Promise<acp.ClientContext>((resolve) => {
+        let rejectContext!: (err: Error) => void;
+        let resolveHandshake!: () => void;
+        let rejectHandshake!: (err: Error) => void;
+        const contextReady = new Promise<acp.ClientContext>((resolve, reject) => {
             resolveContext = resolve;
+            rejectContext = reject;
         });
-        app.onConnect((conn) => resolveContext(conn.agent));
+        // 握手屏障：context 就绪不代表引擎可用（spawn 失败时 onConnect 仍会触发），
+        // 必须等 initialize 握手完成；进程启动失败或秒退在此阶段被拒绝
+        const handshakeReady = new Promise<void>((resolve, reject) => {
+            resolveHandshake = resolve;
+            rejectHandshake = reject;
+        });
+
+        // spawn 失败（可执行文件缺失、工作区目录不存在等）以异步 error 事件抛出，
+        // 未监听会击穿为未捕获异常导致服务端崩溃；在此转为启动失败走 execute 的错误终态
+        child.on('error', (err: Error) => {
+            console.error(`[AcpEngine] 引擎子进程启动失败: ${err.message}`);
+            rejectContext(err);
+            rejectHandshake(err);
+            resolveStop();
+        });
 
         // Node 与 SDK 的 Web 流泛型声明存在库间差异（运行时行为一致），此处收窄类型
         const stdinWeb = Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>;
         const stdoutWeb = Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>;
         const stream = acp.ndJsonStream(stdinWeb, stdoutWeb);
         const run = app.connectWith(stream, async (context) => {
-            await context.request('initialize', {
-                protocolVersion: acp.PROTOCOL_VERSION,
-                clientInfo: { name: 'lvtian-server', version: '0.1.0' },
-            });
+            resolveContext(context);
+            try {
+                await context.request('initialize', {
+                    protocolVersion: acp.PROTOCOL_VERSION,
+                    clientInfo: { name: 'lvtian-server', version: '0.1.0' },
+                });
+                resolveHandshake();
+            } catch (err: unknown) {
+                rejectHandshake(err instanceof Error ? err : new Error(String(err)));
+                throw err;
+            }
             await stopSignal;
         });
         // 连接结束信号：回调正常结束或流断开（进程崩溃）均会让 run settle
         const closed = run.catch(() => undefined);
 
+        const context = await contextReady;
+        await handshakeReady;
         return {
-            context: await contextReady,
+            context,
             closed,
             close: async () => {
                 resolveStop();
@@ -471,10 +521,14 @@ ${userPrompt}`;
             case 'tool_call_update': {
                 const t = update as { toolCallId?: string; status?: string };
                 if (runtime.currentToolCall && t.toolCallId === runtime.currentToolCall.id) {
-                    runtime.currentToolCall.status = t.status === 'completed' ? 'done' : 'running';
-                    runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
-                    if (t.status === 'completed') {
+                    if (t.status === 'completed' || t.status === 'failed') {
+                        // 终态（完成/失败）即清空当前工具，防止后续文本或收尾事件把失败结果覆盖为成功
+                        runtime.currentToolCall.status = t.status === 'completed' ? 'done' : 'failed';
+                        runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
                         runtime.currentToolCall = null;
+                    } else {
+                        runtime.currentToolCall.status = 'running';
+                        runtime.callbacks.onToolCall({ ...runtime.currentToolCall });
                     }
                 }
                 break;

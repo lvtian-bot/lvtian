@@ -16,8 +16,10 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * 不注册 session/resume，用于覆盖「旧会话 ID 恢复失败自动新建」路径。
  */
 function createMockEngineApp(options = {}) {
-    /** 引擎侧会话登记：模拟 dsh-acp 的会话持久化，跨连接存活，已知 ID 可 resume */
+    /** 引擎侧会话登记：跨连接持久（模拟 dsh-acp 会话存储），已知 ID 可 resume */
     const knownSessions = options.sessionStore ?? new Set();
+    /** 本连接内活跃的会话：同一连接 new/resume 过才允许 prompt，模拟真实引擎的会话校验 */
+    const activeOnConnection = new Set();
     return acp.agent({ name: 'mock-engine' })
         .onRequest(acp.methods.agent.initialize, () => ({
             protocolVersion: acp.PROTOCOL_VERSION,
@@ -27,24 +29,43 @@ function createMockEngineApp(options = {}) {
         .onRequest(acp.methods.agent.session.new, () => {
             const sessionId = globalThis.crypto.randomUUID();
             knownSessions.add(sessionId);
+            activeOnConnection.add(sessionId);
             return { sessionId };
         })
         .onRequest(acp.methods.agent.session.resume, (c) => {
             if (!knownSessions.has(c.params.sessionId)) {
                 throw new acp.RequestError('session not found', -32002);
             }
+            activeOnConnection.add(c.params.sessionId);
             return { sessionId: c.params.sessionId };
         })
         .onRequest(acp.methods.agent.session.prompt, async (c) => {
             const sessionId = c.params.sessionId;
+            if (!activeOnConnection.has(sessionId)) {
+                throw new acp.RequestError('session not active on this connection', -32002);
+            }
+            options.promptLog?.push(sessionId);
+            const notify = (update) =>
+                c.client.notify(acp.methods.client.session.update, { sessionId, update });
+            if (options.emitFailedTool) {
+                await notify({
+                    sessionUpdate: 'tool_call',
+                    toolCallId: 'tool-fail',
+                    title: 'Failing tool',
+                    kind: 'shell',
+                    status: 'in_progress',
+                });
+                await notify({
+                    sessionUpdate: 'tool_call_update',
+                    toolCallId: 'tool-fail',
+                    status: 'failed',
+                });
+            }
             for (let i = 0; i < (options.chunkCount ?? 1); i++) {
                 if (options.chunkDelayMs) await delay(options.chunkDelayMs);
-                await c.client.notify(acp.methods.client.session.update, {
-                    sessionId,
-                    update: {
-                        sessionUpdate: 'agent_message_chunk',
-                        content: { type: 'text', text: `chunk-${i + 1}` },
-                    },
+                await notify({
+                    sessionUpdate: 'agent_message_chunk',
+                    content: { type: 'text', text: `chunk-${i + 1}` },
                 });
             }
             if (options.enablePermission) {
@@ -83,6 +104,9 @@ function buildManager(agentOptions = {}, managerOptions = {}) {
     const sessionStore = new Set();
 
     const connectEngine = async (app) => {
+        if (agentOptions.engineStartDelayMs) {
+            await delay(agentOptions.engineStartDelayMs);
+        }
         const engineApp = createMockEngineApp({ ...agentOptions, sessionStore });
         let resolveContext;
         let resolveStop;
@@ -244,6 +268,47 @@ test('引擎重连后通过 resume 恢复既有会话，不新建', async () => 
         '重连后应 resume 恢复原会话而非新建'
     );
     assert.strictEqual(lastStatus(events2), 'done');
+});
+
+test('引擎启动期间手动停止：不发送 prompt，终态 stopped', async () => {
+    const promptLog = [];
+    const { manager, sessionManager } = buildManager({ chunkCount: 1, engineStartDelayMs: 200, promptLog });
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing = manager.execute('main', 'asst-1', '长任务', collectCallbacks(events));
+
+    await delay(50); // execute 已受理但引擎仍在启动（并发预留窗口）
+    assert.strictEqual(manager.isRunning('main'), true);
+    assert.strictEqual(manager.stop('main'), true, '启动窗口内 stop 应被受理');
+    await executing;
+
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'stopped');
+    assert.strictEqual(promptLog.length, 0, '停止后不应向引擎发送 prompt');
+});
+
+test('工具失败时终态为 failed，且不被后续事件覆盖为成功', async () => {
+    const { manager } = buildManager({ chunkCount: 1, emitFailedTool: true });
+    const events = [];
+    await manager.execute('main', 'asst-1', '执行会失败的操作', collectCallbacks(events));
+
+    const toolStatuses = events.filter((e) => e.kind === 'tool').map((e) => e.toolCall.status);
+    assert.deepStrictEqual(toolStatuses, ['running', 'failed'], '失败终态应保留且无后续覆盖');
+    assert.strictEqual(lastStatus(events), 'done');
+});
+
+test('引擎子进程启动失败时走错误终态，服务端不崩溃', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-acp-spawn-'));
+    const memoryManager = new MemoryManager(tmp);
+    const sessionManager = new SessionManager(path.join(tmp, 'data'));
+    // 不注入连接工厂：走真实 spawn 路径，工作区目录不存在触发子进程 error 事件
+    const manager = new AcpEngineManager(path.join(tmp, 'no-such-workspace'), memoryManager, sessionManager);
+
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    await manager.execute('main', 'asst-1', '你好', collectCallbacks(events));
+
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'error');
+    assert.strictEqual(lastStatus(events), 'error');
 });
 
 test('stopAll 后可再次执行（引擎随下次请求懒重启）', async () => {
