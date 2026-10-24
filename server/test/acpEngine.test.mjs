@@ -34,7 +34,7 @@ function createMockEngineApp(options = {}) {
         })
         .onRequest(acp.methods.agent.session.resume, (c) => {
             if (!knownSessions.has(c.params.sessionId)) {
-                throw new acp.RequestError('session not found', -32002);
+                throw new acp.RequestError(-32002, 'session not found');
             }
             activeOnConnection.add(c.params.sessionId);
             return { sessionId: c.params.sessionId };
@@ -42,7 +42,7 @@ function createMockEngineApp(options = {}) {
         .onRequest(acp.methods.agent.session.prompt, async (c) => {
             const sessionId = c.params.sessionId;
             if (!activeOnConnection.has(sessionId)) {
-                throw new acp.RequestError('session not active on this connection', -32002);
+                throw new acp.RequestError(-32002, 'session not active on this connection');
             }
             options.promptLog?.push(sessionId);
             const notify = (update) =>
@@ -270,7 +270,7 @@ test('引擎重连后通过 resume 恢复既有会话，不新建', async () => 
     assert.strictEqual(lastStatus(events2), 'done');
 });
 
-test('引擎启动期间手动停止：不发送 prompt，终态 stopped', async () => {
+test('引擎启动期间手动停止：不发送 prompt，消息与任务同步终态化', async () => {
     const promptLog = [];
     const { manager, sessionManager } = buildManager({ chunkCount: 1, engineStartDelayMs: 200, promptLog });
     const events = [];
@@ -282,8 +282,33 @@ test('引擎启动期间手动停止：不发送 prompt，终态 stopped', async
     assert.strictEqual(manager.stop('main'), true, '启动窗口内 stop 应被受理');
     await executing;
 
-    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'stopped');
+    const session = sessionManager.getOrCreateSession('main');
+    assert.strictEqual(session.taskState, 'stopped');
+    const msg = session.messages.find((m) => m.id === 'asst-1');
+    assert.strictEqual(msg.status, 'error', '占位消息应随停止立即终态化而非停留处理中');
+    assert.match(msg.errorMessage, /手动终止/);
     assert.strictEqual(promptLog.length, 0, '停止后不应向引擎发送 prompt');
+});
+
+test('引擎启动期间 stopAll：等待启动完成并关闭连接，不留进行中任务', async () => {
+    const promptLog = [];
+    const { manager, sessionManager } = buildManager({ chunkCount: 1, engineStartDelayMs: 200, promptLog });
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing = manager.execute('main', 'asst-1', '长任务', collectCallbacks(events));
+
+    await delay(50); // 引擎仍在启动中执行关停
+    await manager.stopAll();
+    await executing;
+
+    assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'stopped');
+    assert.strictEqual(promptLog.length, 0, '关停后不应向引擎发送 prompt');
+    assert.strictEqual(manager.isRunning('main'), false);
+
+    // 关停已等待启动完成并关闭连接：下次请求走全新连接，行为正常
+    const events2 = [];
+    await manager.execute('main', 'asst-2', '关停后的新任务', collectCallbacks(events2));
+    assert.strictEqual(lastStatus(events2), 'done');
 });
 
 test('工具失败时终态为 failed，且不被后续事件覆盖为成功', async () => {

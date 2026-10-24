@@ -108,8 +108,8 @@ export class AcpEngineManager {
     private engineDead = false;
     private engineSystemPrompt = '';
 
-    /** 已受理（含引擎启动、建会话窗口）的全部会话：execute 入口同步注册，用于并发去重与 stop 响应 */
-    private activeSessions: Set<string> = new Set();
+    /** 已受理（含引擎启动、建会话窗口）的会话 → 对应助理消息 ID：execute 入口同步登记，用于并发去重与停止时消息终态化 */
+    private activeSessions: Map<string, string> = new Map();
     private runtimes: Map<string, SessionRuntime> = new Map();
     /** 引擎侧会话 ID → 绿天会话 ID 反查（审批请求与事件路由使用） */
     private engineSessionIndex: Map<string, string> = new Map();
@@ -163,19 +163,31 @@ export class AcpEngineManager {
             return true;
         }
 
-        // 引擎启动/建会话窗口：任务已受理但 prompt 尚未发出，标记停止由 execute 的检查点终态化
+        // 引擎启动/建会话窗口：任务已受理但 prompt 尚未发出，标记停止由 execute 的检查点终态化；
+        // 消息同步终态化，避免占位回复停留在「处理中」直到 execute 检查点才收尾
         if (this.activeSessions.has(sessionId)) {
             this.stoppedSessions.add(sessionId);
+            const messageId = this.activeSessions.get(sessionId);
+            if (messageId) {
+                this.sessionManager.updateMessage(sessionId, messageId, (m) => {
+                    m.status = 'error';
+                    m.errorMessage = '任务已被手动终止';
+                });
+            }
             this.sessionManager.setTaskState(sessionId, 'stopped');
             return true;
         }
         return false;
     }
 
-    /** 优雅关停：应答全部挂起审批、取消全部任务、关闭引擎连接 */
+    /** 优雅关停：停止全部受理中的任务（含引擎启动窗口）、等待启动中的引擎就位后关闭连接 */
     public async stopAll(): Promise<void> {
-        for (const sessionId of [...this.runtimes.keys()]) {
+        for (const sessionId of [...this.activeSessions.keys()]) {
             this.stop(sessionId);
+        }
+        // 引擎仍在启动时等待其完成再关闭：否则启动完成后连接与进行中任务会残留到关停之后
+        if (this.engineStarting) {
+            await this.engineStarting.catch(() => undefined);
         }
         const conn = this.connection;
         this.connection = null;
@@ -200,7 +212,7 @@ export class AcpEngineManager {
         if (this.activeSessions.has(sessionId)) {
             return;
         }
-        this.activeSessions.add(sessionId);
+        this.activeSessions.set(sessionId, assistantMessageId);
 
         this.sessionManager.setTaskState(sessionId, 'processing');
         callbacks.onStatusChange('thinking');
@@ -210,10 +222,19 @@ export class AcpEngineManager {
             if (!this.connection) {
                 throw new Error('引擎连接不可用（启动失败或已退出）');
             }
+
+            // 引擎启动等待期间收到手动停止：不再解析会话（避免 stopAll 清理映射后又被本任务重新登记），
+            // 消息已由 stop 同步终态化，这里只收尾任务状态
+            if (this.stoppedSessions.has(sessionId)) {
+                this.stoppedSessions.delete(sessionId);
+                this.sessionManager.setTaskState(sessionId, 'stopped');
+                return;
+            }
+
             const context = this.connection.context;
             const engineSessionId = await this.resolveEngineSession(sessionId);
 
-            // 启动/建会话窗口内收到手动停止：不再发送 prompt，直接终态化退出
+            // 建会话窗口内收到手动停止：不再发送 prompt，直接终态化退出
             if (this.stoppedSessions.has(sessionId)) {
                 this.stoppedSessions.delete(sessionId);
                 this.sessionManager.setTaskState(sessionId, 'stopped');
