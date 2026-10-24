@@ -215,10 +215,12 @@ export class AcpEngineManager {
         }
         this.activeSessions.set(sessionId, assistantMessageId);
 
-        this.sessionManager.setTaskState(sessionId, 'processing');
-        callbacks.onStatusChange('thinking');
-
         try {
+            // 初始状态更新须在预留的释放范围内：落盘或回调抛错时 finally 仍会释放预留，
+            // 否则失败的请求会把会话永久锁在「进行中」，后续消息全部被静默拒绝
+            this.sessionManager.setTaskState(sessionId, 'processing');
+            callbacks.onStatusChange('thinking');
+
             await this.ensureEngine();
             if (!this.connection) {
                 throw new Error('引擎连接不可用（启动失败或已退出）');
@@ -576,9 +578,12 @@ ${userPrompt}`;
 
     private finalizeRun(sessionId: string, runtime: SessionRuntime, stopReason: string): void {
         this.runtimes.delete(sessionId);
-        this.finalizeTool(runtime, 'done');
+        // 已停止任务的进行中工具是被动中断，终态化为失败；无条件 done 会把中断的工具误标为成功，
+        // 且停止守卫拦截后续事件，虚假的成功结果无法再被修正
+        const stopped = this.stoppedSessions.has(sessionId);
+        this.finalizeTool(runtime, stopped ? 'failed' : 'done');
 
-        if (this.stoppedSessions.has(sessionId)) {
+        if (stopped) {
             this.stoppedSessions.delete(sessionId);
             this.sessionManager.setTaskState(sessionId, 'stopped');
             return;

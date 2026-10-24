@@ -71,6 +71,18 @@ function createMockEngineApp(options = {}) {
                 });
                 throw new Error('engine boom');
             }
+            if (options.toolRunningMs) {
+                // 工具长时间运行后以正常响应结束当前轮（模拟引擎对 cancel 无感知、正常收尾）
+                await notify({
+                    sessionUpdate: 'tool_call',
+                    toolCallId: 'tool-running',
+                    title: 'Long running tool',
+                    kind: 'shell',
+                    status: 'in_progress',
+                });
+                await delay(options.toolRunningMs);
+                return { stopReason: 'end_turn' };
+            }
             for (let i = 0; i < (options.chunkCount ?? 1); i++) {
                 if (options.chunkDelayMs) await delay(options.chunkDelayMs);
                 await notify({
@@ -374,6 +386,45 @@ test('工具失败时终态为 failed，且不被后续事件覆盖为成功', a
     const toolStatuses = events.filter((e) => e.kind === 'tool').map((e) => e.toolCall.status);
     assert.deepStrictEqual(toolStatuses, ['running', 'failed'], '失败终态应保留且无后续覆盖');
     assert.strictEqual(lastStatus(events), 'done');
+});
+
+test('初始状态落盘失败时不锁死会话，后续消息可继续执行', async () => {
+    const { manager, sessionManager } = buildManager({ chunkCount: 1 });
+    const originalSetTaskState = sessionManager.setTaskState.bind(sessionManager);
+    let failOnce = true;
+    sessionManager.setTaskState = (sessionId, state) => {
+        if (failOnce) {
+            failOnce = false;
+            throw new Error('disk full');
+        }
+        return originalSetTaskState(sessionId, state);
+    };
+
+    const events1 = [];
+    await manager.execute('main', 'asst-1', '你好', collectCallbacks(events1));
+
+    assert.strictEqual(manager.isRunning('main'), false, '失败的请求不应永久占用会话预留');
+    assert.strictEqual(lastStatus(events1), 'error', '落盘失败应走错误终态');
+
+    const events2 = [];
+    await manager.execute('main', 'asst-2', '再试一次', collectCallbacks(events2));
+    assert.strictEqual(lastStatus(events2), 'done', '会话不应被前次落盘失败锁死');
+});
+
+test('工具运行中手动停止：被中断的工具终态为失败而非成功', async () => {
+    const { manager, sessionManager } = buildManager({ toolRunningMs: 200 });
+    const events = [];
+    sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const executing = manager.execute('main', 'asst-1', '长任务', collectCallbacks(events));
+
+    await delay(100); // 工具已进入运行中
+    manager.stop('main');
+    await executing; // 引擎对 cancel 无感知，工具窗口结束后以正常响应结束当前轮
+
+    const toolStatuses = events.filter((e) => e.kind === 'tool').map((e) => e.toolCall.status);
+    assert.deepStrictEqual(toolStatuses, ['running', 'failed'], '被中断的工具应终态化为失败而非误标成功');
+    const session = sessionManager.getOrCreateSession('main');
+    assert.strictEqual(session.taskState, 'stopped');
 });
 
 test('引擎子进程启动失败时走错误终态，服务端不崩溃', async () => {
