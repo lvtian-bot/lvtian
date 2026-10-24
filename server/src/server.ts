@@ -8,6 +8,7 @@ import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
+import { ContextConsolidator } from './contextConsolidator.js';
 import {
     ClientMessage,
     ServerMessage,
@@ -35,22 +36,35 @@ export class LvtianServer {
     private memoryManager: MemoryManager;
     private acpEngine: AcpEngineManager;
     private fileManager: FileManager;
+    private contextConsolidator: ContextConsolidator;
     private httpServer: http.Server;
     private wss: WebSocketServer;
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+    private consolidationInterval: ReturnType<typeof setInterval> | null = null;
 
     constructor(
         config: ServerConfig,
         sessionManager: SessionManager,
         memoryManager: MemoryManager,
         acpEngine: AcpEngineManager,
-        fileManager?: FileManager
+        fileManager?: FileManager,
+        contextConsolidator?: ContextConsolidator
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
         this.memoryManager = memoryManager;
         this.acpEngine = acpEngine;
         this.fileManager = fileManager || new FileManager(config.workspace);
+        this.contextConsolidator = contextConsolidator || new ContextConsolidator(sessionManager);
+
+        const scanMs = Number.parseInt(process.env.LVTIAN_IDLE_SCAN_INTERVAL_MS ?? '', 10);
+        const intervalMs = Number.isFinite(scanMs) && scanMs > 0 ? scanMs : 60_000;
+        this.consolidationInterval = setInterval(() => {
+            this.contextConsolidator.scanAllSessions().catch((err: unknown) => {
+                console.warn(`[Server] 会话记忆巩固扫描异常: ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }, intervalMs);
+        this.consolidationInterval.unref?.();
 
         this.httpServer = http.createServer((req, res) => {
             this.handleHttpRequest(req, res).catch((err) => {
@@ -666,6 +680,11 @@ export class LvtianServer {
     }
 
     public async stop(): Promise<void> {
+        if (this.consolidationInterval) {
+            clearInterval(this.consolidationInterval);
+            this.consolidationInterval = null;
+        }
+
         // 优雅关停 ACP 引擎：停止全部受理中任务、关闭引擎连接并回收子进程，防止僵尸进程常驻
         await this.acpEngine.stopAll();
 
@@ -695,5 +714,9 @@ export class LvtianServer {
                 });
             });
         });
+    }
+
+    public getContextConsolidator(): ContextConsolidator {
+        return this.contextConsolidator;
     }
 }

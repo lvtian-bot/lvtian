@@ -11,6 +11,14 @@ export interface SessionData {
     pendingApprovals: ApprovalRequest[];
     dshSessionId?: string;
     updatedAt: number;
+    /** 上次真实交互完成的时间戳，用于心流超时判定 */
+    lastActiveAt?: number;
+    /** 当前会话消耗的上下文 Token 数 */
+    contextTokens?: number;
+    /** 上下文窗口总大小 (tokens)，默认 128_000 */
+    contextWindowSize?: number;
+    /** 当前 DSH 实例建立时的 seq 起点，用于无 usage_update 时准确估算新会话增量 */
+    activeSessionStartSeq?: number;
 }
 
 /**
@@ -21,15 +29,31 @@ export interface SessionData {
  * - state ：任务状态与待审批卡变更
  * - dsh   ：dsh 会话 ID 绑定
  * - seq   ：纯序号推进（无消息体变化）
+ * - activity：真实交互完成时间戳记录
+ * - usage ：上下文用量更新
  * - snapshot：全量快照，只会作为某个日志文件的首行出现（建会话或轮换时写入）
  */
 type SessionLogEvent =
-    | { t: 'snapshot'; at: number; seq: number; taskState: TaskExecutionState; approvals?: ApprovalRequest[]; dshSessionId?: string; msgs: AssistantMessage[] }
+    | {
+          t: 'snapshot';
+          at: number;
+          seq: number;
+          taskState: TaskExecutionState;
+          approvals?: ApprovalRequest[];
+          dshSessionId?: string;
+          msgs: AssistantMessage[];
+          lastActiveAt?: number;
+          contextTokens?: number;
+          contextWindowSize?: number;
+          activeSessionStartSeq?: number;
+      }
     | { t: 'msg'; at: number; seq: number; m: AssistantMessage }
     | { t: 'delta'; at: number; seq: number; id: string; d: string }
     | { t: 'state'; at: number; seq: number; taskState: TaskExecutionState; approvals?: ApprovalRequest[] }
     | { t: 'dsh'; at: number; dshSessionId: string }
-    | { t: 'seq'; at: number; seq: number };
+    | { t: 'seq'; at: number; seq: number }
+    | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
+    | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number };
 
 const ACTIVE_LOG = 'events.jsonl';
 const SEGMENT_PREFIX = 'seg.';
@@ -106,6 +130,10 @@ export class SessionManager {
             taskState: 'idle',
             pendingApprovals: [],
             updatedAt: Date.now(),
+            lastActiveAt: undefined,
+            contextTokens: undefined,
+            contextWindowSize: undefined,
+            activeSessionStartSeq: 0,
         };
     }
 
@@ -118,6 +146,10 @@ export class SessionManager {
             approvals: session.pendingApprovals,
             dshSessionId: session.dshSessionId,
             msgs: session.messages,
+            lastActiveAt: session.lastActiveAt,
+            contextTokens: session.contextTokens,
+            contextWindowSize: session.contextWindowSize,
+            activeSessionStartSeq: session.activeSessionStartSeq,
         };
     }
 
@@ -297,6 +329,10 @@ export class SessionManager {
                 session.pendingApprovals = this.normalizeApprovals(ev);
                 session.dshSessionId = ev.dshSessionId;
                 session.updatedAt = ev.at;
+                session.lastActiveAt = ev.lastActiveAt;
+                session.contextTokens = ev.contextTokens;
+                session.contextWindowSize = ev.contextWindowSize;
+                session.activeSessionStartSeq = ev.activeSessionStartSeq;
                 break;
             case 'msg': {
                 const idx = session.messages.findIndex((m) => m.id === ev.m.id);
@@ -334,6 +370,18 @@ export class SessionManager {
                 break;
             case 'seq':
                 session.currentSeq = Math.max(session.currentSeq, ev.seq);
+                session.updatedAt = ev.at;
+                break;
+            case 'activity':
+                session.lastActiveAt = ev.lastActiveAt;
+                if (ev.contextTokens !== undefined) session.contextTokens = ev.contextTokens;
+                if (ev.contextWindowSize !== undefined) session.contextWindowSize = ev.contextWindowSize;
+                session.updatedAt = ev.at;
+                break;
+            case 'usage':
+                session.contextTokens = ev.contextTokens;
+                if (ev.contextWindowSize !== undefined) session.contextWindowSize = ev.contextWindowSize;
+                if (ev.activeSessionStartSeq !== undefined) session.activeSessionStartSeq = ev.activeSessionStartSeq;
                 session.updatedAt = ev.at;
                 break;
         }
@@ -702,5 +750,282 @@ export class SessionManager {
             pendingApproval: session.pendingApprovals[0],
             currentSeq: session.currentSeq,
         };
+    }
+
+    // ------------------------------------------------------------------
+    // 人脑认知记忆模型与会话轮换
+    // ------------------------------------------------------------------
+
+    public listSessionIds(): string[] {
+        return Array.from(this.sessions.keys());
+    }
+
+    /** 记录真实用户交互完成时间，推进主聊天活跃状态（不被心跳/断线重连假刷新） */
+    public recordActivity(sessionId: string, timestamp = Date.now()): void {
+        const session = this.getOrCreateSession(sessionId);
+        session.lastActiveAt = timestamp;
+        session.updatedAt = timestamp;
+        this.appendEvent(sessionId, {
+            t: 'activity',
+            at: timestamp,
+            lastActiveAt: timestamp,
+            contextTokens: session.contextTokens,
+            contextWindowSize: session.contextWindowSize,
+        });
+    }
+
+    public getLastActiveAt(sessionId: string): number {
+        const session = this.getOrCreateSession(sessionId);
+        return session.lastActiveAt
+            ?? (session.messages.length > 0 ? session.messages[session.messages.length - 1].timestamp : session.updatedAt);
+    }
+
+    /** 记录底层引擎报告的上下文 Token 消耗与窗口大小 */
+    public setUsage(sessionId: string, tokens: number, windowSize?: number): void {
+        const session = this.getOrCreateSession(sessionId);
+        session.contextTokens = tokens;
+        if (windowSize !== undefined && windowSize > 0) {
+            session.contextWindowSize = windowSize;
+        }
+        session.updatedAt = Date.now();
+        this.appendEvent(sessionId, {
+            t: 'usage',
+            at: Date.now(),
+            contextTokens: tokens,
+            contextWindowSize: session.contextWindowSize,
+        });
+    }
+
+    /** 会话轮换到新 DSH 实例时，重置底层 Token 统计与估算起点 */
+    public resetSessionUsage(sessionId: string, startSeq?: number): void {
+        const session = this.getOrCreateSession(sessionId);
+        session.contextTokens = undefined;
+        const resolvedStartSeq = startSeq ?? (session.currentSeq + 1);
+        session.activeSessionStartSeq = resolvedStartSeq;
+        this.appendEvent(sessionId, {
+            t: 'usage',
+            at: Date.now(),
+            contextTokens: undefined,
+            contextWindowSize: session.contextWindowSize,
+            activeSessionStartSeq: resolvedStartSeq,
+        });
+    }
+
+    /** 估算当前会话累积字符折合 Token（中英混合按约 2 字符/Token 估算，仅统计当前 DSH 实例的消息） */
+    public estimateTokens(sessionId: string): number {
+        const session = this.getOrCreateSession(sessionId);
+        const startSeq = session.activeSessionStartSeq ?? 0;
+        let totalChars = 0;
+        for (const msg of session.messages) {
+            if ((msg.seq ?? 0) >= startSeq) {
+                totalChars += msg.content?.length ?? 0;
+                if (msg.toolCalls) {
+                    for (const t of msg.toolCalls) {
+                        totalChars += (t.name?.length ?? 0) + (t.summary?.length ?? 0);
+                    }
+                }
+            }
+        }
+        return Math.ceil(totalChars / 2);
+    }
+
+    public getUsage(sessionId: string): { tokens: number; windowSize: number; ratio: number } {
+        const session = this.getOrCreateSession(sessionId);
+        const windowSize = session.contextWindowSize && session.contextWindowSize > 0
+            ? session.contextWindowSize
+            : 128_000;
+        const tokens = session.contextTokens !== undefined
+            ? session.contextTokens
+            : this.estimateTokens(sessionId);
+        const ratio = windowSize > 0 ? tokens / windowSize : 0;
+        return { tokens, windowSize, ratio };
+    }
+
+    /** 时间门禁：静默空闲时长是否达到阈值（默认 3 小时） */
+    public isIdle(sessionId: string, idleTimeoutMs = 3 * 60 * 60 * 1000): boolean {
+        return Date.now() - this.getLastActiveAt(sessionId) >= idleTimeoutMs;
+    }
+
+    /** 容量门禁：上下文占用是否达到或超过阈值（默认 20%） */
+    public isCapacityOver(sessionId: string, minRatio = 0.2): boolean {
+        return this.getUsage(sessionId).ratio >= minRatio;
+    }
+
+    /** 双重门禁复合判定：空闲满 3h AND 上下文满 20% */
+    public isRotationEligible(
+        sessionId: string,
+        idleTimeoutMs = 3 * 60 * 60 * 1000,
+        minRatio = 0.2
+    ): boolean {
+        return this.isIdle(sessionId, idleTimeoutMs) && this.isCapacityOver(sessionId, minRatio);
+    }
+
+    public getPendingBackgroundPath(sessionId: string): string {
+        const dir = this.ensureSessionDir(sessionId);
+        return path.join(dir, 'pending_background.txt');
+    }
+
+    public hasPendingBackground(sessionId: string): boolean {
+        try {
+            return fs.existsSync(this.getPendingBackgroundPath(sessionId));
+        } catch {
+            return false;
+        }
+    }
+
+    public getPendingBackground(sessionId: string): string | null {
+        try {
+            const p = this.getPendingBackgroundPath(sessionId);
+            if (fs.existsSync(p)) {
+                const content = fs.readFileSync(p, 'utf8').trim();
+                return content.length > 0 ? content : null;
+            }
+        } catch (err) {
+            console.warn(`[SessionManager] 读取 pending_background.txt 失败: ${err}`);
+        }
+        return null;
+    }
+
+    public setPendingBackground(sessionId: string, content: string): void {
+        const dir = this.ensureSessionDir(sessionId);
+        const targetPath = path.join(dir, 'pending_background.txt');
+        const tmpPath = path.join(dir, `pending_background.txt.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`);
+        fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
+        fs.renameSync(tmpPath, targetPath);
+    }
+
+    public clearPendingBackground(sessionId: string): void {
+        try {
+            const p = this.getPendingBackgroundPath(sessionId);
+            if (fs.existsSync(p)) {
+                fs.unlinkSync(p);
+            }
+        } catch (err) {
+            console.warn(`[SessionManager] 清理 pending_background.txt 失败: ${err}`);
+        }
+    }
+
+    /**
+     * 提取近期对话文本供后台模型提炼心智接力备忘录
+     * - 按消息轮次（默认最近 30 条）与字符预算上限（默认 50,000 字符）倒序截取并保持时间线正序
+     * - 单条超长消息截断并计入分隔符，预留模板与模型输出预算
+     */
+    public getRecentDialogue(
+        sessionId: string,
+        maxMessages = 30,
+        maxChars = 50_000
+    ): string {
+        const session = this.getOrCreateSession(sessionId);
+        const validMsgs = session.messages.filter(
+            (m) => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim().length > 0
+        );
+        if (validMsgs.length === 0) {
+            return '';
+        }
+
+        const selected: string[] = [];
+        let accumulatedLength = 0;
+
+        for (let i = validMsgs.length - 1; i >= 0; i--) {
+            const m = validMsgs[i];
+            const speaker = m.role === 'user' ? '主人' : '助理';
+            let line = `${speaker}: ${m.content.trim()}`;
+
+            if (selected.length === 0) {
+                if (line.length > maxChars) {
+                    line = line.slice(0, Math.max(0, maxChars - 3)) + '...';
+                    selected.unshift(line);
+                    accumulatedLength = line.length;
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength = line.length;
+            } else {
+                const delimiterLength = 2; // '\n\n'
+                if (accumulatedLength + delimiterLength + line.length > maxChars) {
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength += delimiterLength + line.length;
+            }
+
+            if (selected.length >= maxMessages) {
+                break;
+            }
+        }
+
+        return selected.join('\n\n');
+    }
+
+    /**
+     * 关键原文物理锚定规则（Verbatim Anchoring）：
+     * 回溯最近 5~8 轮交互，字数封顶 1500~2000 字（默认 1800），倒序自适应追加截断并保持时间线正序。
+     * - 对首条超长消息执行有界截取（maxChars - 3 + '...'）
+     * - 将分隔符（\n\n，2字符）计入字符预算
+     * - 支持排除当前轮次输入（避免在提示词中重复出现）
+     */
+    public getVerbatimExcerpts(
+        sessionId: string,
+        maxTurns = 8,
+        maxChars = 1800,
+        options?: { excludePrompt?: string }
+    ): string {
+        const session = this.getOrCreateSession(sessionId);
+        let dialogue = session.messages.filter(
+            (m) => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim().length > 0 && m.status !== 'error'
+        );
+        if (dialogue.length === 0) {
+            return '';
+        }
+
+        if (options?.excludePrompt) {
+            const trimmedPrompt = options.excludePrompt.trim();
+            for (let i = dialogue.length - 1; i >= 0; i--) {
+                if (dialogue[i].role === 'user' && dialogue[i].content.trim() === trimmedPrompt) {
+                    dialogue = dialogue.slice(0, i).concat(dialogue.slice(i + 1));
+                    break;
+                }
+            }
+            if (dialogue.length === 0) {
+                return '';
+            }
+        }
+
+        const selected: string[] = [];
+        let accumulatedLength = 0;
+        let turnsCount = 0;
+
+        for (let i = dialogue.length - 1; i >= 0; i--) {
+            const m = dialogue[i];
+            const speaker = m.role === 'user' ? '主人' : '助理';
+            let line = `${speaker}: ${m.content.trim()}`;
+
+            if (selected.length === 0) {
+                if (line.length > maxChars) {
+                    line = line.slice(0, Math.max(0, maxChars - 3)) + '...';
+                    selected.unshift(line);
+                    accumulatedLength = line.length;
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength = line.length;
+            } else {
+                const delimiterLength = 2; // '\n\n'
+                if (accumulatedLength + delimiterLength + line.length > maxChars) {
+                    break;
+                }
+                selected.unshift(line);
+                accumulatedLength += delimiterLength + line.length;
+            }
+
+            if (m.role === 'user') {
+                turnsCount++;
+                if (turnsCount >= maxTurns) {
+                    break;
+                }
+            }
+        }
+
+        return selected.join('\n\n');
     }
 }

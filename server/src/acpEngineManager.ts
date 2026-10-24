@@ -51,6 +51,10 @@ export interface AcpEngineManagerOptions {
     stopTimeoutMs?: number;
     /** 单次任务执行的总占用看门狗（毫秒）：会话占用（含引擎启动、执行、审批全程）超过该时长视为卡死，强制回收引擎连接；默认 30 分钟，设为 0 或负数禁用 */
     taskTimeoutMs?: number;
+    /** 判定空闲超时门禁（毫秒），默认 3 小时 */
+    idleTimeoutMs?: number;
+    /** 判定容量门禁（上下文窗口占比），默认 0.2 (20%) */
+    minCapacityRatio?: number;
     /** 引擎连接工厂，默认 spawn dsh --profile acp；测试注入进程内模拟连接 */
     connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
 }
@@ -148,6 +152,8 @@ export class AcpEngineManager {
     private approvalTimeoutMs: number;
     private stopTimeoutMs: number;
     private taskTimeoutMs: number;
+    private idleTimeoutMs: number;
+    private minCapacityRatio: number;
     private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
 
     private connection: EngineConnection | null = null;
@@ -184,6 +190,14 @@ export class AcpEngineManager {
             ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 5 * 60 * 1000);
         this.stopTimeoutMs = options?.stopTimeoutMs ?? 2000;
         this.taskTimeoutMs = options?.taskTimeoutMs ?? 30 * 60 * 1000;
+
+        const envIdle = Number.parseInt(process.env.LVTIAN_SESSION_IDLE_MS ?? '', 10);
+        this.idleTimeoutMs = options?.idleTimeoutMs
+            ?? (Number.isFinite(envIdle) && envIdle > 0 ? envIdle : 3 * 60 * 60 * 1000);
+        const envRatio = Number.parseFloat(process.env.LVTIAN_SESSION_CAPACITY_RATIO ?? '');
+        this.minCapacityRatio = options?.minCapacityRatio
+            ?? (Number.isFinite(envRatio) && envRatio > 0 ? envRatio : 0.2);
+
         this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
     }
 
@@ -331,6 +345,9 @@ export class AcpEngineManager {
         this.activeSessions.set(sessionId, assistantMessageId);
         this.scheduleTaskWatchdog(sessionId, assistantMessageId);
 
+        let pendingBackground: string | null = null;
+        let shouldRotate = false;
+
         try {
             // 初始状态更新须在预留的释放范围内：落盘或回调抛错时 finally 仍会释放预留，
             // 否则失败的请求会把会话永久锁在「进行中」，后续消息全部被静默拒绝
@@ -351,6 +368,25 @@ export class AcpEngineManager {
             }
 
             const context = this.connection.context;
+
+            // 检查基于人脑记忆模型的底层会话轮换门禁
+            pendingBackground = this.sessionManager.getPendingBackground(sessionId);
+            const isEligible = this.sessionManager.isRotationEligible(
+                sessionId,
+                this.idleTimeoutMs,
+                this.minCapacityRatio
+            );
+            shouldRotate = pendingBackground !== null || isEligible;
+
+            if (shouldRotate) {
+                // 抛弃旧 DSH 会话绑定，重置为新会话建立
+                const saved = this.sessionManager.getDshSessionId(sessionId);
+                if (saved) {
+                    this.engineSessionIndex.delete(saved);
+                }
+                this.sessionManager.setDshSessionId(sessionId, '');
+            }
+
             const engineSessionId = await this.resolveEngineSession(sessionId);
 
             // 建会话窗口内收到手动停止：不再发送 prompt，直接终态化退出
@@ -370,11 +406,34 @@ export class AcpEngineManager {
             };
             this.runtimes.set(sessionId, runtime);
 
-            const fullPrompt = `[系统人设与主人记忆背景]
-${this.engineSystemPrompt}
+            // 构建 Prompt：轮换时注入预制背景提要与关键原文锚定，温热心流期沿用常规 Prompt
+            let fullPrompt: string;
+            if (shouldRotate) {
+                // 重置新 DSH 会话的用量起点（提要在首轮 prompt 成功交接后清理，若请求异常失败则保留提要供下次重试注入）
+                const session = this.sessionManager.getOrCreateSession(sessionId);
+                const asstIdx = session.messages.findIndex((m) => m.id === assistantMessageId);
+                const turnStartSeq = asstIdx > 0 && session.messages[asstIdx - 1]?.role === 'user'
+                    ? (session.messages[asstIdx - 1].seq ?? session.currentSeq)
+                    : (asstIdx >= 0 ? (session.messages[asstIdx].seq ?? session.currentSeq) : session.currentSeq);
+                this.sessionManager.resetSessionUsage(sessionId, turnStartSeq);
 
-[主人当前提问与指令]
-${userPrompt}`;
+                const verbatim = this.sessionManager.getVerbatimExcerpts(sessionId, 8, 1800, {
+                    excludePrompt: userPrompt,
+                });
+                const sections: string[] = [
+                    `[系统背景与主人长期档案]\n${this.engineSystemPrompt}`,
+                ];
+                if (pendingBackground) {
+                    sections.push(`[前序交流心智接力提要 (3小时前归档)]\n${pendingBackground}`);
+                }
+                if (verbatim) {
+                    sections.push(`[未竟事项与关键交互原文锚定 (至多5~8轮/最多1500~2000字)]\n${verbatim}`);
+                }
+                sections.push(`[主人当前提问与指令]\n${userPrompt}`);
+                fullPrompt = sections.join('\n\n');
+            } else {
+                fullPrompt = `[系统人设与主人记忆背景]\n${this.engineSystemPrompt}\n\n[主人当前提问与指令]\n${userPrompt}`;
+            }
 
             const response = await context.request<{ stopReason?: string }>(
                 'session/prompt',
@@ -384,8 +443,17 @@ ${userPrompt}`;
                 }
             );
 
+            // 成功交接后消费/清理提要
+            if (shouldRotate && pendingBackground) {
+                this.sessionManager.clearPendingBackground(sessionId);
+            }
+
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
         } catch (err: unknown) {
+            // 若轮换首轮请求异常失败，恢复提要文件以支持用户后续重试注入
+            if (shouldRotate && pendingBackground) {
+                this.sessionManager.setPendingBackground(sessionId, pendingBackground);
+            }
             const message = err instanceof Error ? err.message : String(err);
             // 异常退出时先把进行中的工具终态化为失败，避免消息已标错而工具状态永远停留运行中
             const runtime = this.runtimes.get(sessionId);
@@ -701,8 +769,15 @@ ${userPrompt}`;
                 }
                 break;
             }
+            case 'usage_update': {
+                const u = update as { used?: number; size?: number };
+                if (typeof u.used === 'number') {
+                    this.sessionManager.setUsage(sessionId, u.used, u.size);
+                }
+                break;
+            }
             default:
-                // usage_update / plan / user_message_chunk 等暂不消费
+                // plan / user_message_chunk 等暂不消费
                 break;
         }
     }
@@ -738,6 +813,8 @@ ${userPrompt}`;
         // 截断提示由客户端按 stopReason 本地化插入，服务端不内嵌展示文案
         runtime.callbacks.onStatusChange('done', stopReason === 'max_tokens' ? { stopReason } : undefined);
         this.sessionManager.setTaskState(sessionId, 'completed');
+        // 唯真实交互推进主聊天活跃时间
+        this.sessionManager.recordActivity(sessionId);
         try {
             const recordedAnswer = runtime.committedText.trim().slice(0, 300);
             this.memoryManager.appendDailyLog('对话与任务完成', `答：${recordedAnswer}...`);
