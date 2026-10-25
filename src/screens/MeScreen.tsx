@@ -1,15 +1,66 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useEffect, useState, type ComponentProps } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, Image, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import Icon from '@expo/vector-icons/MaterialIcons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
 import { RootStackParamList } from '../types/navigation';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+
+interface SettingsItemProps {
+    label: string;
+    icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
+    onPress: () => void;
+    subtitle?: string;
+    iconColor?: string;
+}
+
+const SettingsItem: React.FC<SettingsItemProps> = ({
+    label,
+    icon,
+    onPress,
+    subtitle,
+    iconColor = theme.colors.textSecondary,
+}) => (
+    <Pressable
+        style={({ pressed }) => [
+            styles.settingsItem,
+            pressed && styles.settingsItemPressed,
+        ]}
+        android_ripple={{ color: '#E5E7EB' }}
+        onPress={onPress}
+    >
+        <View style={styles.settingsItemLeft}>
+            <MaterialCommunityIcons
+                name={icon}
+                size={22}
+                color={iconColor}
+                style={styles.settingsItemIcon}
+            />
+            <Text style={styles.settingsItemText}>{label}</Text>
+        </View>
+        <View style={styles.settingsItemRight}>
+            {subtitle ? (
+                <Text style={styles.settingsItemSubtitle} numberOfLines={1}>
+                    {subtitle}
+                </Text>
+            ) : null}
+            <MaterialCommunityIcons
+                name="chevron-right"
+                size={20}
+                color={theme.colors.textSecondary}
+            />
+        </View>
+    </Pressable>
+);
 
 export const MeScreen = () => {
     const { t } = useTranslation();
@@ -20,6 +71,8 @@ export const MeScreen = () => {
         cloudProvider,
         markdownTheme,
         fontSize,
+        userAvatar,
+        setUserAvatar,
     } = useSettingsStore();
 
     const {
@@ -30,189 +83,231 @@ export const MeScreen = () => {
 
     const isConnected = connectionState === 'connected';
 
+    // 头像加载容错
+    const [avatarBroken, setAvatarBroken] = useState(false);
+    useEffect(() => {
+        setAvatarBroken(false);
+    }, [userAvatar]);
+
+    const resolveAvatarUri = (value?: string | null): string | undefined => {
+        if (!value) return undefined;
+        if (value.includes('://')) return value;
+        return `${FileSystem.documentDirectory ?? ''}${value}`;
+    };
+
+    const avatarUri = resolveAvatarUri(userAvatar);
+
+    // 将相册图片存入 App 私有沙盒，避免系统清缓存失效
+    const persistAvatarAsync = async (sourceUri: string): Promise<string> => {
+        const filename = `avatar-${Date.now()}.jpg`;
+        await FileSystem.copyAsync({
+            from: sourceUri,
+            to: `${FileSystem.documentDirectory ?? ''}${filename}`,
+        });
+        return filename;
+    };
+
+    const deleteAvatarFileAsync = async (value?: string | null): Promise<void> => {
+        const uri = resolveAvatarUri(value);
+        const docDir = FileSystem.documentDirectory ?? '';
+        if (uri && docDir && uri.startsWith(docDir)) {
+            try {
+                await FileSystem.deleteAsync(uri, { idempotent: true });
+            } catch {
+                // ignore cleanup error
+            }
+        }
+    };
+
+    const pickAvatarAsync = async (): Promise<void> => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.8,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const previous = userAvatar;
+                const filename = await persistAvatarAsync(result.assets[0].uri);
+                setUserAvatar(filename);
+                if (previous && previous !== filename) {
+                    await deleteAvatarFileAsync(previous);
+                }
+            }
+        } catch (error) {
+            Alert.alert('头像选择失败', String(error));
+        }
+    };
+
+    const clearAvatarAsync = async (): Promise<void> => {
+        try {
+            const current = userAvatar;
+            setUserAvatar(undefined);
+            await deleteAvatarFileAsync(current);
+        } catch (error) {
+            Alert.alert('清除头像失败', String(error));
+        }
+    };
+
+    const handleAvatarPress = async () => {
+        if (userAvatar) {
+            Alert.alert(
+                '绿天助理形象',
+                undefined,
+                [
+                    { text: t('common.cancel', '取消'), style: 'cancel' },
+                    { text: '从相册更换', onPress: () => { pickAvatarAsync(); } },
+                    { text: '恢复默认形象', style: 'destructive', onPress: () => { clearAvatarAsync(); } },
+                ]
+            );
+        } else {
+            await pickAvatarAsync();
+        }
+    };
+
+    const statusText = isConnected
+        ? `${t('settings.assistantConnected', '已连接')}${serverUrl ? ` · ${serverUrl}` : ''}`
+        : connectionState === 'connecting' || connectionState === 'reconnecting'
+        ? t('settings.assistantConnecting', '连接中...')
+        : serverUrl
+        ? `${t('settings.assistantDisconnected', '未连接')} · ${serverUrl}`
+        : t('settings.serverSubtitle', '未配置 · 点击连接服务端');
+
     return (
-        <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer} keyboardShouldPersistTaps="handled">
-            {/* 顶部核心大卡片：绿天服务端 */}
-            <TouchableOpacity
-                style={styles.heroCard}
-                onPress={() => navigation.navigate('AssistantConfig')}
-                activeOpacity={0.8}
+        <View style={styles.container}>
+            <ScrollView
+                style={styles.scroll}
+                contentContainerStyle={styles.contentContainer}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
             >
-                <View style={styles.heroContent}>
-                    <View style={styles.heroHeaderRow}>
-                        <View style={styles.heroTitleContainer}>
-                            <View style={styles.heroIconWrap}>
-                                <Icon name="dns" size={24} color={theme.colors.primary} />
+                {/* 顶部：AI 助理专属形象卡片 */}
+                <SafeAreaView edges={['top']} style={styles.safeArea}>
+                    <View style={styles.userProfileCard}>
+                        <Pressable
+                            onPress={handleAvatarPress}
+                            style={({ pressed }) => [
+                                styles.avatarPressable,
+                                pressed && { opacity: 0.8 },
+                            ]}
+                        >
+                            <View style={styles.avatarContainer}>
+                                {avatarUri && !avatarBroken ? (
+                                    <View style={styles.avatar}>
+                                        <Image
+                                            source={{ uri: avatarUri }}
+                                            style={styles.avatarImage}
+                                            onError={() => setAvatarBroken(true)}
+                                        />
+                                    </View>
+                                ) : (
+                                    <View style={styles.avatar}>
+                                        <Image
+                                            source={require('../../assets/icon.png')}
+                                            style={styles.avatarImage}
+                                        />
+                                    </View>
+                                )}
                             </View>
-                            <Text style={styles.heroTitle}>{t('settings.serverTitle', '绿天服务端')}</Text>
-                        </View>
-                        <View style={[styles.heroStatusTag, isConnected && styles.connectedTag]}>
-                            <View style={[styles.statusDot, isConnected && styles.connectedDot]} />
-                            <Text style={[styles.heroStatusName, isConnected && styles.connectedName]}>
-                                {isConnected
-                                    ? t('settings.assistantConnected', '已连接')
-                                    : connectionState === 'connecting' || connectionState === 'reconnecting'
-                                    ? t('settings.assistantConnecting', '连接中...')
-                                    : serverUrl
-                                    ? t('settings.assistantDisconnected', '未连接')
-                                    : t('settings.notConfigured', '未配置')}
-                            </Text>
-                        </View>
-                    </View>
+                        </Pressable>
 
-                    <View style={styles.heroStatusRow}>
-                        <Text style={styles.heroStatusText} numberOfLines={1} ellipsizeMode="tail">
-                            {serverUrl ? serverUrl : t('settings.serverSubtitle', '配置服务地址与访问令牌以连接服务端')}
-                        </Text>
-                        <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                        <Pressable
+                            style={({ pressed }) => [
+                                styles.userInfoPressable,
+                                pressed && styles.userInfoPressed,
+                            ]}
+                            android_ripple={{ color: '#E5E7EB' }}
+                            onPress={() => navigation.navigate('AssistantConfig')}
+                        >
+                            <View style={styles.userInfo}>
+                                <Text style={styles.userName}>{t('app.name', '绿天')}</Text>
+                                <View style={styles.statusRow}>
+                                    <View style={[styles.statusDot, isConnected && styles.connectedDot]} />
+                                    <Text style={styles.userSyncStatus} numberOfLines={1}>
+                                        {statusText}
+                                    </Text>
+                                </View>
+                            </View>
+                            <MaterialCommunityIcons
+                                name="chevron-right"
+                                size={24}
+                                color={theme.colors.textSecondary}
+                            />
+                        </Pressable>
                     </View>
-                </View>
-            </TouchableOpacity>
+                </SafeAreaView>
 
-            {/* 分组一：AI 智能体与中枢 */}
-            <View style={styles.groupSection}>
-                <Text style={styles.groupHeaderTitle}>{t('settings.groups.agent', 'AI 智能体与中枢')}</Text>
-                <View style={styles.groupCard}>
-                    {/* AI 智能体配置 */}
-                    <TouchableOpacity
-                        style={styles.rowItem}
-                        onPress={() => navigation.navigate('AgentConfig')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.rowLeft}>
-                            <Icon name="smart-toy" size={22} color={theme.colors.primary} style={styles.rowIcon} />
-                            <Text style={styles.rowTitle}>{t('settings.agentConfig', 'AI 智能体配置')}</Text>
-                        </View>
-                        <View style={styles.rowRight}>
-                            <Text style={styles.rowSubtitle} numberOfLines={1}>
-                                {permissionMode === 'danger-full-access'
+                {/* 卡片一：智能体与文件 */}
+                <View style={styles.cardWrapper}>
+                    <View style={styles.settingsGroup}>
+                        <SettingsItem
+                            label={t('settings.agentConfig', 'AI 智能体配置')}
+                            icon="robot-outline"
+                            onPress={() => navigation.navigate('AgentConfig')}
+                            subtitle={
+                                permissionMode === 'danger-full-access'
                                     ? t('assistant.permissionDanger', '完全权限模式')
-                                    : t('assistant.permissionWorkspace', '安全工作区模式')}
-                            </Text>
-                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                        </View>
-                    </TouchableOpacity>
-
-                    <View style={styles.divider} />
-
-                    {/* 系统工作区文件 */}
-                    <TouchableOpacity
-                        style={styles.rowItem}
-                        onPress={() => navigation.navigate('ServerFileList')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.rowLeft}>
-                            <Icon name="folder" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
-                            <Text style={styles.rowTitle}>{t('tabs.files', '系统文件')}</Text>
-                        </View>
-                        <View style={styles.rowRight}>
-                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                        </View>
-                    </TouchableOpacity>
+                                    : t('assistant.permissionWorkspace', '安全工作区模式')
+                            }
+                        />
+                        <View style={styles.separator} />
+                        <SettingsItem
+                            label={t('tabs.files', '系统文件')}
+                            icon="folder-outline"
+                            onPress={() => navigation.navigate('ServerFileList')}
+                        />
+                    </View>
                 </View>
-            </View>
 
-            {/* 分组二：云端存储与网盘 */}
-            <View style={styles.groupSection}>
-                <Text style={styles.groupHeaderTitle}>{t('settings.groups.cloud', '云端存储与网盘')}</Text>
-                <View style={styles.groupCard}>
-                    {/* 云端同步 (WebDAV / 坚果云) */}
-                    <TouchableOpacity
-                        style={styles.rowItem}
-                        onPress={() => navigation.navigate('CloudRepoConfig')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.rowLeft}>
-                            <Icon name="cloud-sync" size={22} color={theme.colors.primary} style={styles.rowIcon} />
-                            <Text style={styles.rowTitle}>{t('settings.cloudSyncWebDav', '云端同步 (WebDAV / 坚果云)')}</Text>
-                        </View>
-                        <View style={styles.rowRight}>
-                            <Text style={styles.rowSubtitle} numberOfLines={1}>
-                                {cloudProvider === 'webdav' && webDavConfig.server
+                {/* 卡片二：云端存储 */}
+                <View style={styles.cardWrapper}>
+                    <View style={styles.settingsGroup}>
+                        <SettingsItem
+                            label={t('settings.cloudSyncWebDav', '云端同步 (WebDAV / 坚果云)')}
+                            icon="cloud-sync-outline"
+                            onPress={() => navigation.navigate('CloudRepoConfig')}
+                            subtitle={
+                                cloudProvider === 'webdav' && webDavConfig.server
                                     ? t('settings.configured', '已配置')
-                                    : t('settings.notConfigured', '未配置')}
-                            </Text>
-                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                        </View>
-                    </TouchableOpacity>
-
-                    <View style={styles.divider} />
-
-                    {/* 云盘文件 */}
-                    <TouchableOpacity
-                        style={styles.rowItem}
-                        onPress={() => navigation.navigate('CloudFileList')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.rowLeft}>
-                            <Icon name="cloud" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
-                            <Text style={styles.rowTitle}>{t('browser.cloudFiles', '云盘文件')}</Text>
-                        </View>
-                        <View style={styles.rowRight}>
-                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                        </View>
-                    </TouchableOpacity>
+                                    : t('settings.notConfigured', '未配置')
+                            }
+                        />
+                        <View style={styles.separator} />
+                        <SettingsItem
+                            label={t('browser.cloudFiles', '云盘文件')}
+                            icon="cloud-outline"
+                            onPress={() => navigation.navigate('CloudFileList')}
+                        />
+                    </View>
                 </View>
-            </View>
 
-            {/* 分组三：功能与系统 */}
-            <View style={styles.groupSection}>
-                <Text style={styles.groupHeaderTitle}>{t('settings.groups.general', '功能与系统')}</Text>
-                <View style={styles.groupCard}>
-                    {/* 闪念笔记设置 */}
-                    <TouchableOpacity
-                        style={styles.rowItem}
-                        onPress={() => navigation.navigate('FlashNoteConfig')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.rowLeft}>
-                            <Icon name="bolt" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
-                            <Text style={styles.rowTitle}>{t('settings.flashNoteConfig', '闪念笔记设置')}</Text>
-                        </View>
-                        <View style={styles.rowRight}>
-                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                        </View>
-                    </TouchableOpacity>
-
-                    <View style={styles.divider} />
-
-                    {/* APP 设置（字体大小与 Markdown 样式） */}
-                    <TouchableOpacity
-                        style={styles.rowItem}
-                        onPress={() => navigation.navigate('AppSettings')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.rowLeft}>
-                            <Icon name="tune" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
-                            <Text style={styles.rowTitle}>{t('settings.appSettings', 'APP 设置')}</Text>
-                        </View>
-                        <View style={styles.rowRight}>
-                            <Text style={styles.rowSubtitle} numberOfLines={1}>
-                                {`${t(`settings.fontSizesShort.${fontSize}`)} · ${t(`settings.themes.${markdownTheme}`)}`}
-                            </Text>
-                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                        </View>
-                    </TouchableOpacity>
-
-                    <View style={styles.divider} />
-
-                    {/* 关于绿天 */}
-                    <TouchableOpacity
-                        style={styles.rowItem}
-                        onPress={() => navigation.navigate('About')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.rowLeft}>
-                            <Icon name="info-outline" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
-                            <Text style={styles.rowTitle}>{t('about.title', '关于绿天')}</Text>
-                        </View>
-                        <View style={styles.rowRight}>
-                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                        </View>
-                    </TouchableOpacity>
+                {/* 卡片三：设置与关于 */}
+                <View style={styles.cardWrapper}>
+                    <View style={styles.settingsGroup}>
+                        <SettingsItem
+                            label={t('settings.flashNoteConfig', '闪念笔记设置')}
+                            icon="lightning-bolt-outline"
+                            onPress={() => navigation.navigate('FlashNoteConfig')}
+                        />
+                        <View style={styles.separator} />
+                        <SettingsItem
+                            label={t('settings.appSettings', 'APP 设置')}
+                            icon="tune"
+                            onPress={() => navigation.navigate('AppSettings')}
+                            subtitle={`${t(`settings.fontSizesShort.${fontSize}`)} · ${t(`settings.themes.${markdownTheme}`)}`}
+                        />
+                        <View style={styles.separator} />
+                        <SettingsItem
+                            label={t('about.title', '关于绿天')}
+                            icon="information-outline"
+                            onPress={() => navigation.navigate('About')}
+                        />
+                    </View>
                 </View>
-            </View>
-        </ScrollView>
+            </ScrollView>
+        </View>
     );
 };
 
@@ -221,147 +316,142 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: theme.colors.background,
     },
+    scroll: {
+        flex: 1,
+    },
     contentContainer: {
-        paddingTop: theme.spacing.md,
+        paddingTop: 0,
         paddingBottom: theme.spacing.xl,
-        paddingHorizontal: theme.spacing.md,
     },
-    // 顶部 Hero 大卡片
-    heroCard: {
-        backgroundColor: theme.colors.surface,
-        borderRadius: theme.radius.sm,
-        padding: theme.spacing.md,
-        marginBottom: theme.spacing.md,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.04,
-        shadowRadius: 4,
-        elevation: 1,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
+    safeArea: {
+        backgroundColor: theme.colors.background,
     },
-    heroContent: {
-        flexDirection: 'column',
-    },
-    heroHeaderRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: theme.spacing.md,
-    },
-    heroTitleContainer: {
+    userProfileCard: {
+        backgroundColor: theme.colors.background,
+        paddingHorizontal: theme.spacing.m,
+        paddingTop: theme.spacing.m * 1.5,
+        paddingBottom: theme.spacing.m,
         flexDirection: 'row',
         alignItems: 'center',
     },
-    heroIconWrap: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: theme.colors.primaryLight,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: theme.spacing.sm,
-    },
-    heroTitle: {
-        fontSize: 17,
-        fontWeight: 'bold',
-        color: theme.colors.text,
-    },
-    heroStatusTag: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F3F4F6',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+    avatarPressable: {
         borderRadius: 12,
+    },
+    avatarContainer: {
+        marginRight: theme.spacing.m,
+    },
+    avatar: {
+        width: 64,
+        height: 64,
+        borderRadius: 12,
+        backgroundColor: theme.colors.surface,
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOpacity: 0.08,
+        shadowOffset: { width: 0, height: 2 },
+        shadowRadius: 4,
+        elevation: 2,
+        overflow: 'hidden',
+    },
+    avatarImage: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 12,
+    },
+    userInfoPressable: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 8,
+        paddingHorizontal: 8,
+        borderRadius: 8,
+    },
+    userInfoPressed: {
+        backgroundColor: '#F3F4F6',
+    },
+    userInfo: {
+        flex: 1,
+        marginRight: theme.spacing.s,
+    },
+    userName: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: theme.colors.text,
+        marginBottom: 6,
+    },
+    statusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
     statusDot: {
         width: 6,
         height: 6,
         borderRadius: 3,
         backgroundColor: '#9CA3AF',
-        marginRight: 5,
-    },
-    connectedTag: {
-        backgroundColor: theme.colors.successBg,
+        marginRight: 6,
     },
     connectedDot: {
         backgroundColor: theme.colors.success,
     },
-    heroStatusName: {
-        fontSize: 12,
-        color: theme.colors.textSecondary,
-        fontWeight: '600',
-    },
-    connectedName: {
-        color: theme.colors.successText,
-    },
-    heroStatusRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    heroStatusText: {
+    userSyncStatus: {
         fontSize: 13,
         color: theme.colors.textSecondary,
-        flex: 1,
-        marginRight: 8,
+        flexShrink: 1,
     },
-    // 分组容器
-    groupSection: {
-        marginBottom: theme.spacing.md,
+    cardWrapper: {
+        paddingHorizontal: theme.spacing.s,
+        marginBottom: theme.spacing.s,
     },
-    groupHeaderTitle: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: theme.colors.textSecondary,
-        marginBottom: 6,
-        marginLeft: 4,
-    },
-    groupCard: {
+    settingsGroup: {
         backgroundColor: theme.colors.surface,
         borderRadius: theme.radius.sm,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.03,
-        shadowRadius: 3,
+        shadowOffset: { width: 0, height: 1 },
+        shadowRadius: 4,
         elevation: 0.5,
         overflow: 'hidden',
     },
-    rowItem: {
+    settingsItem: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingVertical: 14,
-        paddingHorizontal: theme.spacing.md,
+        paddingHorizontal: theme.spacing.m,
+        paddingVertical: 12,
+        minHeight: 52,
     },
-    rowLeft: {
+    settingsItemPressed: {
+        backgroundColor: '#F3F4F6',
+    },
+    settingsItemLeft: {
         flexDirection: 'row',
         alignItems: 'center',
         flex: 1,
     },
-    rowIcon: {
-        marginRight: 12,
+    settingsItemIcon: {
+        marginRight: theme.spacing.m,
         width: 24,
         textAlign: 'center',
     },
-    rowTitle: {
-        fontSize: 15,
+    settingsItemText: {
+        fontSize: 16,
         color: theme.colors.text,
     },
-    rowRight: {
+    settingsItemRight: {
         flexDirection: 'row',
         alignItems: 'center',
     },
-    rowSubtitle: {
+    settingsItemSubtitle: {
         fontSize: 13,
         color: theme.colors.textSecondary,
         marginRight: 4,
-        maxWidth: 140,
+        maxWidth: 160,
     },
-    divider: {
+    separator: {
         height: StyleSheet.hairlineWidth,
-        backgroundColor: theme.colors.divider,
-        marginLeft: 52, // Indent to align with text label
+        backgroundColor: theme.colors.border,
+        marginLeft: theme.spacing.m + 24 + theme.spacing.m,
     },
 });
