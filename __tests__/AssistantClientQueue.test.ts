@@ -599,7 +599,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         sendRawSpy.mockRestore();
     });
 
-    test('收到 sync_result 携带 deletedMessageIds 时增量剔除本地对应消息', () => {
+    test('收到 sync_result 携带 deletedMessageIds 时增量剔除本地对应消息并清理待发队列', () => {
         const handleServerMessage = (client as unknown as {
             handleServerMessage: (msg: ServerMessage) => void;
         }).handleServerMessage.bind(client);
@@ -624,6 +624,10 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
                 },
             ],
             pendingCancelQueue: ['m-deleted-remote'],
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-deleted-remote', content: '在其他端已撤销的消息' },
+                { sessionId: 'main', messageId: 'm-keep-send', content: '正常待发' },
+            ],
         });
 
         handleServerMessage({
@@ -639,5 +643,41 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.messages.find((m) => m.id === 'm-deleted-remote')).toBeUndefined();
         expect(state.messages.find((m) => m.id === 'm-keep')).toBeDefined();
         expect(state.pendingCancelQueue.includes('m-deleted-remote')).toBe(false);
+        expect(state.pendingSendQueue.some((q) => q.messageId === 'm-deleted-remote')).toBe(false);
+        expect(state.pendingSendQueue.some((q) => q.messageId === 'm-keep-send')).toBe(true);
+    });
+
+    test('收到 message_deleted 广播时同步剔除待发队列中的残留', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-broadcast-del',
+                    seq: 2,
+                    role: 'user',
+                    content: '被广播删除的消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingCancelQueue: ['m-broadcast-del'],
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-broadcast-del', content: '被广播删除的消息' },
+            ],
+        });
+
+        handleServerMessage({
+            type: 'message_deleted',
+            sessionId: 'main',
+            messageId: 'm-broadcast-del',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-broadcast-del')).toBeUndefined();
+        expect(state.pendingCancelQueue.includes('m-broadcast-del')).toBe(false);
+        expect(state.pendingSendQueue.some((q) => q.messageId === 'm-broadcast-del')).toBe(false);
     });
 });

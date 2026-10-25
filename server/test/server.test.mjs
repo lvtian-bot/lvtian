@@ -1374,3 +1374,34 @@ test('SessionManager deleteMessage 推进序列号并纳入 getReconcileData 增
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('SessionManager deleteMessage 超过100条时完整保留删除历史，不截断', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-del-many-'));
+    const sm = new SessionManager(tmpDir);
+
+    const m0 = sm.addMessage('test-session', {
+        id: 'msg-init',
+        role: 'user',
+        content: '初始基准消息',
+        timestamp: Date.now(),
+        status: 'sent',
+    });
+    const baseSeq = m0.seq;
+    for (let i = 0; i < 120; i++) {
+        sm.addMessage('test-session', {
+            id: `msg-${i}`,
+            role: 'user',
+            content: `内容 ${i}`,
+            timestamp: Date.now(),
+            status: 'queued',
+        });
+        sm.deleteMessage('test-session', `msg-${i}`);
+    }
+
+    const session = sm.getOrCreateSession('test-session');
+    assert.equal(session.deletedMessages?.length, 120, '120条删除历史全部完整保留');
+    const reconcile = sm.getReconcileData('test-session', baseSeq);
+    assert.equal(reconcile.deletedMessageIds?.length, 120, '对账时返回全部120条删除ID');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+

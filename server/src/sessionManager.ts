@@ -688,9 +688,6 @@ export class SessionManager {
             session.deletedMessages = [];
         }
         session.deletedMessages.push({ id: messageId, seq: delSeq });
-        if (session.deletedMessages.length > 100) {
-            session.deletedMessages.splice(0, session.deletedMessages.length - 100);
-        }
         this.appendEvent(sessionId, {
             t: 'del_msg',
             at: Date.now(),
