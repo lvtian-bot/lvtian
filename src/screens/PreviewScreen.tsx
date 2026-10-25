@@ -18,6 +18,7 @@ import { useCloudSync } from '../hooks/useCloudSync';
 import { StatusBannerContainer } from '../components/StatusBannerContainer';
 import { previewHtml } from '../preview-web/previewHtml';
 import { serverFileService } from '../services/ServerFileService';
+import { getFontSizeMetrics } from '../utils/fontSize';
 import * as FileSystem from 'expo-file-system/legacy';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
@@ -28,7 +29,8 @@ export const PreviewScreen = () => {
     const navigation = useNavigation<NavigationProp>();
     const { t } = useTranslation();
     const { filePath, source = 'local', title } = route.params;
-    const { markdownTheme } = useSettingsStore();
+    const { markdownTheme, fontSize } = useSettingsStore();
+    const previewFontSize = getFontSizeMetrics(fontSize).chatBody;
     const fileMetadata = useFileMetadataStore(state => state.metadata[filePath]);
     const insets = useSafeAreaInsets();
 
@@ -269,6 +271,25 @@ export const PreviewScreen = () => {
             }));
         }
     }, [markdownTheme, isWebViewReady]);
+
+    // Push font size change to WebView
+    useEffect(() => {
+        if (isWebViewReady) {
+            const fontScript = `
+                (function() {
+                    var styleEl = document.getElementById('lvtian-font-style');
+                    if (!styleEl) {
+                        styleEl = document.createElement('style');
+                        styleEl.id = 'lvtian-font-style';
+                        document.head.appendChild(styleEl);
+                    }
+                    styleEl.innerHTML = '#preview, .markdown-body { font-size: ${previewFontSize}px !important; }';
+                })();
+                true;
+            `;
+            webViewRef.current?.injectJavaScript(fontScript);
+        }
+    }, [fontSize, isWebViewReady, previewFontSize]);
 
     const handleOverwriteLocal = async () => {
         await resolveConflict('useCloud');

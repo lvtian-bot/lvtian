@@ -3,9 +3,13 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MarkdownThemeKey } from '../utils/markdownThemes';
 
+export type FontSizePreference = 'small' | 'standard' | 'large';
+
 interface SettingsState {
     themeMode: 'light' | 'dark' | 'system';
     setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
+    fontSize: FontSizePreference;
+    setFontSize: (size: FontSizePreference) => void;
     flashNoteConfig: {
         path: string;
         filename: string;
@@ -13,8 +17,6 @@ interface SettingsState {
         historyPattern?: 'none' | 'dash-yyyymm' | 'underscore-yyyymm' | 'dash-yyyy' | 'chinese-yyyymm';
         historyFolderPath: string; // New field for separate history folder
     };
-    showFlashNotesInCache: boolean;
-    setShowFlashNotesInCache: (show: boolean) => void;
     setFlashNoteConfig: (config: Partial<SettingsState['flashNoteConfig']>) => void;
 
     // Cloud Provider Selection (WebDAV for flash notes)
@@ -40,6 +42,8 @@ export const useSettingsStore = create<SettingsState>()(
         (set) => ({
             themeMode: 'system',
             setThemeMode: (mode) => set({ themeMode: mode }),
+            fontSize: 'standard',
+            setFontSize: (size) => set({ fontSize: size }),
             flashNoteConfig: {
                 path: '',
                 filename: 'flash_notes.md',
@@ -60,8 +64,6 @@ export const useSettingsStore = create<SettingsState>()(
             setWebDavConfig: (config) =>
                 set((state) => ({ webDavConfig: { ...state.webDavConfig, ...config } })),
 
-            showFlashNotesInCache: false, // Default to not show flash notes in cache list
-            setShowFlashNotesInCache: (show) => set({ showFlashNotesInCache: show }),
             markdownTheme: 'default',
             setMarkdownTheme: (theme) => set({ markdownTheme: theme }),
             hasHydrated: false,

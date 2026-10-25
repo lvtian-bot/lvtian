@@ -1,15 +1,13 @@
-// 更新主设置页面：仿微信设计 + 独立卡片优化
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList, Pressable } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
-import { markdownThemes, MarkdownThemeKey } from '../utils/markdownThemes';
-import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
-import Icon from '@expo/vector-icons/MaterialIcons';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -17,41 +15,41 @@ export const MeScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
-    // Config Store - include hydration status
     const {
         webDavConfig,
         cloudProvider,
         markdownTheme,
-        setMarkdownTheme
+        fontSize,
     } = useSettingsStore();
 
     const {
         serverUrl,
         connectionState,
+        permissionMode,
     } = useAssistantStore();
 
-    // Markdown主题选择模态框
-    const [themeModalVisible, setThemeModalVisible] = useState(false);
-    const themes = Object.keys(markdownThemes) as MarkdownThemeKey[];
+    const isConnected = connectionState === 'connected';
 
     return (
-        <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
-
-            {/* 绿天个人助理服务配置卡片 */}
+        <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer} keyboardShouldPersistTaps="handled">
+            {/* 顶部核心大卡片：绿天服务端 */}
             <TouchableOpacity
-                style={styles.card}
+                style={styles.heroCard}
                 onPress={() => navigation.navigate('AssistantConfig')}
                 activeOpacity={0.8}
             >
-                <View style={styles.cardContent}>
-                    <View style={styles.cardHeaderRow}>
-                        <View style={styles.cardTitleContainer}>
-                            <Icon name="smart-toy" size={28} color={theme.colors.primary} style={styles.cardIcon} />
-                            <Text style={styles.cardTitle}>{t('settings.assistantTitle', '绿天助理服务')}</Text>
+                <View style={styles.heroContent}>
+                    <View style={styles.heroHeaderRow}>
+                        <View style={styles.heroTitleContainer}>
+                            <View style={styles.heroIconWrap}>
+                                <Icon name="dns" size={24} color={theme.colors.primary} />
+                            </View>
+                            <Text style={styles.heroTitle}>{t('settings.serverTitle', '绿天服务端')}</Text>
                         </View>
-                        <View style={[styles.cardServiceTag, connectionState === 'connected' && styles.connectedTag]}>
-                            <Text style={[styles.cardServiceName, connectionState === 'connected' && styles.connectedName]}>
-                                {connectionState === 'connected'
+                        <View style={[styles.heroStatusTag, isConnected && styles.connectedTag]}>
+                            <View style={[styles.statusDot, isConnected && styles.connectedDot]} />
+                            <Text style={[styles.heroStatusName, isConnected && styles.connectedName]}>
+                                {isConnected
                                     ? t('settings.assistantConnected', '已连接')
                                     : connectionState === 'connecting' || connectionState === 'reconnecting'
                                     ? t('settings.assistantConnecting', '连接中...')
@@ -62,177 +60,158 @@ export const MeScreen = () => {
                         </View>
                     </View>
 
-                    <View style={styles.cardStatusRow}>
-                        <Text style={styles.cardStatusText} numberOfLines={1} ellipsizeMode="tail">
-                            {serverUrl ? serverUrl : t('settings.assistantSubtitle', '配置服务地址与访问令牌以连接助理')}
+                    <View style={styles.heroStatusRow}>
+                        <Text style={styles.heroStatusText} numberOfLines={1} ellipsizeMode="tail">
+                            {serverUrl ? serverUrl : t('settings.serverSubtitle', '配置服务地址与访问令牌以连接服务端')}
                         </Text>
                         <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
                     </View>
                 </View>
             </TouchableOpacity>
 
-            {/* Cloud Configuration Card */}
-            <TouchableOpacity
-                style={styles.card}
-                onPress={() => navigation.navigate('CloudRepoConfig')}
-                activeOpacity={0.8}
-            >
-                <View style={styles.cardContent}>
-                    <View style={styles.cardHeaderRow}>
-                        <View style={styles.cardTitleContainer}>
-                            <Icon name="cloud-sync" size={28} color={theme.colors.primary} style={styles.cardIcon} />
-                            <Text style={styles.cardTitle}>{t('settings.cloudRepoConfig')}</Text>
+            {/* 分组一：AI 智能体与中枢 */}
+            <View style={styles.groupSection}>
+                <Text style={styles.groupHeaderTitle}>{t('settings.groups.agent', 'AI 智能体与中枢')}</Text>
+                <View style={styles.groupCard}>
+                    {/* AI 智能体配置 */}
+                    <TouchableOpacity
+                        style={styles.rowItem}
+                        onPress={() => navigation.navigate('AgentConfig')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.rowLeft}>
+                            <Icon name="smart-toy" size={22} color={theme.colors.primary} style={styles.rowIcon} />
+                            <Text style={styles.rowTitle}>{t('settings.agentConfig', 'AI 智能体配置')}</Text>
                         </View>
-                        <View style={styles.cardServiceTag}>
-                            <Text style={styles.cardServiceName}>
-                                {cloudProvider === 'webdav' ? 'WebDAV' : t('settings.notConfigured')}
+                        <View style={styles.rowRight}>
+                            <Text style={styles.rowSubtitle} numberOfLines={1}>
+                                {permissionMode === 'danger-full-access'
+                                    ? t('assistant.permissionDanger', '完全权限模式')
+                                    : t('assistant.permissionWorkspace', '安全工作区模式')}
                             </Text>
+                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
                         </View>
-                    </View>
+                    </TouchableOpacity>
 
-                    <View style={styles.cardStatusRow}>
-                        <Text style={styles.cardStatusText} numberOfLines={1} ellipsizeMode="tail">
-                            {cloudProvider === 'webdav' && webDavConfig.server
-                                ? `${t('settings.configured')} · ${webDavConfig.server}`
-                                : t('settings.cloudProvider.subtitle')}
-                        </Text>
-                        <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                    </View>
+                    <View style={styles.divider} />
+
+                    {/* 系统工作区文件 */}
+                    <TouchableOpacity
+                        style={styles.rowItem}
+                        onPress={() => navigation.navigate('ServerFileList')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.rowLeft}>
+                            <Icon name="folder" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
+                            <Text style={styles.rowTitle}>{t('tabs.files', '系统文件')}</Text>
+                        </View>
+                        <View style={styles.rowRight}>
+                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                        </View>
+                    </TouchableOpacity>
                 </View>
-            </TouchableOpacity>
+            </View>
 
-            {/* 文件入口 - 系统文件 */}
-            <TouchableOpacity
-                style={styles.smallCard}
-                onPress={() => navigation.navigate('ServerFileList')}
-                activeOpacity={0.8}
-            >
-                <View style={styles.smallCardLeft}>
-                    <Icon name="folder" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
-                    <Text style={styles.smallCardTitle}>{t('tabs.files')}</Text>
+            {/* 分组二：云端存储与网盘 */}
+            <View style={styles.groupSection}>
+                <Text style={styles.groupHeaderTitle}>{t('settings.groups.cloud', '云端存储与网盘')}</Text>
+                <View style={styles.groupCard}>
+                    {/* 云端同步 (WebDAV / 坚果云) */}
+                    <TouchableOpacity
+                        style={styles.rowItem}
+                        onPress={() => navigation.navigate('CloudRepoConfig')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.rowLeft}>
+                            <Icon name="cloud-sync" size={22} color={theme.colors.primary} style={styles.rowIcon} />
+                            <Text style={styles.rowTitle}>{t('settings.cloudSyncWebDav', '云端同步 (WebDAV / 坚果云)')}</Text>
+                        </View>
+                        <View style={styles.rowRight}>
+                            <Text style={styles.rowSubtitle} numberOfLines={1}>
+                                {cloudProvider === 'webdav' && webDavConfig.server
+                                    ? t('settings.configured', '已配置')
+                                    : t('settings.notConfigured', '未配置')}
+                            </Text>
+                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                        </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.divider} />
+
+                    {/* 云盘文件 */}
+                    <TouchableOpacity
+                        style={styles.rowItem}
+                        onPress={() => navigation.navigate('CloudFileList')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.rowLeft}>
+                            <Icon name="cloud" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
+                            <Text style={styles.rowTitle}>{t('browser.cloudFiles', '云盘文件')}</Text>
+                        </View>
+                        <View style={styles.rowRight}>
+                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                        </View>
+                    </TouchableOpacity>
                 </View>
-                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
+            </View>
 
-            {/* 文件入口 - 云盘文件 */}
-            <TouchableOpacity
-                style={styles.smallCard}
-                onPress={() => navigation.navigate('CloudFileList')}
-                activeOpacity={0.8}
-            >
-                <View style={styles.smallCardLeft}>
-                    <Icon name="cloud" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
-                    <Text style={styles.smallCardTitle}>{t('browser.cloudFiles', { defaultValue: '云盘文件' })}</Text>
+            {/* 分组三：功能与系统 */}
+            <View style={styles.groupSection}>
+                <Text style={styles.groupHeaderTitle}>{t('settings.groups.general', '功能与系统')}</Text>
+                <View style={styles.groupCard}>
+                    {/* 闪念笔记设置 */}
+                    <TouchableOpacity
+                        style={styles.rowItem}
+                        onPress={() => navigation.navigate('FlashNoteConfig')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.rowLeft}>
+                            <Icon name="bolt" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
+                            <Text style={styles.rowTitle}>{t('settings.flashNoteConfig', '闪念笔记设置')}</Text>
+                        </View>
+                        <View style={styles.rowRight}>
+                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                        </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.divider} />
+
+                    {/* APP 设置（字体大小与 Markdown 样式） */}
+                    <TouchableOpacity
+                        style={styles.rowItem}
+                        onPress={() => navigation.navigate('AppSettings')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.rowLeft}>
+                            <Icon name="tune" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
+                            <Text style={styles.rowTitle}>{t('settings.appSettings', 'APP 设置')}</Text>
+                        </View>
+                        <View style={styles.rowRight}>
+                            <Text style={styles.rowSubtitle} numberOfLines={1}>
+                                {`${t(`settings.fontSizesShort.${fontSize}`)} · ${t(`settings.themes.${markdownTheme}`)}`}
+                            </Text>
+                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                        </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.divider} />
+
+                    {/* 关于绿天 */}
+                    <TouchableOpacity
+                        style={styles.rowItem}
+                        onPress={() => navigation.navigate('About')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.rowLeft}>
+                            <Icon name="info-outline" size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
+                            <Text style={styles.rowTitle}>{t('about.title', '关于绿天')}</Text>
+                        </View>
+                        <View style={styles.rowRight}>
+                            <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                        </View>
+                    </TouchableOpacity>
                 </View>
-                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-
-            {/* 闪念笔记配置 - 独立小卡片 */}
-            <TouchableOpacity
-                style={styles.smallCard}
-                onPress={() => navigation.navigate('FlashNoteConfig')}
-                activeOpacity={0.8}
-            >
-                <View style={styles.smallCardLeft}>
-                    <Icon name="bolt" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
-                    <Text style={styles.smallCardTitle}>{t('settings.flashNoteConfig')}</Text>
-                </View>
-                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-
-            {/* Markdown主题设置 - 独立小卡片 */}
-            <TouchableOpacity
-                style={styles.smallCard}
-                onPress={() => setThemeModalVisible(true)}
-                activeOpacity={0.8}
-            >
-                <View style={styles.smallCardLeft}>
-                    <Icon name="palette" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
-                    <Text style={styles.smallCardTitle}>{t('settings.markdownStyle')}</Text>
-                </View>
-                <View style={styles.smallCardRight}>
-                    <Text style={styles.smallCardSubtitle}>{t(`settings.themes.${markdownTheme}`)}</Text>
-                    <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                </View>
-            </TouchableOpacity>
-
-            {/* 缓存管理 - 独立小卡片 */}
-            <TouchableOpacity
-                style={styles.smallCard}
-                onPress={() => navigation.navigate('CacheManager')}
-                activeOpacity={0.8}
-            >
-                <View style={styles.smallCardLeft}>
-                    <Icon name="delete-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
-                    <Text style={styles.smallCardTitle}>{t('settings.cacheManager')}</Text>
-                </View>
-                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-
-            {/* 关于 - 独立小卡片 */}
-            <TouchableOpacity
-                style={styles.smallCard}
-                onPress={() => navigation.navigate('About')}
-                activeOpacity={0.8}
-            >
-                <View style={styles.smallCardLeft}>
-                    <Icon name="info-outline" size={22} color={theme.colors.textSecondary} style={styles.smallCardIcon} />
-                    <Text style={styles.smallCardTitle}>{t('about.title')}</Text>
-                </View>
-                <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-
-            {/* Markdown主题选择模态框 */}
-            <Modal
-                visible={themeModalVisible}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setThemeModalVisible(false)}
-            >
-                <TouchableOpacity
-                    style={styles.modalOverlay}
-                    activeOpacity={1}
-                    onPress={() => setThemeModalVisible(false)}
-                >
-                    <Pressable style={styles.modalContent} onPress={() => { }}>
-                        <Text style={styles.modalTitle}>{t('settings.markdownStyle')}</Text>
-                        <FlatList
-                            data={themes}
-                            renderItem={({ item }) => (
-                                <TouchableOpacity
-                                    style={[
-                                        styles.themeItem,
-                                        markdownTheme === item && styles.themeItemActive
-                                    ]}
-                                    onPress={() => {
-                                        setMarkdownTheme(item);
-                                        setThemeModalVisible(false);
-                                    }}
-                                >
-                                    <Text style={[
-                                        styles.themeItemText,
-                                        markdownTheme === item && styles.themeItemTextActive
-                                    ]}>
-                                        {t(`settings.themes.${item}`)}
-                                    </Text>
-                                    {markdownTheme === item && (
-                                        <Icon name="check" size={20} color={theme.colors.primary} />
-                                    )}
-                                </TouchableOpacity>
-                            )}
-                            keyExtractor={item => item}
-                            style={styles.themeList}
-                        />
-                        <TouchableOpacity
-                            style={styles.closeButton}
-                            onPress={() => setThemeModalVisible(false)}
-                        >
-                            <Text style={styles.closeButtonText}>{t('common.close')}</Text>
-                        </TouchableOpacity>
-                    </Pressable>
-                </TouchableOpacity>
-            </Modal>
-
+            </View>
         </ScrollView>
     );
 };
@@ -241,169 +220,148 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: theme.colors.background,
-        paddingTop: theme.spacing.m,
-        paddingHorizontal: theme.spacing.s, // Add padding to container instead of margins on cards
     },
-    // 云端存储卡片样式
-    card: {
+    contentContainer: {
+        paddingTop: theme.spacing.md,
+        paddingBottom: theme.spacing.xl,
+        paddingHorizontal: theme.spacing.md,
+    },
+    // 顶部 Hero 大卡片
+    heroCard: {
         backgroundColor: theme.colors.surface,
-        marginBottom: theme.spacing.s, // Reduced from l to s
-        borderRadius: theme.radius.sm, // Reduced from 12 to 8 (radius.sm)
-        padding: theme.spacing.m, // Reduced from l to m
+        borderRadius: theme.radius.sm,
+        padding: theme.spacing.md,
+        marginBottom: theme.spacing.md,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 }, // height 2 -> 1
-        shadowOpacity: 0.03, // 0.05 -> 0.03
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.04,
         shadowRadius: 4,
-        elevation: 0.5, // 2 -> 0.5
+        elevation: 1,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
     },
-    cardContent: {
+    heroContent: {
         flexDirection: 'column',
     },
-    cardHeaderRow: {
+    heroHeaderRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: theme.spacing.m,
+        marginBottom: theme.spacing.md,
     },
-    cardTitleContainer: {
+    heroTitleContainer: {
         flexDirection: 'row',
         alignItems: 'center',
     },
-    cardIcon: {
-        marginRight: theme.spacing.s,
+    heroIconWrap: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: theme.colors.primaryLight,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: theme.spacing.sm,
     },
-    cardTitle: {
-        fontSize: 18,
+    heroTitle: {
+        fontSize: 17,
         fontWeight: 'bold',
         color: theme.colors.text,
     },
-    cardServiceTag: {
-        backgroundColor: theme.colors.primaryLight,
+    heroStatusTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F3F4F6',
         paddingHorizontal: 8,
         paddingVertical: 4,
-        borderRadius: 4,
+        borderRadius: 12,
+    },
+    statusDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#9CA3AF',
+        marginRight: 5,
     },
     connectedTag: {
         backgroundColor: theme.colors.successBg,
     },
+    connectedDot: {
+        backgroundColor: theme.colors.success,
+    },
+    heroStatusName: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        fontWeight: '600',
+    },
     connectedName: {
         color: theme.colors.successText,
     },
-    cardServiceName: {
-        fontSize: 12,
-        color: theme.colors.primary,
-        fontWeight: '600',
-    },
-    cardStatusRow: {
+    heroStatusRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
     },
-    cardStatusText: {
-        fontSize: 14,
+    heroStatusText: {
+        fontSize: 13,
         color: theme.colors.textSecondary,
         flex: 1,
         marginRight: 8,
     },
-    // 独立小卡片样式
-    smallCard: {
+    // 分组容器
+    groupSection: {
+        marginBottom: theme.spacing.md,
+    },
+    groupHeaderTitle: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: theme.colors.textSecondary,
+        marginBottom: 6,
+        marginLeft: 4,
+    },
+    groupCard: {
         backgroundColor: theme.colors.surface,
-        marginBottom: theme.spacing.s,
-        borderRadius: theme.radius.sm, // 12 -> 8
-        paddingVertical: 12, // Reduced from 16 to 12
-        paddingHorizontal: theme.spacing.m,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        borderRadius: theme.radius.sm,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.03,
-        shadowRadius: 4, // 2 -> 4
-        elevation: 0.5, // 1 -> 0.5
+        shadowRadius: 3,
+        elevation: 0.5,
+        overflow: 'hidden',
     },
-    smallCardLeft: {
+    rowItem: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 14,
+        paddingHorizontal: theme.spacing.md,
     },
-    smallCardIcon: {
-        marginRight: theme.spacing.m,
+    rowLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
+    },
+    rowIcon: {
+        marginRight: 12,
         width: 24,
         textAlign: 'center',
     },
-    smallCardTitle: {
-        fontSize: 16,
+    rowTitle: {
+        fontSize: 15,
         color: theme.colors.text,
     },
-    smallCardRight: {
+    rowRight: {
         flexDirection: 'row',
         alignItems: 'center',
     },
-    smallCardSubtitle: {
-        fontSize: 14,
+    rowSubtitle: {
+        fontSize: 13,
         color: theme.colors.textSecondary,
         marginRight: 4,
+        maxWidth: 140,
     },
-    // Modal Styles
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalContent: {
-        width: '80%',
-        backgroundColor: theme.colors.white,
-        borderRadius: 16,
-        padding: theme.spacing.l,
-        maxHeight: '60%',
-        elevation: 5,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
-    },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        marginBottom: theme.spacing.l,
-        textAlign: 'center',
-        color: theme.colors.text,
-    },
-    themeList: {
-        flexGrow: 0,
-    },
-    themeItem: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: theme.spacing.m,
-        paddingHorizontal: theme.spacing.s,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.border,
-    },
-    themeItemActive: {
-        backgroundColor: theme.colors.primaryLight + '40',
-        borderRadius: 8,
-        borderBottomWidth: 0,
-    },
-    themeItemText: {
-        fontSize: 16,
-        color: theme.colors.text,
-    },
-    themeItemTextActive: {
-        color: theme.colors.primary,
-        fontWeight: 'bold',
-    },
-    closeButton: {
-        marginTop: theme.spacing.l,
-        backgroundColor: theme.colors.primary,
-        paddingVertical: theme.spacing.m,
-        borderRadius: 12,
-        alignItems: 'center',
-    },
-    closeButtonText: {
-        color: theme.colors.white,
-        fontSize: 16,
-        fontWeight: 'bold',
+    divider: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: theme.colors.divider,
+        marginLeft: 52, // Indent to align with text label
     },
 });

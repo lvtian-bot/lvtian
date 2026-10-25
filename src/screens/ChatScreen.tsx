@@ -47,6 +47,8 @@ import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ToolCallState } from '../types/assistantProtocol';
 import { RootStackParamList } from '../types/navigation';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { getFontSizeMetrics, FontSizeMetrics } from '../utils/fontSize';
 import i18n from '../i18n';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -304,6 +306,10 @@ export const ChatScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
     const tabBarHeight = useContext(TabBarHeightContext);
+    const { fontSize } = useSettingsStore();
+    const metrics = useMemo(() => getFontSizeMetrics(fontSize), [fontSize]);
+    const dynamicMarkdownStyles = useMemo(() => getDynamicMarkdownStyles(metrics), [metrics]);
+
     const flatListRef = useRef<FlatList<AssistantMessage>>(null);
     const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
     const contentInsetsRef = useRef<{ top: number; bottom: number }>({ top: 0, bottom: 0 });
@@ -761,7 +767,16 @@ export const ChatScreen = () => {
 
                                 {isUser ? (
                                     <View>
-                                        <Text style={styles.userText} selectable={true}>
+                                        <Text
+                                            style={[
+                                                styles.userText,
+                                                {
+                                                    fontSize: metrics.chatBody,
+                                                    lineHeight: metrics.chatLineHeight,
+                                                },
+                                            ]}
+                                            selectable={true}
+                                        >
                                             {item.content}
                                         </Text>
                                         {item.status === 'error' && item.errorMessage && (
@@ -795,7 +810,7 @@ export const ChatScreen = () => {
 
                                         {/* Markdown 内容（支持划词选词复制） */}
                                         {!!item.content && (
-                                            <Markdown style={markdownStyles} rules={markdownRules}>
+                                            <Markdown style={dynamicMarkdownStyles} rules={markdownRules}>
                                                 {item.content}
                                             </Markdown>
                                         )}
@@ -972,7 +987,10 @@ export const ChatScreen = () => {
                     <TextInput
                         ref={chatInputRef}
                         autoFocus={false}
-                        style={styles.chatInput}
+                        style={[
+                            styles.chatInput,
+                            { fontSize: metrics.chatInput },
+                        ]}
                         placeholder={t('assistant.inputPlaceholder', '消息')}
                         placeholderTextColor="#9CA3AF"
                         value={inputContent}
@@ -1015,29 +1033,29 @@ export const ChatScreen = () => {
     );
 };
 
-const markdownStyles = {
+const getDynamicMarkdownStyles = (metrics: FontSizeMetrics) => ({
     body: {
         color: '#111827',
-        fontSize: 15,
-        lineHeight: 22,
+        fontSize: metrics.chatBody,
+        lineHeight: metrics.chatLineHeight,
     },
     heading1: {
         color: '#111827',
-        fontSize: 18,
+        fontSize: metrics.chatHeading1,
         fontWeight: '700' as const,
         marginTop: 10,
         marginBottom: 6,
     },
     heading2: {
         color: '#111827',
-        fontSize: 16,
+        fontSize: metrics.chatHeading2,
         fontWeight: '700' as const,
         marginTop: 8,
         marginBottom: 4,
     },
     heading3: {
         color: '#111827',
-        fontSize: 15,
+        fontSize: metrics.chatHeading3,
         fontWeight: '700' as const,
         marginTop: 6,
         marginBottom: 4,
@@ -1061,14 +1079,14 @@ const markdownStyles = {
         borderRadius: 4,
         paddingHorizontal: 5,
         paddingVertical: 2,
-        fontSize: 13,
+        fontSize: metrics.chatCode,
         fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
     },
     fence: {
         backgroundColor: '#E5E7EB',
         borderRadius: 8,
         padding: 10,
-        fontSize: 13,
+        fontSize: metrics.chatCode,
         fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
         color: '#111827',
         marginVertical: 6,
@@ -1078,7 +1096,7 @@ const markdownStyles = {
         backgroundColor: '#E5E7EB',
         borderRadius: 8,
         padding: 10,
-        fontSize: 13,
+        fontSize: metrics.chatCode,
         fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
         color: '#111827',
         marginVertical: 6,
@@ -1093,7 +1111,7 @@ const markdownStyles = {
         fontWeight: '700' as const,
         color: '#111827',
     },
-};
+});
 
 const styles = StyleSheet.create({
     centerContainer: {

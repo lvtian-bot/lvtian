@@ -247,6 +247,38 @@
       "none": "None"
     },
     "markdownStyle": "Markdown Style",
+    "serverTitle": "Lvtian Server",
+    "serverConfig": "Server Connection",
+    "serverSubtitle": "Configure server address and token",
+    "agentConfig": "AI Agent Settings",
+    "agentConfigSubtitle": "Configure AI agent permissions & capabilities",
+    "cloudSyncWebDav": "Cloud Sync (WebDAV)",
+    "appSettings": "App Settings",
+    "fontSize": "Font Size",
+    "fontSizes": {
+      "small": "Small (Compact)",
+      "standard": "Default (Comfortable)",
+      "large": "Large (Readable)"
+    },
+    "fontSizesShort": {
+      "small": "Small",
+      "standard": "Default",
+      "large": "Large"
+    },
+    "groups": {
+      "agent": "AI Agent & Hub",
+      "cloud": "Cloud Storage & Drive",
+      "general": "Features & System"
+    },
+    "previewHeading": "Sample Preview",
+    "previewBody": "Lvtian AI agent connected. Font size adjustments will apply in real time across chat, flash notes, and Markdown previews.",
+    "agentHubTitle": "AI Hub & Execution Capabilities",
+    "agentHubEngine": "Execution Hub",
+    "agentHubEngineDesc": "DeepSeek Harness (ACP Protocol)",
+    "agentHubMemory": "Long-Term Memory",
+    "agentHubMemoryDesc": "Continuous accumulation in SOUL.md / MEMORY.md",
+    "agentHubModel": "Model Selection",
+    "agentHubModelDesc": "Managed by server (client-side switching in future versions)",
     "assistantTitle": "Lvtian Assistant",
     "assistantConfig": "Assistant Connection",
     "assistantConnected": "Connected",
