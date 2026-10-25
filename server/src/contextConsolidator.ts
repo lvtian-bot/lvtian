@@ -271,10 +271,8 @@ export class ContextConsolidator {
                     || currentSession.dshSessionId !== startDshSessionId;
             };
 
-            // 单次输入预算随提炼提供方的有效窗口收缩：OpenAI 兜底模型窗口 128k，
-            // 中文按约 1 字符/token 保守估算并留 40% 给模板与输出，避免请求被窗口拒绝
-            const providerBudget = providerConfig.baseUrl.includes('openai.com') ? 76_800 : 500_000;
-            const chunkChars = this.options.maxDialogueChars ?? providerBudget;
+            // 仅支持 100 万窗口的模型；单次 50 万字符（中文按约 1 字符/token 保守估算，留出模板与输出余量）
+            const chunkChars = this.options.maxDialogueChars ?? 500_000;
             const chunks = splitDialogueByChars(dialogue, chunkChars);
             let extracted: string | null;
 
