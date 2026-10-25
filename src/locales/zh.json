@@ -18,7 +18,9 @@
     "attachedImage": "发送了图片",
     "attachedFile": "发送了文件",
     "pickImageError": "选择图片失败",
-    "pickDocumentError": "选择文件失败"
+    "pickDocumentError": "选择文件失败",
+    "attachmentTooLarge": "附件体积过大（上限 750KB）",
+    "attachmentReadError": "读取附件文件失败"
   },
   "moments": {
     "placeholderTitle": "动态资讯",

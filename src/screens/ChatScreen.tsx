@@ -34,7 +34,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import { fsService } from '../services/FileSystemService';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
@@ -428,6 +428,12 @@ export const ChatScreen = () => {
             });
             if (!result.canceled && result.assets && result.assets.length > 0) {
                 const asset = result.assets[0];
+                const base64Data = asset.base64 || undefined;
+                const approxSize = asset.fileSize ?? (base64Data ? Math.round((base64Data.length * 3) / 4) : 0);
+                if (approxSize > 750 * 1024) {
+                    Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 750KB）'));
+                    return;
+                }
                 const name = asset.fileName || `image_${Date.now()}.jpg`;
                 const mimeType = asset.mimeType || 'image/jpeg';
                 const text = inputContent.trim() || t('chat.attachedImage', '发送了图片');
@@ -440,7 +446,7 @@ export const ChatScreen = () => {
                         name,
                         mimeType,
                         size: asset.fileSize,
-                        data: asset.base64 || undefined,
+                        data: base64Data,
                     },
                 ]);
             }
@@ -458,21 +464,18 @@ export const ChatScreen = () => {
                 const asset = result.assets[0];
                 const name = asset.name || `file_${Date.now()}`;
                 const mimeType = asset.mimeType;
-                let textContent: string | undefined;
-                let base64Data: string | undefined;
 
+                let readResult: { content?: string; data?: string; size: number };
                 try {
-                    textContent = await FileSystem.readAsStringAsync(asset.uri, {
-                        encoding: FileSystem.EncodingType.UTF8,
-                    });
-                } catch {
-                    try {
-                        base64Data = await FileSystem.readAsStringAsync(asset.uri, {
-                            encoding: FileSystem.EncodingType.Base64,
-                        });
-                    } catch {
-                        // 忽略
+                    readResult = await fsService.readAttachment(asset.uri, 750 * 1024);
+                } catch (readErr: unknown) {
+                    const errorMsg = readErr instanceof Error ? readErr.message : String(readErr);
+                    if (errorMsg === 'ATTACHMENT_TOO_LARGE') {
+                        Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 750KB）'));
+                    } else {
+                        Alert.alert(t('common.error', '错误'), t('chat.attachmentReadError', '读取附件文件失败'));
                     }
+                    return;
                 }
 
                 const text = inputContent.trim() || `${t('chat.attachedFile', '发送了文件')}: ${name}`;
@@ -484,9 +487,9 @@ export const ChatScreen = () => {
                         type: 'file',
                         name,
                         mimeType,
-                        size: asset.size,
-                        content: textContent,
-                        data: base64Data,
+                        size: readResult.size || asset.size,
+                        content: readResult.content,
+                        data: readResult.data,
                     },
                 ]);
             }
@@ -770,7 +773,10 @@ export const ChatScreen = () => {
                                     {isUser && item.status === 'error' && (
                                         <TouchableOpacity
                                             onPress={() =>
-                                                AssistantClient.getInstance().sendMessage(item.content)
+                                                AssistantClient.getInstance().sendMessage(
+                                                    item.content,
+                                                    item.attachments,
+                                                )
                                             }
                                         >
                                             <Icon

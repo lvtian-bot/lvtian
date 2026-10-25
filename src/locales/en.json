@@ -18,7 +18,9 @@
     "attachedImage": "Sent an image",
     "attachedFile": "Sent a file",
     "pickImageError": "Failed to pick image",
-    "pickDocumentError": "Failed to pick file"
+    "pickDocumentError": "Failed to pick file",
+    "attachmentTooLarge": "Attachment is too large (limit: 750KB)",
+    "attachmentReadError": "Failed to read attachment file"
   },
   "moments": {
     "placeholderTitle": "Moments & Digest",

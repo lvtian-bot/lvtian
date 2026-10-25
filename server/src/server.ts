@@ -79,7 +79,7 @@ export class LvtianServer {
 
         this.wss = new WS.Server({
             server: this.httpServer,
-            maxPayload: 1024 * 1024, // 限制单条报文 1MB 上限，防止超大报文消耗内存或阻塞事件循环
+            maxPayload: 5 * 1024 * 1024, // 限制单条报文 5MB 上限，防止超大报文消耗内存，同时为图片/文件 Base64 预留充裕空间
         }) as WebSocketServer;
         this.setupWebSocket();
     }

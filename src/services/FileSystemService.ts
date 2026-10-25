@@ -1,5 +1,5 @@
 import { Paths, File, Directory } from 'expo-file-system';
-
+import * as FileSystem from 'expo-file-system/legacy';
 export interface FileItem {
     name: string;
     path: string;
@@ -292,6 +292,51 @@ class FileSystemService {
 
     getRootPath(): string {
         return this.rootPath;
+    }
+
+    /**
+     * 读取外部/临时附件文件（用于主聊天图片或文档附件上传）
+     * 校验文件存在性、最大体积，并提供 UTF-8 文本与 Base64 回退读取
+     * @param uri 外部/缓存文件路径
+     * @param maxSize 附件体积限制（默认 750KB，避免超出 WebSocket 传输安全阈值）
+     */
+    async readAttachment(
+        uri: string,
+        maxSize = 750 * 1024
+    ): Promise<{ content?: string; data?: string; size: number }> {
+        const info = await FileSystem.getInfoAsync(uri);
+        if (!info.exists || info.isDirectory) {
+            throw new Error('ATTACHMENT_NOT_FOUND');
+        }
+
+        const size = info.size ?? 0;
+        if (size > maxSize) {
+            throw new Error('ATTACHMENT_TOO_LARGE');
+        }
+
+        let content: string | undefined;
+        let data: string | undefined;
+
+        try {
+            content = await FileSystem.readAsStringAsync(uri, {
+                encoding: FileSystem.EncodingType.UTF8,
+            });
+        } catch {
+            try {
+                data = await FileSystem.readAsStringAsync(uri, {
+                    encoding: FileSystem.EncodingType.Base64,
+                });
+            } catch (err) {
+                console.error('[FileSystemService] 读取附件内容失败:', err);
+                throw new Error('ATTACHMENT_READ_FAILED');
+            }
+        }
+
+        if (!content && !data) {
+            throw new Error('ATTACHMENT_READ_EMPTY');
+        }
+
+        return { content, data, size };
     }
 }
 
