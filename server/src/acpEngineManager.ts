@@ -522,14 +522,9 @@ export class AcpEngineManager {
             const idleAtArrivalMs = arrivalAt - this.sessionManager.getLastActiveAt(sessionId);
             const gateMet = idleAtArrivalMs >= this.idleTimeoutMs
                 && this.sessionManager.isCapacityOver(sessionId, this.minCapacityRatio);
-            if (pendingBackground && !gateMet && !handoffPending) {
-                // 预生成后主人提前回来：丢弃提要，保持温热会话不切断
-                this.sessionManager.clearPendingBackground(sessionId);
-                pendingBackground = null;
-                console.log(
-                    `[AcpEngine] 会话 ${sessionId} 提前唤醒（空闲 ${Math.round(idleAtArrivalMs / 60000)} 分钟），已丢弃预生成提要`
-                );
-            }
+            // 预生成后主人提前回来：先不丢提要——等解析完底层会话，确认原会话还能复用再丢；
+            // 若恰好引擎重启且旧会话被替换，这份提要就是断档接管唯一的早期上下文
+            const earlyReturn = pendingBackground !== null && !gateMet && !handoffPending;
             // 已开始但尚未交付成功的轮换不再重复换会话，只把上次没送出去的接力上下文补上
             shouldRotate = gateMet && !handoffPending;
 
@@ -555,6 +550,14 @@ export class AcpEngineManager {
                     `[AcpEngine] 会话 ${sessionId} 的底层会话已被替换（原 ${resolved.savedId ?? '未知'}），按断档注入接力上下文`
                 );
                 this.sessionManager.setHandoffPending(sessionId, true);
+            }
+            if (earlyReturn && !resolved.replaced) {
+                // 确认旧会话仍可复用：丢弃预生成提要，保持温热会话不切断
+                this.sessionManager.clearPendingBackground(sessionId);
+                pendingBackground = null;
+                console.log(
+                    `[AcpEngine] 会话 ${sessionId} 提前唤醒（空闲 ${Math.round(idleAtArrivalMs / 60000)} 分钟），已丢弃预生成提要`
+                );
             }
             const needsRelay = shouldRotate || resolved.replaced || handoffPending;
 

@@ -1045,6 +1045,51 @@ test('底层 resume 返回另一个会话时按断档处理：注入原文锚定
     }
 });
 
+test('提前窗口内回来且旧会话被替换：保留预生成提要并注入，不提前丢弃', async () => {
+    const tmpDir = createTempDir('lvtian-early-replaced-');
+    try {
+        const mm = new MemoryManager(tmpDir);
+        const sm = new SessionManager(tmpDir);
+        const tracker = {};
+        const engine1 = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(createMockEngine(tracker)),
+        });
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '较早的结论：方案定稿为 A 路线', timestamp: Date.now(), status: 'sent' });
+        await engine1.execute('main', 'asst-1', '较早的结论', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+        await engine1.stopAll();
+
+        // 2h58m 回来：预生成提要已存在，但还没到 3h 门禁
+        const memo = '### 1. 核心共识\n方案定稿为 A 路线';
+        sm.setPendingBackground('main', memo);
+        sm.setUsage('main', 40000, 128000);
+        sm.recordActivity('main', Date.now() - (2 * 60 + 58) * 60 * 1000);
+
+        // 旧会话恢复时被引擎替换成新会话
+        const tracker2 = { resumeReplacementId: 'engine-replacement-early' };
+        const engine2 = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(createMockEngine(tracker2)),
+        });
+        await engine2.execute('main', 'asst-2', '我回来了', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+
+        assert.ok(tracker2.prompts[0].text.includes('上次静默期归档'), '替换会话应拿到提要');
+        assert.ok(tracker2.prompts[0].text.includes('方案定稿为 A 路线'));
+        assert.strictEqual(sm.hasPendingBackground('main'), false, '交付成功后清理提要');
+        assert.strictEqual(sm.isHandoffPending('main'), false);
+
+        await engine2.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
 test('工作区记忆文件每轮重读：MEMORY.md 修改后下一轮 prompt 立即生效', async () => {
     const tmpDir = createTempDir('lvtian-memory-refresh-');
     try {
