@@ -247,6 +247,29 @@
       "none": "无"
     },
     "markdownStyle": "Markdown样式",
+    "serverTitle": "绿天服务端",
+    "serverConfig": "服务端连接配置",
+    "serverSubtitle": "配置服务地址与访问令牌以连接服务端",
+    "agentConfig": "AI 智能体配置",
+    "agentConfigSubtitle": "配置运行在服务端的 AI 代理权限与能力",
+    "cloudSyncWebDav": "云端同步 (WebDAV / 坚果云)",
+    "appSettings": "APP 设置",
+    "fontSize": "字体大小",
+    "fontSizes": {
+      "small": "小 (紧凑)",
+      "standard": "默认 (舒适)",
+      "large": "大 (清晰)"
+    },
+    "fontSizesShort": {
+      "small": "小",
+      "standard": "默认",
+      "large": "大"
+    },
+    "groups": {
+      "agent": "AI 智能体与中枢",
+      "cloud": "云端存储与网盘",
+      "general": "功能与系统"
+    },
     "assistantTitle": "绿天助理服务",
     "assistantConfig": "助理服务配置",
     "assistantConnected": "已连接",

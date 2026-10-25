@@ -7,6 +7,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { getFontSizeMetrics } from '../utils/fontSize';
 import { FlashNoteInputModal } from '../components/FlashNoteInputModal';
 import { flashNoteService, FlashNote } from '../services/FlashNoteService';
 import { ActionSheetModal, ActionItem } from '../components/ActionSheetModal';
@@ -23,6 +25,8 @@ type FlashScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 export const FlashScreen = () => {
     const navigation = useNavigation<FlashScreenNavigationProp>();
     const { t } = useTranslation();
+    const { fontSize } = useSettingsStore();
+    const metrics = getFontSizeMetrics(fontSize);
 
     // Hook: Data & Sync Management
     const {
@@ -212,7 +216,19 @@ export const FlashScreen = () => {
                 onLongPress={() => handleNoteLongPress(item)}
             >
                 <Text style={styles.timestamp}>{formatNoteTimestamp(item.timestamp, t)}</Text>
-                <Text style={styles.content} numberOfLines={5} ellipsizeMode="tail">{item.content.trim()}</Text>
+                <Text
+                    style={[
+                        styles.content,
+                        {
+                            fontSize: metrics.flashBody,
+                            lineHeight: metrics.flashLineHeight,
+                        },
+                    ]}
+                    numberOfLines={5}
+                    ellipsizeMode="tail"
+                >
+                    {item.content.trim()}
+                </Text>
             </TouchableOpacity>
         </View>
     );

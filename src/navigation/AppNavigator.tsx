@@ -6,25 +6,26 @@ import { EditorScreen } from '../screens/EditorScreen';
 import { ServerFileScreen } from '../screens/ServerFileScreen';
 import { CloudNoteScreen } from '../screens/CloudNoteScreen';
 import { CloudRepoConfigScreen } from '../screens/CloudRepoConfigScreen'; // 新增
-import { FlashNoteConfigScreen } from '../screens/FlashNoteConfigScreen'; // 新增
-import { CacheManagerScreen } from '../screens/CacheManagerScreen'; // 新增
-import { AboutScreen } from '../screens/AboutScreen'; // 新增
-import { PermissionInfoScreen } from '../screens/PermissionInfoScreen'; // 新增
-import { AssistantConfigScreen } from '../screens/AssistantConfigScreen'; // 新增：助理服务配置
+import { FlashNoteConfigScreen } from '../screens/FlashNoteConfigScreen';
+import { AboutScreen } from '../screens/AboutScreen';
+import { PermissionInfoScreen } from '../screens/PermissionInfoScreen';
+import { AssistantConfigScreen } from '../screens/AssistantConfigScreen';
+import { AgentConfigScreen } from '../screens/AgentConfigScreen';
+import { AppSettingsScreen } from '../screens/AppSettingsScreen';
 import { RootStackParamList } from '../types/navigation';
-import { useTranslation } from 'react-i18next'; // 新增
+import { useTranslation } from 'react-i18next';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export const AppNavigator = () => {
-    const { t } = useTranslation(); // 新增
+    const { t } = useTranslation();
 
     return (
         <Stack.Navigator>
             <Stack.Screen name="MainTabs" component={TabNavigator} options={{ headerShown: false }} />
             <Stack.Screen name="Preview" component={PreviewScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Editor" component={EditorScreen} options={{ headerShown: false }} />
-            {/* 新增：云端仓库配置二级页面 */}
+            {/* 云端仓库配置二级页面 */}
             <Stack.Screen
                 name="CloudRepoConfig"
                 component={CloudRepoConfigScreen}
@@ -33,7 +34,7 @@ export const AppNavigator = () => {
                     title: t('settings.cloudRepoConfig')
                 }}
             />
-            {/* 新增：闪念笔记设置二级页面 */}
+            {/* 闪念笔记设置二级页面 */}
             <Stack.Screen
                 name="FlashNoteConfig"
                 component={FlashNoteConfigScreen}
@@ -42,16 +43,16 @@ export const AppNavigator = () => {
                     title: t('settings.flashNoteConfig')
                 }}
             />
-            {/* 新增：缓存管理页面 */}
+            {/* APP设置二级页面（字体大小与Markdown样式） */}
             <Stack.Screen
-                name="CacheManager"
-                component={CacheManagerScreen}
+                name="AppSettings"
+                component={AppSettingsScreen}
                 options={{
                     headerShown: true,
-                    title: t('settings.cacheManager')
+                    title: t('settings.appSettings', 'APP 设置')
                 }}
             />
-            {/* 新增：关于页面 */}
+            {/* 关于页面 */}
             <Stack.Screen
                 name="About"
                 component={AboutScreen}
@@ -60,7 +61,7 @@ export const AppNavigator = () => {
                     title: t('about.title')
                 }}
             />
-            {/* 新增：权限说明页面 */}
+            {/* 权限说明页面 */}
             <Stack.Screen
                 name="PermissionInfo"
                 component={PermissionInfoScreen}
@@ -69,7 +70,7 @@ export const AppNavigator = () => {
                     title: t('about.permissions.title')
                 }}
             />
-            {/* 新增：我页面入口后的系统文件页面 */}
+            {/* 系统文件页面 */}
             <Stack.Screen
                 name="ServerFileList"
                 component={ServerFileScreen}
@@ -78,7 +79,7 @@ export const AppNavigator = () => {
                     title: t('tabs.files')
                 }}
             />
-            {/* 新增：我页面入口后的云盘文件页面 */}
+            {/* 云盘文件页面 */}
             <Stack.Screen
                 name="CloudFileList"
                 component={CloudNoteScreen}
@@ -87,13 +88,22 @@ export const AppNavigator = () => {
                     title: t('browser.cloudFiles', { defaultValue: '云盘文件' })
                 }}
             />
-            {/* 新增：助理服务配置页面 */}
+            {/* 服务端连接配置页面 */}
             <Stack.Screen
                 name="AssistantConfig"
                 component={AssistantConfigScreen}
                 options={{
                     headerShown: true,
-                    title: t('settings.assistantConfig', '助理服务配置')
+                    title: t('settings.serverConfig', '服务端连接配置')
+                }}
+            />
+            {/* AI 智能体配置页面 */}
+            <Stack.Screen
+                name="AgentConfig"
+                component={AgentConfigScreen}
+                options={{
+                    headerShown: true,
+                    title: t('settings.agentConfig', 'AI 智能体配置')
                 }}
             />
         </Stack.Navigator>

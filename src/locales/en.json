@@ -247,6 +247,29 @@
       "none": "None"
     },
     "markdownStyle": "Markdown Style",
+    "serverTitle": "Lvtian Server",
+    "serverConfig": "Server Connection",
+    "serverSubtitle": "Configure server address and token",
+    "agentConfig": "AI Agent Settings",
+    "agentConfigSubtitle": "Configure AI agent permissions & capabilities",
+    "cloudSyncWebDav": "Cloud Sync (WebDAV)",
+    "appSettings": "App Settings",
+    "fontSize": "Font Size",
+    "fontSizes": {
+      "small": "Small (Compact)",
+      "standard": "Default (Comfortable)",
+      "large": "Large (Readable)"
+    },
+    "fontSizesShort": {
+      "small": "Small",
+      "standard": "Default",
+      "large": "Large"
+    },
+    "groups": {
+      "agent": "AI Agent & Hub",
+      "cloud": "Cloud Storage & Drive",
+      "general": "Features & System"
+    },
     "assistantTitle": "Lvtian Assistant",
     "assistantConfig": "Assistant Connection",
     "assistantConnected": "Connected",

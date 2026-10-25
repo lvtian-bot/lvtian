@@ -20,6 +20,7 @@ import { serverFileService } from '../services/ServerFileService';
 import { cloudService } from '../services/CloudService';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { getFontSizeMetrics } from '../utils/fontSize';
 import * as Clipboard from 'expo-clipboard';
 
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
@@ -70,6 +71,8 @@ export const EditorScreen = () => {
     const initialContentRef = useRef<string>('');
 
     const { markFileAsModified } = useFileMetadataStore();
+    const { fontSize } = useSettingsStore();
+    const editorFontSize = getFontSizeMetrics(fontSize).editorFontSize;
 
     const isFlashMode = !!flashNoteId;
     const { serverToken } = useAssistantStore.getState();
@@ -435,6 +438,13 @@ export const EditorScreen = () => {
                         }
                     };
                     webViewRef.current.postMessage(JSON.stringify(payload));
+                    webViewRef.current.postMessage(JSON.stringify({
+                        type: 'UPDATE_SETTINGS',
+                        payload: {
+                            theme: 'light',
+                            fontSize: editorFontSize,
+                        }
+                    }));
                 }
             } else if (data.type === 'log') {
                 console.log('[WebView Log]', data.payload);
