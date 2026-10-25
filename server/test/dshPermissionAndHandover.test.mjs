@@ -251,7 +251,18 @@ test('AcpEngineManager: triggerHandover 中断运行中任务并广播 stopped�
             status: 'processing',
         });
 
+        // 同时启动 sess-2 任务以模拟多会话并发
+        sessionManager.getOrCreateSession('sess-2');
+        const asstMsg2 = sessionManager.addMessage('sess-2', {
+            id: 'asst-2',
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            status: 'processing',
+        });
+
         let stoppedStatusReceived = null;
+        let stoppedStatusReceived2 = null;
         engine.execute('sess-1', asstMsg.id, '长期任务', {
             onDelta: () => {},
             onStatusChange: (status, payload) => {
@@ -262,15 +273,29 @@ test('AcpEngineManager: triggerHandover 中断运行中任务并广播 stopped�
             onToolCall: () => {},
         }).catch(() => undefined);
 
+        engine.execute('sess-2', asstMsg2.id, '并发任务', {
+            onDelta: () => {},
+            onStatusChange: (status, payload) => {
+                if (status === 'stopped') {
+                    stoppedStatusReceived2 = payload;
+                }
+            },
+            onToolCall: () => {},
+        }).catch(() => undefined);
+
         await promptStarted;
         assert.equal(engine.isRunning('sess-1'), true);
 
-        // 触发交接，任务被打断并应广播 stopped 终态
+        // 触发交接，所有受影响会话的任务均被打断并广播 stopped 终态
         await engine.triggerHandover('sess-1', 'permission_change');
 
         assert.ok(stoppedStatusReceived);
         assert.equal(stoppedStatusReceived.code, 'task_stopped');
         assert.equal(sessionManager.getOrCreateSession('sess-1').taskState, 'stopped');
+
+        assert.ok(stoppedStatusReceived2);
+        assert.equal(stoppedStatusReceived2.code, 'task_stopped');
+        assert.equal(sessionManager.getOrCreateSession('sess-2').taskState, 'stopped');
 
         await engine.stopAll();
     } finally {

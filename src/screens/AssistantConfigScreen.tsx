@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -33,6 +33,7 @@ export const AssistantConfigScreen = () => {
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
     const [saving, setSaving] = useState(false);
+    const hasUserSelectedRef = useRef(false);
 
     // 凭据同步：只在 store 中的 serverUrl / serverToken 变更时初始化表单，避免权限刷新覆盖未保存的输入
     useEffect(() => {
@@ -40,14 +41,14 @@ export const AssistantConfigScreen = () => {
         setToken(serverToken);
     }, [serverUrl, serverToken]);
 
-    // 权限模式同步：从已保存的服务端获取最新权限并保持本地选择态一致
+    // 权限模式同步：从已保存的服务端获取最新权限并保持本地选择态一致（若用户已手动选择则不覆盖）
     useEffect(() => {
-        if (permissionMode) {
+        if (permissionMode && !hasUserSelectedRef.current) {
             setSelectedMode(permissionMode);
         }
         if (serverUrl && serverToken) {
             AssistantClient.fetchPermissionMode(serverUrl, serverToken).then((remoteMode) => {
-                if (remoteMode) {
+                if (remoteMode && !hasUserSelectedRef.current) {
                     setSelectedMode(remoteMode);
                     setPermissionMode(remoteMode);
                 }
@@ -88,6 +89,7 @@ export const AssistantConfigScreen = () => {
         const res = await AssistantClient.testConnection(url, token);
         setTesting(false);
         if (res.permissionMode) {
+            hasUserSelectedRef.current = true;
             setSelectedMode(res.permissionMode);
         }
         setTestResult({
@@ -97,6 +99,7 @@ export const AssistantConfigScreen = () => {
     };
 
     const handleSelectMode = (mode: 'workspace-write' | 'danger-full-access') => {
+        hasUserSelectedRef.current = true;
         if (mode === selectedMode) return;
         if (mode === 'danger-full-access') {
             Alert.alert(
@@ -131,8 +134,7 @@ export const AssistantConfigScreen = () => {
 
         setSaving(true);
         try {
-            await setServerConfig(url, token);
-            // 同步权限模式至服务端并完成必要会话交接
+            // 1. 先验证并同步权限模式至服务端（若失败则不修改本地配置，避免状态半持久化分裂）
             const permSuccess = await AssistantClient.updatePermissionMode(url, token, selectedMode);
             if (!permSuccess) {
                 setSaving(false);
@@ -142,8 +144,12 @@ export const AssistantConfigScreen = () => {
                 );
                 return;
             }
+
+            // 2. 权限同步成功后，原子持久化凭据与权限状态
+            await setServerConfig(url, token);
             setPermissionMode(selectedMode);
-            // 强制重新发起长连接
+
+            // 3. 强制重新发起长连接
             AssistantClient.getInstance().connect(true);
             setSaving(false);
             Alert.alert(t('settings.success', '成功'), t('assistant.saveSuccess', '配置已保存并开始连接'), [

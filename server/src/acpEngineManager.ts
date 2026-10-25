@@ -369,18 +369,25 @@ export class AcpEngineManager {
         if (this.handoffInProgressSessions.has(sessionId)) {
             return;
         }
-        this.handoffInProgressSessions.add(sessionId);
+
+        // 收集受影响会话：主交接会话以及当前所有活跃会话（因底层共享连接即将被回收）
+        const affectedSessions = new Set<string>([sessionId, ...this.activeSessions.keys()]);
+        for (const sid of affectedSessions) {
+            this.handoffInProgressSessions.add(sid);
+        }
 
         try {
-            // 1. 若当前会话正在运行，先停止任务并触发 stopped 状态回调广播
-            if (this.activeSessions.has(sessionId)) {
-                const runtime = this.runtimes.get(sessionId);
-                this.stop(sessionId);
-                if (runtime?.callbacks?.onStatusChange) {
-                    try {
-                        runtime.callbacks.onStatusChange('stopped', { code: 'task_stopped' });
-                    } catch (err) {
-                        console.warn(`[AcpEngine] 交接广播停止状态失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
+            // 1. 若当前会话或其它受影响会话正在运行，先停止任务并触发 stopped 状态回调广播
+            for (const sid of affectedSessions) {
+                if (this.activeSessions.has(sid)) {
+                    const runtime = this.runtimes.get(sid);
+                    this.stop(sid);
+                    if (runtime?.callbacks?.onStatusChange) {
+                        try {
+                            runtime.callbacks.onStatusChange('stopped', { code: 'task_stopped' });
+                        } catch (err) {
+                            console.warn(`[AcpEngine] 交接广播停止状态失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
+                        }
                     }
                 }
             }
@@ -407,7 +414,9 @@ export class AcpEngineManager {
             // 5. 等待在途启动就绪并回收旧引擎连接，使下一次交互时能重新加载最新 DSH 启动配置
             await this.reclaimConnection();
         } finally {
-            this.handoffInProgressSessions.delete(sessionId);
+            for (const sid of affectedSessions) {
+                this.handoffInProgressSessions.delete(sid);
+            }
         }
     }
 
