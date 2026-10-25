@@ -513,6 +513,30 @@ export class AssistantClient {
     }
 
     /**
+     * 取消排队中的消息
+     */
+    public cancelQueued(messageId: string): boolean {
+        const sent = this.sendRaw({
+            type: 'cancel_queued',
+            sessionId: 'main',
+            messageId,
+        });
+        if (sent) {
+            const store = useAssistantStore.getState();
+            const existing = store.messages.find((m) => m.id === messageId);
+            if (existing) {
+                store.addOrUpdateMessage({
+                    ...existing,
+                    status: 'error',
+                    errorMessage: 'task_cancelled',
+                });
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * 处理服务端下发的事件报文
      */
     private handleServerMessage(msg: ServerMessage): void {
@@ -607,7 +631,6 @@ export class AssistantClient {
             case 'message_ack': {
                 const existing = store.messages.find((m) => m.id === msg.messageId);
                 const isError = msg.status === 'error';
-
                 // 服务端在优雅停机排空期拒绝新任务：客户端将其重新加入本地排队队列并置为升级中态，不向用户报错
                 if (isError && msg.error === 'service_upgrading') {
                     store.setIsServerUpgrading(true);
@@ -653,13 +676,14 @@ export class AssistantClient {
                     break;
                 }
 
+                const isQueued = msg.status === 'queued';
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
                     role: 'user',
                     content: existing ? existing.content : (msg.content || ''),
                     timestamp: existing ? existing.timestamp : Date.now(),
-                    status: isError ? 'error' : 'sent',
+                    status: isError ? 'error' : isQueued ? 'queued' : 'sent',
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
                     attachments: existing?.attachments || msg.attachments,
                 });

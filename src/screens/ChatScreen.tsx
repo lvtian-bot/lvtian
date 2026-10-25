@@ -58,6 +58,8 @@ const ERROR_CODE_I18N_KEYS: Record<string, string> = {
     engine_refusal: 'assistant.errorEngineRefusal',
     engine_error: 'assistant.errorEngineError',
     service_upgrading: 'assistant.errorServiceUpgrading',
+    task_cancelled: 'assistant.errorTaskCancelled',
+    service_restarted: 'assistant.errorServiceRestarted',
 };
 
 const translateErrorMessage = (message: string): string => {
@@ -365,10 +367,29 @@ export const ChatScreen = () => {
 
     const [inputContent, setInputContent] = useState('');
     const [showScrollBottom, setShowScrollBottom] = useState(false);
-
     const INITIAL_WINDOW_SIZE = 30;
     const WINDOW_BATCH_SIZE = 30;
     const [renderedCount, setRenderedCount] = useState(INITIAL_WINDOW_SIZE);
+
+    const queuedCount = messages.filter((m) => m.role === 'user' && m.status === 'queued').length;
+
+    const handleCancelQueued = useCallback((msg: AssistantMessage) => {
+        Alert.alert(
+            t('assistant.cancelQueuedTitle', '排队中消息'),
+            t('assistant.cancelQueuedPrompt', '是否取消该条排队消息？文字将退回输入框。'),
+            [
+                { text: t('common.cancel', '保留'), style: 'cancel' },
+                {
+                    text: t('assistant.cancelQueuedConfirm', '取消排队'),
+                    style: 'destructive',
+                    onPress: () => {
+                        AssistantClient.getInstance().cancelQueued(msg.id);
+                        setInputContent(msg.content);
+                    },
+                },
+            ]
+        );
+    }, [t]);
 
     // 倒序排列：第 0 项为最新消息（处于倒序视口最底部），数组末尾为最早历史消息
     const reversedMessages = useMemo(() => {
@@ -749,9 +770,16 @@ export const ChatScreen = () => {
                                 })}
 
                                 {isUser ? (
-                                    <Text style={styles.userText} selectable={true}>
-                                        {item.content}
-                                    </Text>
+                                    <View>
+                                        <Text style={styles.userText} selectable={true}>
+                                            {item.content}
+                                        </Text>
+                                        {item.status === 'error' && item.errorMessage && (
+                                            <Text style={styles.userErrorText}>
+                                                {translateErrorMessage(item.errorMessage)}
+                                            </Text>
+                                        )}
+                                    </View>
                                 ) : (
                                     <View style={styles.assistantContentContainer}>
                                         {/* 工具活动状态：DSH 规范可折叠卡片 */}
@@ -800,6 +828,16 @@ export const ChatScreen = () => {
 
                                 {/* 时间与状态 */}
                                 <View style={styles.msgFooter}>
+                                    {isUser && item.status === 'queued' && (
+                                        <TouchableOpacity
+                                            style={styles.queuedBadge}
+                                            onPress={() => handleCancelQueued(item)}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Icon name="schedule" size={12} color="#4B5563" style={styles.queuedIcon} />
+                                            <Text style={styles.queuedText}>{t('assistant.statusQueued', '排队中')}</Text>
+                                        </TouchableOpacity>
+                                    )}
                                     <Text
                                         style={[
                                             styles.timeText,
@@ -889,7 +927,11 @@ export const ChatScreen = () => {
             {/* 停止执行悬浮条 */}
             {(taskState === 'processing' || taskState === 'awaiting_approval') && (
                 <View style={styles.stopBar}>
-                    <Text style={styles.stopBarText}>{t('assistant.taskRunning', '助理正在执行任务...')}</Text>
+                    <Text style={styles.stopBarText}>
+                        {queuedCount > 0
+                            ? t('assistant.taskRunningWithQueue', '助理正在执行任务 · {{count}}条消息排队中', { count: queuedCount })
+                            : t('assistant.taskRunning', '助理正在执行任务...')}
+                    </Text>
                     <TouchableOpacity style={styles.stopBtn} onPress={handleStop}>
                         <Icon name="stop" size={16} color="#fff" />
                         <Text style={styles.stopBtnText}>{t('assistant.stop', '停止执行')}</Text>
@@ -1513,5 +1555,27 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.15,
         shadowRadius: 4,
+    },
+    queuedBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E5E7EB',
+        borderRadius: 10,
+        paddingHorizontal: 6,
+        paddingVertical: 1,
+        marginRight: 6,
+    },
+    queuedIcon: {
+        marginRight: 3,
+    },
+    queuedText: {
+        fontSize: 11,
+        color: '#4B5563',
+        fontWeight: '500',
+    },
+    userErrorText: {
+        fontSize: 12,
+        color: theme.colors.dangerStrong,
+        marginTop: 4,
     },
 });

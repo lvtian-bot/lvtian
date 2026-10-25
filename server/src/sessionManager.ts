@@ -448,6 +448,17 @@ export class SessionManager {
                     seq: m.seq,
                     m,
                 });
+            } else if (m.status === 'queued') {
+                m.status = 'error';
+                m.errorMessage = 'service_restarted';
+                session.currentSeq += 1;
+                m.seq = session.currentSeq;
+                this.appendEvent(session.sessionId, {
+                    t: 'msg',
+                    at: Date.now(),
+                    seq: m.seq,
+                    m,
+                });
             }
         }
     }
