@@ -4,6 +4,7 @@ import {
     ClientMessage,
     ServerMessage,
     AssistantMessage,
+    ChatAttachment,
 } from '../types/assistantProtocol';
 
 export class AssistantClient {
@@ -322,7 +323,7 @@ export class AssistantClient {
     /**
      * 发送聊天消息
      */
-    public sendMessage(content: string): string {
+    public sendMessage(content: string, attachments?: ChatAttachment[]): string {
         const store = useAssistantStore.getState();
         const messageId = `msg-${Date.now()}`;
 
@@ -333,6 +334,7 @@ export class AssistantClient {
             content,
             timestamp: Date.now(),
             status: 'sending',
+            attachments,
         };
 
         store.addOrUpdateMessage(localMessage);
@@ -342,6 +344,7 @@ export class AssistantClient {
             sessionId: 'main',
             messageId,
             content,
+            attachments,
         });
 
         if (!sent) {
@@ -471,6 +474,7 @@ export class AssistantClient {
                     timestamp: existing ? existing.timestamp : Date.now(),
                     status: isError ? 'error' : 'sent',
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
+                    attachments: existing?.attachments || msg.attachments,
                 });
                 store.setCurrentSeq(msg.seq);
                 break;

@@ -11,7 +11,17 @@
   },
   "chat": {
     "placeholderTitle": "Lvtian AI Assistant",
-    "placeholderDesc": "Service not connected yet. Once connected to your server, you can chat, assign tasks, and track progress here."
+    "placeholderDesc": "Service not connected yet. Once connected to your server, you can chat, assign tasks, and track progress here.",
+    "addAttachment": "Add Content",
+    "pickImage": "Image",
+    "pickDocument": "File",
+    "attachedImage": "Sent an image",
+    "attachedFile": "Sent a file",
+    "pickImageError": "Failed to pick image",
+    "pickDocumentError": "Failed to pick file",
+    "attachmentTooLarge": "Attachment is too large (limit: 750KB)",
+    "attachmentReadError": "Failed to read attachment file",
+    "retryAttachmentFailed": "Attachment file is no longer available, cannot resend"
   },
   "moments": {
     "placeholderTitle": "Moments & Digest",

@@ -208,7 +208,26 @@ export const useAssistantStore = create<AssistantState>()(
             name: 'lvtian-assistant-storage',
             storage: createJSONStorage(() => AsyncStorage),
             partialize: (state) => {
-                const persistedMessages = state.messages.filter((m) => m.status !== 'processing');
+                const persistedMessages = state.messages
+                    .filter((m) => m.status !== 'processing')
+                    .map((m) => {
+                        if (!m.attachments || m.attachments.length === 0) {
+                            return m;
+                        }
+                        // 移除 base64 data 与超长 raw content，保留轻量元数据与本地文件路径 uri，
+                        // 既能在冷启动重启后按 uri 重新读取附件以支持重试，又避免将庞大 Base64 塞入 AsyncStorage 突破 2MB 限制
+                        const sanitizedAttachments = m.attachments.map((att) => ({
+                            type: att.type,
+                            name: att.name,
+                            mimeType: att.mimeType,
+                            size: att.size,
+                            uri: att.uri,
+                        }));
+                        return {
+                            ...m,
+                            attachments: sanitizedAttachments,
+                        };
+                    });
                 // 持久化的游标必须与持久化的消息快照严格绑定：
                 // 若直接持久化已被流式 chunk 推高的 state.currentSeq，而进行中的消息被排除，
                 // 应用冷启动重连时向服务端发送 sync(lastSeq = currentSeq)，服务端会判定客户端已拥有该消息并跳过返回，

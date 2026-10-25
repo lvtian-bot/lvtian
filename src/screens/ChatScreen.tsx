@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useContext, useMemo, forwardRef, type ComponentRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext, useMemo, forwardRef, type ComponentRef } from 'react';
 import {
     View,
     Text,
+    Image,
     StyleSheet,
     TextInput,
     TouchableOpacity,
@@ -31,6 +32,9 @@ import type { TFunction } from 'i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { fsService } from '../services/FileSystemService';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
@@ -355,7 +359,6 @@ export const ChatScreen = () => {
         taskState,
         pendingApprovals,
         setServerConfig,
-        clearChat,
     } = useAssistantStore();
 
     const [inputContent, setInputContent] = useState('');
@@ -408,69 +411,148 @@ export const ChatScreen = () => {
         return null;
     }, [renderedCount, reversedMessages.length, t]);
 
-    const handleHeaderMenu = useCallback(() => {
-        Alert.alert(
-            t('common.actions', '快捷操作'),
-            undefined,
-            [
-                {
-                    text: t('assistant.clearHistory', '清空聊天记录'),
-                    style: 'destructive',
-                    onPress: () => {
-                        if (taskState === 'processing' || taskState === 'awaiting_approval') {
-                            Alert.alert(
-                                t('common.notice', '提示'),
-                                t('assistant.taskRunningRejection', '上一个任务正在执行中，请等待其完成或点击停止'),
-                            );
-                            return;
-                        }
-                        Alert.alert(
-                            t('assistant.clearHistory', '清空聊天记录'),
-                            t('assistant.clearConfirm', '确定要清空当前的聊天记录吗？这不会影响服务端的记忆文件。'),
-                            [
-                                { text: t('common.cancel', '取消'), style: 'cancel' },
-                                {
-                                    text: t('common.confirm', '确定'),
-                                    style: 'destructive',
-                                    onPress: () => clearChat(),
-                                },
-                            ],
-                        );
-                    },
-                },
-                {
-                    text: t('settings.assistantConfig', '助理服务配置'),
-                    onPress: () => navigation.navigate('AssistantConfig'),
-                },
-                { text: t('common.cancel', '取消'), style: 'cancel' },
-            ],
-        );
-    }, [clearChat, navigation, t, taskState]);
-
-    useLayoutEffect(() => {
-        navigation.setOptions({
-            headerRight: serverUrl
-                ? () => (
-                      <TouchableOpacity
-                          style={styles.headerRightBtn}
-                          onPress={handleHeaderMenu}
-                          activeOpacity={0.7}
-                          accessibilityRole="button"
-                          accessibilityLabel={t('common.actions', '快捷操作')}
-                      >
-                          <Icon name="more-vert" size={24} color="#374151" />
-                      </TouchableOpacity>
-                  )
-                : undefined,
-        });
-    }, [navigation, handleHeaderMenu, serverUrl, t]);
-
     useEffect(() => {
         // 自动连接
         if (serverUrl) {
             AssistantClient.getInstance().connect();
         }
     }, [serverUrl]);
+
+    const pickImage = useCallback(async () => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: false,
+                quality: 0.8,
+                base64: true,
+            });
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const asset = result.assets[0];
+                const base64Data = asset.base64 || undefined;
+                const approxSize = asset.fileSize ?? (base64Data ? Math.round((base64Data.length * 3) / 4) : 0);
+                if (approxSize > 750 * 1024) {
+                    Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 750KB）'));
+                    return;
+                }
+                const name = asset.fileName || `image_${Date.now()}.jpg`;
+                // expo-image-picker 在开启 base64 导出时统一压缩输出为 JPEG 编码，匹配声明类型以防模型 Provider 拒收
+                const mimeType = base64Data ? 'image/jpeg' : (asset.mimeType || 'image/jpeg');
+                const text = inputContent.trim() || t('chat.attachedImage', '发送了图片');
+                setInputContent('');
+                const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+                flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
+                AssistantClient.getInstance().sendMessage(text, [
+                    {
+                        type: 'image',
+                        name,
+                        mimeType,
+                        size: asset.fileSize,
+                        uri: asset.uri,
+                        data: base64Data,
+                    },
+                ]);
+            }
+        } catch {
+            Alert.alert(t('common.error', '错误'), t('chat.pickImageError', '选择图片失败'));
+        }
+    }, [inputContent, t]);
+
+    const pickDocument = useCallback(async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                copyToCacheDirectory: true,
+            });
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const asset = result.assets[0];
+                const name = asset.name || `file_${Date.now()}`;
+                const mimeType = asset.mimeType;
+
+                let readResult: { content?: string; data?: string; size: number };
+                try {
+                    readResult = await fsService.readAttachment(asset.uri, 750 * 1024, mimeType, name);
+                } catch (readErr: unknown) {
+                    const errorMsg = readErr instanceof Error ? readErr.message : String(readErr);
+                    if (errorMsg === 'ATTACHMENT_TOO_LARGE') {
+                        Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 750KB）'));
+                    } else {
+                        Alert.alert(t('common.error', '错误'), t('chat.attachmentReadError', '读取附件文件失败'));
+                    }
+                    return;
+                }
+
+                const text = inputContent.trim() || `${t('chat.attachedFile', '发送了文件')}: ${name}`;
+                setInputContent('');
+                const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+                flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
+                AssistantClient.getInstance().sendMessage(text, [
+                    {
+                        type: 'file',
+                        name,
+                        mimeType,
+                        size: readResult.size || asset.size,
+                        uri: asset.uri,
+                        content: readResult.content,
+                        data: readResult.data,
+                    },
+                ]);
+            }
+        } catch {
+            Alert.alert(t('common.error', '错误'), t('chat.pickDocumentError', '选择文件失败'));
+        }
+    }, [inputContent, t]);
+
+    const handlePlusAction = useCallback(() => {
+        Alert.alert(
+            t('chat.addAttachment', '添加内容'),
+            undefined,
+            [
+                {
+                    text: t('chat.pickImage', '图片'),
+                    onPress: () => {
+                        pickImage();
+                    },
+                },
+                {
+                    text: t('chat.pickDocument', '文件'),
+                    onPress: () => {
+                        pickDocument();
+                    },
+                },
+                { text: t('common.cancel', '取消'), style: 'cancel' },
+            ],
+            { cancelable: true },
+        );
+    }, [pickDocument, pickImage, t]);
+
+    const handleRetryMessage = useCallback(async (item: AssistantMessage) => {
+        let attachments = item.attachments;
+        if (attachments && attachments.length > 0) {
+            try {
+                attachments = await Promise.all(
+                    attachments.map(async (att) => {
+                        if (att.data || att.content) {
+                            return att;
+                        }
+                        if (!att.uri) {
+                            throw new Error('ATTACHMENT_URI_MISSING');
+                        }
+                        const isImg = att.type === 'image';
+                        const res = await fsService.readAttachment(att.uri, 750 * 1024, isImg ? 'image/jpeg' : att.mimeType, att.name);
+                        return {
+                            ...att,
+                            mimeType: isImg ? 'image/jpeg' : (att.mimeType || 'application/octet-stream'),
+                            content: res.content,
+                            data: res.data,
+                        };
+                    }),
+                );
+            } catch {
+                Alert.alert(t('common.error', '错误'), t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'));
+                return;
+            }
+        }
+        AssistantClient.getInstance().sendMessage(item.content, attachments);
+    }, [t]);
 
     const handleSend = () => {
         const text = inputContent.trim();
@@ -620,6 +702,44 @@ export const ChatScreen = () => {
                                           ],
                                 ]}
                             >
+                                {item.attachments && item.attachments.map((att, idx) => {
+                                    const imageUri = att.type === 'image'
+                                        ? (att.data ? `data:${att.mimeType || 'image/jpeg'};base64,${att.data}` : att.uri)
+                                        : undefined;
+                                    return imageUri ? (
+                                        <Image
+                                            key={idx}
+                                            source={{ uri: imageUri }}
+                                            style={styles.attachmentImage}
+                                            resizeMode="cover"
+                                        />
+                                    ) : (
+                                        <View
+                                            key={idx}
+                                            style={[
+                                                styles.attachmentFileBox,
+                                                isUser ? styles.attachmentFileBoxUser : styles.attachmentFileBoxAssistant,
+                                            ]}
+                                        >
+                                            <Icon
+                                                name={att.type === 'image' ? 'image' : 'insert-drive-file'}
+                                                size={18}
+                                                color={isUser ? '#fff' : theme.colors.primary}
+                                                style={styles.attachmentFileIcon}
+                                            />
+                                            <Text
+                                                style={[
+                                                    styles.attachmentFileName,
+                                                    isUser ? styles.attachmentFileNameUser : styles.attachmentFileNameAssistant,
+                                                ]}
+                                                numberOfLines={1}
+                                            >
+                                                {att.name}
+                                            </Text>
+                                        </View>
+                                    );
+                                })}
+
                                 {isUser ? (
                                     <Text style={styles.userText} selectable={true}>
                                         {item.content}
@@ -688,9 +808,9 @@ export const ChatScreen = () => {
                                     )}
                                     {isUser && item.status === 'error' && (
                                         <TouchableOpacity
-                                            onPress={() =>
-                                                AssistantClient.getInstance().sendMessage(item.content)
-                                            }
+                                            onPress={() => {
+                                                handleRetryMessage(item);
+                                            }}
                                         >
                                             <Icon
                                                 name="error-outline"
@@ -772,6 +892,15 @@ export const ChatScreen = () => {
             {/* 底部输入区 */}
             <View style={styles.inputArea}>
                 <View style={styles.inputCapsule}>
+                    <TouchableOpacity
+                        style={styles.plusBtn}
+                        onPress={handlePlusAction}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('chat.addAttachment', '添加内容')}
+                    >
+                        <Icon name="add" size={24} color="#4B5563" />
+                    </TouchableOpacity>
                     <TextInput
                         ref={chatInputRef}
                         autoFocus={false}
@@ -1262,12 +1391,6 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         marginLeft: 4,
     },
-    headerRightBtn: {
-        padding: 6,
-        marginRight: 4,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
     inputArea: {
         paddingHorizontal: 14,
         paddingVertical: 8,
@@ -1280,10 +1403,53 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: '#F0F2F5',
         borderRadius: 24,
-        paddingLeft: 14,
-        paddingRight: 8,
+        paddingHorizontal: 8,
         paddingVertical: Platform.OS === 'ios' ? 6 : 2,
         minHeight: 46,
+    },
+    plusBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 4,
+    },
+    attachmentImage: {
+        width: 200,
+        height: 140,
+        borderRadius: 10,
+        marginBottom: 6,
+        backgroundColor: '#E5E7EB',
+    },
+    attachmentFileBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: 8,
+        marginBottom: 6,
+        maxWidth: 240,
+    },
+    attachmentFileBoxUser: {
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    },
+    attachmentFileBoxAssistant: {
+        backgroundColor: '#E5E7EB',
+    },
+    attachmentFileIcon: {
+        marginRight: 6,
+    },
+    attachmentFileName: {
+        fontSize: 13,
+        fontWeight: '500',
+        flexShrink: 1,
+    },
+    attachmentFileNameUser: {
+        color: '#fff',
+    },
+    attachmentFileNameAssistant: {
+        color: '#111827',
     },
     chatInput: {
         flex: 1,
