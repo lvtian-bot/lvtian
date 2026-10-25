@@ -326,4 +326,46 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
 
         sendRawSpy.mockRestore();
     });
+
+    test('升级排空期被拒(service_upgrading)的消息自动重排队并完整保留附件', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        const sampleAttachment = {
+            type: 'image' as const,
+            name: 'diag.png',
+            data: 'base64diag',
+        };
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-upg-att',
+                    seq: 1,
+                    role: 'user',
+                    content: '带图指令',
+                    timestamp: Date.now(),
+                    status: 'sending',
+                    attachments: [sampleAttachment],
+                },
+            ],
+            pendingSendQueue: [],
+        });
+
+        handleServerMessage({
+            type: 'message_ack',
+            messageId: 'm-upg-att',
+            seq: 1,
+            status: 'error',
+            error: 'service_upgrading',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.isServerUpgrading).toBe(true);
+        expect(state.pendingSendQueue.length).toBe(1);
+        expect(state.pendingSendQueue[0].messageId).toBe('m-upg-att');
+        expect(state.pendingSendQueue[0].attachments?.[0].name).toBe('diag.png');
+        expect(state.messages[0].attachments?.[0].name).toBe('diag.png');
+    });
 });

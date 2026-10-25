@@ -266,6 +266,23 @@ export const useAssistantStore = create<AssistantState>()(
                     (max, m) => Math.max(max, m.seq ?? 0),
                     0
                 );
+                // 待发送队列脱水：同样剥离附件庞大 Base64 数据，仅保留轻量元数据与本地 uri，避免突破 Android AsyncStorage 2MB 上限
+                const sanitizedPendingSendQueue = state.pendingSendQueue.map((item) => {
+                    if (!item.attachments || item.attachments.length === 0) {
+                        return item;
+                    }
+                    const sanitizedAttachments = item.attachments.map((att) => ({
+                        type: att.type,
+                        name: att.name,
+                        mimeType: att.mimeType,
+                        size: att.size,
+                        uri: att.uri,
+                    }));
+                    return {
+                        ...item,
+                        attachments: sanitizedAttachments,
+                    };
+                });
                 return {
                     serverUrl: state.serverUrl,
                     // serverToken 不在此序列化，走 SecureStore
@@ -273,7 +290,7 @@ export const useAssistantStore = create<AssistantState>()(
                     messages: persistedMessages,
                     currentSeq: durableSeq,
                     clearedSeq: state.clearedSeq ?? 0,
-                    pendingSendQueue: state.pendingSendQueue,
+                    pendingSendQueue: sanitizedPendingSendQueue,
                 };
             },
             onRehydrateStorage: () => (state) => {

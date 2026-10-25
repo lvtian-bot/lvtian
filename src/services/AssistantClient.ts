@@ -1,5 +1,6 @@
 import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
+import { fsService } from './FileSystemService';
 import {
     ClientMessage,
     ServerMessage,
@@ -320,7 +321,7 @@ export class AssistantClient {
      * 遵循服务端单会话单任务约束：仅在当前无进行中任务时补发第一条，
      * 待收到服务端成功回执后移出队列，并在上一任务执行完毕后自动推进下一条。
      */
-    public flushPendingSendQueue(): void {
+    public async flushPendingSendQueue(): Promise<void> {
         const store = useAssistantStore.getState();
         if (store.isServerUpgrading) {
             return;
@@ -334,12 +335,42 @@ export class AssistantClient {
         if (queue.length === 0) return;
 
         const nextItem = queue[0];
+        let attachments = nextItem.attachments;
+
+        // 若附件在持久化脱水后缺少 Base64/content，依据本地 uri 异步重新读取补全
+        if (attachments && attachments.length > 0) {
+            try {
+                attachments = await Promise.all(
+                    attachments.map(async (att) => {
+                        if (att.data || att.content || !att.uri) {
+                            return att;
+                        }
+                        const isImg = att.type === 'image';
+                        const res = await fsService.readAttachment(
+                            att.uri,
+                            750 * 1024,
+                            isImg ? 'image/jpeg' : att.mimeType,
+                            att.name
+                        );
+                        return {
+                            ...att,
+                            mimeType: isImg ? 'image/jpeg' : (att.mimeType || 'application/octet-stream'),
+                            content: res.content,
+                            data: res.data,
+                        };
+                    })
+                );
+            } catch {
+                // 原文件失效时保持降级重试已有数据
+            }
+        }
+
         this.sendRaw({
             type: 'chat',
             sessionId: nextItem.sessionId || 'main',
             messageId: nextItem.messageId,
             content: nextItem.content,
-            attachments: nextItem.attachments,
+            attachments,
         });
         // 收到服务端确认前保持保留在队列中，防止网络闪断丢消息
     }
@@ -485,11 +516,13 @@ export class AssistantClient {
                         content: existing ? existing.content : (msg.content || ''),
                         timestamp: existing ? existing.timestamp : Date.now(),
                         status: 'sending',
+                        attachments: existing?.attachments,
                     });
                     store.addToPendingSendQueue({
                         sessionId: 'main',
                         messageId: msg.messageId,
                         content: existing ? existing.content : (msg.content || ''),
+                        attachments: existing?.attachments,
                     });
                     break;
                 }
@@ -503,11 +536,13 @@ export class AssistantClient {
                         content: existing ? existing.content : (msg.content || ''),
                         timestamp: existing ? existing.timestamp : Date.now(),
                         status: 'sending',
+                        attachments: existing?.attachments,
                     });
                     store.addToPendingSendQueue({
                         sessionId: 'main',
                         messageId: msg.messageId,
                         content: existing ? existing.content : (msg.content || ''),
+                        attachments: existing?.attachments,
                     });
                     setTimeout(() => {
                         this.flushPendingSendQueue();

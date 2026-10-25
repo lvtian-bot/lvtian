@@ -121,8 +121,21 @@ describe('useAssistantStore persistence cursor and messages', () => {
         store.setIsServerUpgrading(true);
         expect(useAssistantStore.getState().isServerUpgrading).toBe(true);
 
-        // 消息排队与去重
-        store.addToPendingSendQueue({ sessionId: 'main', messageId: 'm1', content: 'hello' });
+        // 消息排队与去重（包含大附件）
+        store.addToPendingSendQueue({
+            sessionId: 'main',
+            messageId: 'm1',
+            content: 'hello',
+            attachments: [
+                {
+                    type: 'image',
+                    name: 'photo.jpg',
+                    uri: 'file:///photo.jpg',
+                    data: 'huge-base64-payload',
+                    content: 'raw-content',
+                },
+            ],
+        });
         store.addToPendingSendQueue({ sessionId: 'main', messageId: 'm2', content: 'world' });
         store.addToPendingSendQueue({ sessionId: 'main', messageId: 'm1', content: 'hello updated' });
 
@@ -133,13 +146,18 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(queue[1].messageId).toBe('m2');
         expect(queue[1].content).toBe('world');
 
-        // partialize 包含 pendingSendQueue
+        // partialize 包含 pendingSendQueue 并完成附件脱水剥离 Base64
         const persistOptions = (
             useAssistantStore as unknown as {
                 persist: {
                     getOptions: () => {
                         partialize: (state: unknown) => {
-                            pendingSendQueue: Array<{ sessionId: string; messageId: string; content: string }>;
+                            pendingSendQueue: Array<{
+                                sessionId: string;
+                                messageId: string;
+                                content: string;
+                                attachments?: Array<{ type: string; name: string; uri?: string; data?: string; content?: string }>;
+                            }>;
                         };
                     };
                 };
@@ -148,6 +166,9 @@ describe('useAssistantStore persistence cursor and messages', () => {
 
         const partial = persistOptions.partialize(useAssistantStore.getState());
         expect(partial.pendingSendQueue.length).toBe(2);
+        expect(partial.pendingSendQueue[0].attachments?.[0].uri).toBe('file:///photo.jpg');
+        expect(partial.pendingSendQueue[0].attachments?.[0].data).toBeUndefined();
+        expect(partial.pendingSendQueue[0].attachments?.[0].content).toBeUndefined();
 
         // 出队
         store.removeFromPendingSendQueue('m2');
