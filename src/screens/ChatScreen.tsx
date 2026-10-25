@@ -435,7 +435,8 @@ export const ChatScreen = () => {
                     return;
                 }
                 const name = asset.fileName || `image_${Date.now()}.jpg`;
-                const mimeType = asset.mimeType || 'image/jpeg';
+                // expo-image-picker 在开启 base64 导出时统一压缩输出为 JPEG 编码，匹配声明类型以防模型 Provider 拒收
+                const mimeType = base64Data ? 'image/jpeg' : (asset.mimeType || 'image/jpeg');
                 const text = inputContent.trim() || t('chat.attachedImage', '发送了图片');
                 setInputContent('');
                 const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
@@ -535,9 +536,11 @@ export const ChatScreen = () => {
                         if (!att.uri) {
                             throw new Error('ATTACHMENT_URI_MISSING');
                         }
-                        const res = await fsService.readAttachment(att.uri, 750 * 1024, att.mimeType, att.name);
+                        const isImg = att.type === 'image';
+                        const res = await fsService.readAttachment(att.uri, 750 * 1024, isImg ? 'image/jpeg' : att.mimeType, att.name);
                         return {
                             ...att,
+                            mimeType: isImg ? 'image/jpeg' : (att.mimeType || 'application/octet-stream'),
                             content: res.content,
                             data: res.data,
                         };
