@@ -613,10 +613,13 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         sendRawSpy.mockRestore();
     });
 
-    test('收到 sync_result 携带 deletedMessageIds 时增量剔除本地对应消息并清理待发队列', () => {
+    test('收到 sync_result 携带 deletedMessageIds 时增量剔除本地对应消息、清理待发队列与暂存备份', () => {
         const handleServerMessage = (client as unknown as {
             handleServerMessage: (msg: ServerMessage) => void;
         }).handleServerMessage.bind(client);
+
+        const cancellingMap = (client as unknown as { cancellingMessages: Map<string, unknown> }).cancellingMessages;
+        cancellingMap.set('m-deleted-remote', { id: 'm-deleted-remote', content: '待释放的暂存消息' });
 
         useAssistantStore.setState({
             messages: [
@@ -659,6 +662,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingCancelQueue.includes('m-deleted-remote')).toBe(false);
         expect(state.pendingSendQueue.some((q) => q.messageId === 'm-deleted-remote')).toBe(false);
         expect(state.pendingSendQueue.some((q) => q.messageId === 'm-keep-send')).toBe(true);
+        expect(cancellingMap.has('m-deleted-remote')).toBe(false);
     });
 
     test('收到 message_deleted 广播时同步剔除待发队列中的残留', () => {

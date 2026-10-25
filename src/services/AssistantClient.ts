@@ -748,12 +748,13 @@ export class AssistantClient {
                     }
                 }
 
-                // 服务端增量删除对账：剔除服务端已删除的排队消息，并同步清理本地待发队列
+                // 服务端增量删除对账：剔除服务端已删除的排队消息，并同步清理本地待发队列与撤销暂存副本
                 if (msg.deletedMessageIds && msg.deletedMessageIds.length > 0) {
                     for (const delId of msg.deletedMessageIds) {
                         msgMap.delete(delId);
                         store.removeFromPendingCancelQueue(delId);
                         store.removeFromPendingSendQueue(delId);
+                        this.cancellingMessages.delete(delId);
                     }
                 }
 
