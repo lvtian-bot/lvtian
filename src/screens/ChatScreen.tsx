@@ -182,8 +182,10 @@ export function formatToolSummaryLocalized(
 export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProcessing }) => {
     const { t } = useTranslation();
     const isSingle = toolCalls.length === 1;
-    // 多工具调用默认折叠，单工具调用默认展开
-    const [expanded, setExpanded] = useState(isSingle);
+    // 多工具调用默认折叠，单工具调用默认展开；在流式执行中新增工具时，未手动干预则自适应折叠
+    const [userToggled, setUserToggled] = useState(false);
+    const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
+    const expanded = userToggled && manualExpanded !== null ? manualExpanded : isSingle;
 
     const hasRunning =
         toolCalls.some((tc) => tc.status === 'running') ||
@@ -212,7 +214,10 @@ export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProce
             <TouchableOpacity
                 style={styles.toolCardHeader}
                 activeOpacity={0.7}
-                onPress={() => setExpanded((prev) => !prev)}
+                onPress={() => {
+                    setUserToggled(true);
+                    setManualExpanded(!expanded);
+                }}
             >
                 <View style={styles.toolCardHeaderLeft}>
                     {hasRunning ? (

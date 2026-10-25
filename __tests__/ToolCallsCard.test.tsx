@@ -103,4 +103,63 @@ describe('ToolCallsCard', () => {
         expect(allTexts).toContain('$ git fetch origin');
         expect(allTexts).toContain('$ git reset --hard origin/master');
     });
+
+    it('单工具挂载展开后，随追加工具事件自动切换为聚合折叠，同时保留用户主动点击状态', async () => {
+        const tool1: ToolCallState = {
+            id: 'tc-1',
+            name: 'bash',
+            status: 'running',
+            summary: '$ git status -s',
+        };
+        const tool2: ToolCallState = {
+            id: 'tc-2',
+            name: 'bash',
+            status: 'running',
+            summary: '$ git diff',
+        };
+
+        let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<ToolCallsCard toolCalls={[tool1]} isProcessing={true} />);
+        });
+
+        const root = renderer!.root;
+        // 初始只有 1 个工具时，默认展开显示命令明细
+        let allTexts = root.findAllByType(Text).map((n) => n.props.children).flat();
+        expect(allTexts).toContain('$ git status -s');
+
+        // 流式追加第 2 个工具事件到来
+        await ReactTestRenderer.act(async () => {
+            renderer!.update(<ToolCallsCard toolCalls={[tool1, tool2]} isProcessing={true} />);
+        });
+
+        // 未主动手动点击时，自动切换为多工具折叠状态
+        allTexts = root.findAllByType(Text).map((n) => n.props.children).flat();
+        expect(allTexts).not.toContain('$ git status -s');
+        expect(allTexts).not.toContain('$ git diff');
+
+        // 用户主动点击展开
+        const touchable = root.findByProps({ activeOpacity: 0.7 });
+        await ReactTestRenderer.act(async () => {
+            touchable.props.onPress();
+        });
+
+        allTexts = root.findAllByType(Text).map((n) => n.props.children).flat();
+        expect(allTexts).toContain('$ git status -s');
+        expect(allTexts).toContain('$ git diff');
+
+        // 再次追加第 3 个工具，保持用户主动展开状态不被重置
+        const tool3: ToolCallState = {
+            id: 'tc-3',
+            name: 'bash',
+            status: 'done',
+            summary: '$ git log',
+        };
+        await ReactTestRenderer.act(async () => {
+            renderer!.update(<ToolCallsCard toolCalls={[tool1, tool2, tool3]} isProcessing={true} />);
+        });
+
+        allTexts = root.findAllByType(Text).map((n) => n.props.children).flat();
+        expect(allTexts).toContain('$ git log');
+    });
 });
