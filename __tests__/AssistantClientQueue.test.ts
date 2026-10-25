@@ -205,4 +205,62 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue[0].messageId).toBe('m-drain-1');
         expect(state.pendingSendQueue[0].content).toBe('排空期在途消息');
     });
+
+    test('addToPendingSendQueue 保留既有项在 FIFO 队列中的原始位置（原位更新而非追加到队尾）', () => {
+        useAssistantStore.setState({
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-first', content: '第一条' },
+                { sessionId: 'main', messageId: 'm-second', content: '第二条' },
+            ],
+        });
+
+        // 重新对已在队列第一位的 m-first 触发入队
+        useAssistantStore.getState().addToPendingSendQueue({
+            sessionId: 'main',
+            messageId: 'm-first',
+            content: '第一条更新内容',
+        });
+
+        const queue = useAssistantStore.getState().pendingSendQueue;
+        expect(queue.length).toBe(2);
+        // 关键断言：m-first 必须依然排在 m-second 前面
+        expect(queue[0].messageId).toBe('m-first');
+        expect(queue[0].content).toBe('第一条更新内容');
+        expect(queue[1].messageId).toBe('m-second');
+    });
+
+    test('收到 error 为 session_busy 的 message_ack 时，排队消息维持 sending 状态且绝不标红报错', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-busy-1',
+                    seq: 0,
+                    role: 'user',
+                    content: '排队消息',
+                    timestamp: 2000,
+                    status: 'sending',
+                },
+            ],
+            pendingSendQueue: [],
+        });
+
+        handleServerMessage({
+            type: 'message_ack',
+            messageId: 'm-busy-1',
+            seq: 0,
+            status: 'error',
+            error: 'session_busy',
+        });
+
+        const state = useAssistantStore.getState();
+        const msg = state.messages.find((m) => m.id === 'm-busy-1');
+        expect(msg?.status).toBe('sending');
+        expect(msg?.errorMessage).toBeUndefined();
+        expect(state.pendingSendQueue.length).toBe(1);
+        expect(state.pendingSendQueue[0].messageId).toBe('m-busy-1');
+    });
 });

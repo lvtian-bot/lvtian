@@ -217,8 +217,13 @@ export const useAssistantStore = create<AssistantState>()(
 
             addToPendingSendQueue: (item) =>
                 set((state) => {
-                    const filtered = state.pendingSendQueue.filter((q) => q.messageId !== item.messageId);
-                    return { pendingSendQueue: [...filtered, item] };
+                    const idx = state.pendingSendQueue.findIndex((q) => q.messageId === item.messageId);
+                    if (idx >= 0) {
+                        const updated = [...state.pendingSendQueue];
+                        updated[idx] = { ...updated[idx], ...item };
+                        return { pendingSendQueue: updated };
+                    }
+                    return { pendingSendQueue: [...state.pendingSendQueue, item] };
                 }),
 
             removeFromPendingSendQueue: (messageId) =>

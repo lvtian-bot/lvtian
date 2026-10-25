@@ -43,7 +43,11 @@ jobs:
           ssh -i ~/.ssh/id_rsa -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" 'bash -s' -- "$SERVER_USER" << 'EOF'
             set -euo pipefail
             SERVER_USER="${1:-ubuntu}"
-            DEPLOY_DIR="/home/${SERVER_USER}/lvtian-server"
+            if [ -d "/home/${SERVER_USER}/code/lvtian" ]; then
+              DEPLOY_DIR="/home/${SERVER_USER}/code/lvtian"
+            else
+              DEPLOY_DIR="/home/${SERVER_USER}/lvtian-server"
+            fi
             echo "=== 进入部署目录: ${DEPLOY_DIR} ==="
             cd "${DEPLOY_DIR}"
 

@@ -1017,16 +1017,10 @@ test('服务端优雅停机：向所有在线客户端广播 service_upgrading �
 });
 
 test('服务端优雅停机避让：等待活跃任务完成后再广播升级与停机', async () => {
-    // 模拟一个耗时 100ms 的执行引擎
+    // 模拟一个包含耗时分块的执行引擎（总耗时约 300ms，以产生真实避让窗口）
     const { server, tmp, port } = await buildWiredServer({
-        onPrompt: async (prompt, sessionUpdate) => {
-            await delay(100);
-            sessionUpdate({
-                sessionUpdate: 'agent_message_chunk',
-                content: { type: 'text', text: '任务执行完毕' },
-            });
-            return { stopReason: 'end_turn' };
-        },
+        chunkCount: 2,
+        chunkDelayMs: 150,
     });
     const token = 'test-token-wired-12345';
     const received = [];
@@ -1054,15 +1048,17 @@ test('服务端优雅停机避让：等待活跃任务完成后再广播升级�
 
     await drainPromise;
 
-    // 验证先前正在执行的任务完整跑完，且最后收到了 service_upgrading
+    // 验证先前正在执行的任务完整跑完，且收到提前与收尾的 service_upgrading 广播
     const completedMsg = received.find((m) => m.type === 'task_status' && m.state === 'completed');
-    const upgradingMsg = received.find((m) => m.type === 'service_upgrading');
+    const upgradingMsgs = received.filter((m) => m.type === 'service_upgrading');
     assert.ok(completedMsg, '先前执行的任务必须顺利执行完毕 (completed)');
-    assert.ok(upgradingMsg, '随后必须收到 service_upgrading 升级广播');
+    assert.ok(upgradingMsgs.length >= 2, '避让流程开始与收尾阶段均应广播 service_upgrading');
 
+    const firstUpgradeIdx = received.indexOf(upgradingMsgs[0]);
+    const lastUpgradeIdx = received.lastIndexOf(upgradingMsgs[upgradingMsgs.length - 1]);
     const completedIdx = received.indexOf(completedMsg);
-    const upgradingIdx = received.indexOf(upgradingMsg);
-    assert.ok(completedIdx < upgradingIdx, '完成通知必须在升级广播之前到达（执行避让）');
+    assert.ok(firstUpgradeIdx < completedIdx, '升级预告必须在避让流程开始时第一时间送达客户端');
+    assert.ok(completedIdx < lastUpgradeIdx, '活跃任务必须在最终关停升级广播之前完整收尾（执行避让）');
 
     fs.rmSync(tmp, { recursive: true, force: true });
 });

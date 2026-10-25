@@ -128,9 +128,10 @@ describe('useAssistantStore persistence cursor and messages', () => {
 
         const queue = useAssistantStore.getState().pendingSendQueue;
         expect(queue.length).toBe(2);
-        expect(queue[0].messageId).toBe('m2');
-        expect(queue[1].messageId).toBe('m1');
-        expect(queue[1].content).toBe('hello updated');
+        expect(queue[0].messageId).toBe('m1');
+        expect(queue[0].content).toBe('hello updated');
+        expect(queue[1].messageId).toBe('m2');
+        expect(queue[1].content).toBe('world');
 
         // partialize 包含 pendingSendQueue
         const persistOptions = (

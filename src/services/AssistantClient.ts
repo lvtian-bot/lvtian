@@ -488,6 +488,27 @@ export class AssistantClient {
                     break;
                 }
 
+                // 服务端会话忙碌（如手动停止后底层子进程尚未完全释放收尾）：排队消息保持 sending 态，稍后自动重试
+                if (isError && msg.error === 'session_busy') {
+                    store.addOrUpdateMessage({
+                        id: msg.messageId,
+                        seq: msg.seq,
+                        role: 'user',
+                        content: existing ? existing.content : (msg.content || ''),
+                        timestamp: existing ? existing.timestamp : Date.now(),
+                        status: 'sending',
+                    });
+                    store.addToPendingSendQueue({
+                        sessionId: 'main',
+                        messageId: msg.messageId,
+                        content: existing ? existing.content : (msg.content || ''),
+                    });
+                    setTimeout(() => {
+                        this.flushPendingSendQueue();
+                    }, 500);
+                    break;
+                }
+
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
@@ -573,7 +594,14 @@ export class AssistantClient {
                     }
 
                     // 上一个任务已结束，串行推进待发队列中的下一条排队消息
-                    this.flushPendingSendQueue();
+                    // 若为停止操作，轻量缓冲 300ms 避开服务端底层子进程异步收尾间隙
+                    if (msg.state === 'stopped') {
+                        setTimeout(() => {
+                            this.flushPendingSendQueue();
+                        }, 300);
+                    } else {
+                        this.flushPendingSendQueue();
+                    }
                 }
                 break;
             }
