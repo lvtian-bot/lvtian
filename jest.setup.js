@@ -2,10 +2,11 @@
 require('react-native-gesture-handler/jestSetup');
 
 jest.mock('react-native-reanimated', () => {
+  const { View } = require('react-native');
   const createAnimatedComponent = (component) => component;
   return {
     __esModule: true,
-    default: { createAnimatedComponent },
+    default: { createAnimatedComponent, View },
     createAnimatedComponent,
     useSharedValue: (value) => ({ value }),
     useAnimatedStyle: (fn) => fn(),
@@ -50,11 +51,17 @@ jest.mock('@expo/vector-icons/MaterialIcons', () => {
   const { Text } = require('react-native');
   return (props) => React.createElement(Text, props, props.name);
 });
+jest.mock('@expo/vector-icons/MaterialCommunityIcons', () => {
+  const React = require('react');
+  const { Text } = require('react-native');
+  return (props) => React.createElement(Text, props, props.name);
+});
 jest.mock('@expo/vector-icons', () => {
   const React = require('react');
   const { Text } = require('react-native');
   return {
     MaterialIcons: (props) => React.createElement(Text, props, props.name),
+    MaterialCommunityIcons: (props) => React.createElement(Text, props, props.name),
   };
 });
 

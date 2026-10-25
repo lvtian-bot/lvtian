@@ -81,13 +81,12 @@ const MomentsStackScreen = () => {
 };
 
 const MeStackScreen = () => {
-    const { t } = useTranslation();
     return (
         <MeStack.Navigator screenOptions={baseStackScreenOptions}>
             <MeStack.Screen
                 name="MeScreen"
                 component={MeScreen}
-                options={{ title: t('tabs.me') }}
+                options={{ headerShown: false }}
             />
         </MeStack.Navigator>
     );

@@ -52,7 +52,7 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         }
     });
 
-    it('MeScreen 渲染服务端大卡片、AI 智能体配置与 APP 设置，不渲染缓存管理', async () => {
+    it('MeScreen 渲染绿天助理形象卡片、AI 智能体配置与 APP 设置，不渲染缓存管理', async () => {
         await ReactTestRenderer.act(async () => {
             currentRenderer = ReactTestRenderer.create(<MeScreen />);
         });
@@ -61,7 +61,7 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         const allTexts = root.findAllByType(Text).map((node) => node.props.children).flat();
 
         // 验证主页面核心结构
-        expect(allTexts).toContain('绿天服务端');
+        expect(allTexts).toContain('绿天');
         expect(allTexts).toContain('AI 智能体配置');
         expect(allTexts).toContain('APP 设置');
         expect(allTexts).toContain('云端同步 (WebDAV / 坚果云)');
@@ -77,12 +77,12 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         });
 
         const root = currentRenderer!.root;
-        const touchables = root.findAllByType(TouchableOpacity);
+        const pressables = root.findAll((node) => typeof node.props.onPress === 'function');
 
         // 点击 APP 设置条目
-        const appSettingsItem = touchables.find((t) => {
-            const texts = t.findAllByType(Text).map((n) => n.props.children);
-            return texts.includes('APP 设置');
+        const appSettingsItem = pressables.find((p) => {
+            const texts = p.findAllByType(Text).flatMap((n) => n.props.children);
+            return texts.some((t) => typeof t === 'string' && t.includes('APP 设置'));
         });
         expect(appSettingsItem).toBeDefined();
 
@@ -92,9 +92,9 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         expect(mockNavigate).toHaveBeenCalledWith('AppSettings');
 
         // 点击 AI 智能体配置条目
-        const agentConfigItem = touchables.find((t) => {
-            const texts = t.findAllByType(Text).map((n) => n.props.children);
-            return texts.includes('AI 智能体配置');
+        const agentConfigItem = pressables.find((p) => {
+            const texts = p.findAllByType(Text).flatMap((n) => n.props.children);
+            return texts.some((t) => typeof t === 'string' && t.includes('AI 智能体配置'));
         });
         expect(agentConfigItem).toBeDefined();
 
@@ -102,6 +102,18 @@ describe('MeScreen 与 AppSettingsScreen', () => {
             agentConfigItem!.props.onPress();
         });
         expect(mockNavigate).toHaveBeenCalledWith('AgentConfig');
+
+        // 点击绿天服务端配置区域
+        const serverConfigItem = pressables.find((p) => {
+            const texts = p.findAllByType(Text).flatMap((n) => n.props.children);
+            return texts.some((t) => typeof t === 'string' && t.includes('绿天'));
+        });
+        expect(serverConfigItem).toBeDefined();
+
+        await ReactTestRenderer.act(async () => {
+            serverConfigItem!.props.onPress();
+        });
+        expect(mockNavigate).toHaveBeenCalledWith('AssistantConfig');
     });
 
     it('AppSettingsScreen 提供小/默认/大三档调节并联动 store', async () => {

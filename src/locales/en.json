@@ -9,6 +9,15 @@
     "settings": "Settings",
     "me": "Me"
   },
+  "me": {
+    "avatar": {
+      "title": "Assistant Profile Picture",
+      "change": "Choose from Photos",
+      "clear": "Reset to Default",
+      "pickFailed": "Failed to pick avatar",
+      "clearFailed": "Failed to clear avatar"
+    }
+  },
   "chat": {
     "placeholderTitle": "Lvtian AI Assistant",
     "placeholderDesc": "Service not connected yet. Once connected to your server, you can chat, assign tasks, and track progress here.",
@@ -455,6 +464,10 @@
     "toolActionEdit": "Edit",
     "toolActionSearch": "Search",
     "toolActionFetch": "Fetch",
-    "toolActionFile": "File"
+    "toolActionFile": "File",
+    "toolStatusFailed": "Failed",
+    "toolDetailSummary": "Summary",
+    "toolDetailInput": "Input",
+    "toolDetailOutput": "Output"
   }
 }

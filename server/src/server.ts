@@ -9,7 +9,7 @@ import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
-import { getDshPermissionMode, setDshPermissionMode, DshPermissionMode } from './dshConfigManager.js';
+import { getDshPermissionMode, setDshPermissionMode, willDshPermissionChange, DshPermissionMode } from './dshConfigManager.js';
 import {
     ClientMessage,
     ServerMessage,
@@ -221,9 +221,9 @@ export class LvtianServer {
                     return;
                 }
 
-                // 门禁检查：仅当权限模式真正发生变动时，才检查并禁止在任务执行中途切换
-                const currentMode = getDshPermissionMode(this.config.dshProfileDir);
-                if (targetMode !== currentMode && this.acpEngine.isRunning('main')) {
+                // 门禁检查：若该次操作将导致任何配置变动或会话交接（含旧配置清理迁移），严格禁止在任务执行中途切换
+                const willChange = willDshPermissionChange(targetMode as DshPermissionMode, this.config.dshProfileDir);
+                if (willChange && this.acpEngine.isRunning('main')) {
                     res.writeHead(409, { 'Content-Type': 'application/json' });
                     res.end(
                         JSON.stringify({
@@ -409,6 +409,9 @@ export class LvtianServer {
     }
 
     private handleClientMessage(ws: AuthenticatedSocket, msg: ClientMessage): void {
+        // 收到客户端任何上行报文均标记连接存活，避免被心跳检测误杀
+        ws.isAlive = true;
+
         // 未认证拦截
         if (!ws.isAuthenticated && msg.type !== 'auth') {
             this.send(ws, {

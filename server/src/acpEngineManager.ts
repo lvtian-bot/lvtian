@@ -9,6 +9,7 @@ import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { ToolCallState, ApprovalRequest, ChatAttachment } from './protocol.js';
 import type { ContextConsolidator } from './contextConsolidator.js';
+import { getDshPermissionMode } from './dshConfigManager.js';
 
 /**
  * 引擎模块用户可见消息的错误码：客户端按码本地化渲染（i18n），码值是持久化与流式的稳定契约。
@@ -955,6 +956,7 @@ export class AcpEngineManager {
                 envExtra.HOME = normalized.slice(0, -marker.length).replace(/[/\\]+$/, '') || '/';
             }
         }
+        envExtra.DSH_PERMISSION_MODE = getDshPermissionMode(this.dshProfileDir);
 
         const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp'], {
             cwd: this.workspace,

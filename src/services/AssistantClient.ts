@@ -1,3 +1,4 @@
+import { AppState, type AppStateStatus } from 'react-native';
 import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
@@ -14,17 +15,79 @@ export class AssistantClient {
     private ws: WebSocket | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
+    private pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
     private reconnectAttempts = 0;
     private isExplicitlyClosed = false;
     private activeUrl: string | null = null;
     private activeToken: string | null = null;
     private cancellingMessages: Map<string, AssistantMessage> = new Map();
+    private currentAppState: AppStateStatus = (AppState.currentState as AppStateStatus) || 'active';
+    private lastBackgroundTimestamp = 0;
+    private appStateSubscription: { remove: () => void } | null = null;
+
+    private constructor() {
+        this.setupAppStateListener();
+    }
 
     public static getInstance(): AssistantClient {
         if (!AssistantClient.instance) {
             AssistantClient.instance = new AssistantClient();
         }
         return AssistantClient.instance;
+    }
+
+    private setupAppStateListener(): void {
+        this.currentAppState = (AppState.currentState as AppStateStatus) || 'active';
+        this.appStateSubscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+            const prevAppState = this.currentAppState;
+            this.currentAppState = nextAppState;
+            if (prevAppState.match(/inactive|background/) && nextAppState === 'active') {
+                this.handleAppForeground();
+            } else if (nextAppState.match(/inactive|background/)) {
+                this.lastBackgroundTimestamp = Date.now();
+            }
+        });
+    }
+
+    /**
+     * 应用切回前台（热启动唤醒）的极速重连机制：
+     * 1. 清除任何正在排队的延迟重连定时器；
+     * 2. 重置重连次数为 0，前台用户交互拥有最高连接优先级；
+     * 3. 若切入后台超过 3 秒，移动端旧 Socket 极大概率已处于操作系统休眠或半开假死态，
+     *    不再盲目等待心跳超时，立即果断推倒旧连接，0 毫秒极速重建；
+     * 4. 若切入后台时间极短且 Socket 仍处于 OPEN，立即主动发送探活 Ping 并开启 3.5 秒熔断保护。
+     */
+    public handleAppForeground(): void {
+        const store = useAssistantStore.getState();
+        if (!store.serverUrl) return;
+
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
+        this.reconnectAttempts = 0;
+
+        const backgroundDurationMs = this.lastBackgroundTimestamp > 0
+            ? Date.now() - this.lastBackgroundTimestamp
+            : 0;
+        this.lastBackgroundTimestamp = 0;
+
+        const isWsOpen = this.ws && this.ws.readyState === WebSocket.OPEN;
+        const isWsConnecting = this.ws && this.ws.readyState === WebSocket.CONNECTING;
+
+        // 若当前已有连接正处于握手建立中（CONNECTING），避免重复触发推倒重建
+        if (isWsConnecting) {
+            return;
+        }
+
+        if (!isWsOpen || backgroundDurationMs > 3000) {
+            // 切后台超过 3 秒或连接已断：推倒旧连接，0ms 极速重建
+            this.connect(true);
+        } else {
+            // 短暂停留：主动发送探活 Ping 并挂载假死熔断保护
+            this.sendPingWithTimeout();
+        }
     }
 
     /**
@@ -190,7 +253,17 @@ export class AssistantClient {
     public async connect(forceReconnect = false): Promise<void> {
         this.isExplicitlyClosed = false;
         const store = useAssistantStore.getState();
-        const { url, token } = await store.loadSavedCredentials();
+
+        // 优先从 Zustand 内存读取 URL 与 Token，消除每次重连访问 SecureStore 的跨桥解密耗时
+        let url = store.serverUrl;
+        let token = store.serverToken;
+
+        // 仅在内存无 Token 时降级读取 SecureStore（冷启动初次水合场景）
+        if (!token || !url) {
+            const creds = await store.loadSavedCredentials();
+            url = creds.url;
+            token = creds.token;
+        }
 
         if (!url) {
             store.setConnectionState('disconnected', null);
@@ -276,6 +349,7 @@ export class AssistantClient {
     }
 
     private cleanUpWs(): void {
+        this.clearPongTimeout();
         if (this.ws) {
             try {
                 this.ws.onopen = null;
@@ -292,12 +366,24 @@ export class AssistantClient {
         if (this.isExplicitlyClosed || this.reconnectTimer) return;
 
         this.reconnectAttempts += 1;
-        const isUpgrading = useAssistantStore.getState().isServerUpgrading;
-        // 升级期间前 5 次尝试采用 1 秒快速重连，使服务秒级重启就绪后即刻重连；常规断开采用指数退避
+        const store = useAssistantStore.getState();
+        const isUpgrading = store.isServerUpgrading;
+        const isForeground = this.currentAppState === 'active';
+
         let delay: number;
-        if (isUpgrading && this.reconnectAttempts <= 5) {
+        if (isForeground) {
+            // 前台交互状态下取消惩罚性退避：前 3 次重试 0 毫秒（50ms 缓冲防重入）；第 4-6 次等待 1 秒；之后最多 3 秒
+            if (this.reconnectAttempts <= 3) {
+                delay = 50;
+            } else if (this.reconnectAttempts <= 6) {
+                delay = 1000;
+            } else {
+                delay = 3000;
+            }
+        } else if (isUpgrading && this.reconnectAttempts <= 5) {
             delay = 1000;
         } else {
+            // 后台断开采用退避，避免无效重试占用电量
             delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
         }
 
@@ -309,12 +395,35 @@ export class AssistantClient {
 
     private startPing(): void {
         this.stopPing();
+        // 前台心跳设为 10 秒，更早发现假死链路
         this.pingTimer = setInterval(() => {
-            this.sendRaw({ type: 'ping' });
-        }, 15000);
+            this.sendPingWithTimeout();
+        }, 10000);
+    }
+
+    private sendPingWithTimeout(): void {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+        this.clearPongTimeout();
+        this.sendRaw({ type: 'ping' });
+
+        // 挂载 3500ms 假死熔断保护：若 3.5 秒内无任何下行数据，判定当前网络为假死黑洞，立即推倒重连
+        this.pongTimeoutTimer = setTimeout(() => {
+            console.warn('[AssistantClient] 心跳应答超时（3.5s），判定当前网络为假死链路，立即重建连接');
+            this.cleanUpWs();
+            this.scheduleReconnect();
+        }, 3500);
+    }
+
+    private clearPongTimeout(): void {
+        if (this.pongTimeoutTimer) {
+            clearTimeout(this.pongTimeoutTimer);
+            this.pongTimeoutTimer = null;
+        }
     }
 
     private stopPing(): void {
+        this.clearPongTimeout();
         if (this.pingTimer) {
             clearInterval(this.pingTimer);
             this.pingTimer = null;
@@ -516,7 +625,8 @@ export class AssistantClient {
     /**
      * 取消排队中的消息
      * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录；
-     * 若处于离线状态，将撤销请求纳入 pendingCancelQueue，待网络恢复重连对账后自动静默补发。
+     * 无条件将撤销请求纳入 pendingCancelQueue 持久化队列，待收到服务端确认回执（message_deleted、增量对账剔除或 cancel_failed）后才出队；
+     * 若处于离线或网络半开假死状态，待网络恢复重连对账后自动静默补发。
      * 支持传入 backupMessage 暂存，在服务端因任务已启动而拒绝撤销时自动安全恢复消息。
      */
     public cancelQueued(messageId: string, backupMessage?: AssistantMessage): boolean {
@@ -526,33 +636,30 @@ export class AssistantClient {
             this.cancellingMessages.set(messageId, current);
         }
         store.removeMessage(messageId);
-        const sent = this.sendRaw({
+        // 无条件先入持久化待撤销队列，杜绝半开连接下本地误判发送成功但服务端未收到导致漏撤销
+        store.addToPendingCancelQueue(messageId);
+        return this.sendRaw({
             type: 'cancel_queued',
             sessionId: 'main',
             messageId,
         });
-        if (!sent) {
-            store.addToPendingCancelQueue(messageId);
-        }
-        return sent;
     }
 
     /**
      * 自动静默补发离线期间积压的撤销排队报文
+     * 注意：此处仅执行发送，不立即从 pendingCancelQueue 移除；
+     * 必须等待服务端下发 message_deleted、sync_result(deletedMessageIds) 或 cancel_failed 确认后再真正出队。
      */
     public flushPendingCancelQueue(): void {
         const store = useAssistantStore.getState();
         const queue = store.pendingCancelQueue;
         if (queue.length === 0) return;
         for (const messageId of queue) {
-            const sent = this.sendRaw({
+            this.sendRaw({
                 type: 'cancel_queued',
                 sessionId: 'main',
                 messageId,
             });
-            if (sent) {
-                store.removeFromPendingCancelQueue(messageId);
-            }
         }
     }
 
@@ -560,6 +667,9 @@ export class AssistantClient {
      * 处理服务端下发的事件报文
      */
     private handleServerMessage(msg: ServerMessage): void {
+        // 收到服务端任何下行数据包均表明链路活跃，立即清除假死熔断定时器
+        this.clearPongTimeout();
+
         const store = useAssistantStore.getState();
 
         switch (msg.type) {

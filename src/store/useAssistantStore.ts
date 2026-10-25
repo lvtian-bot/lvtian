@@ -180,6 +180,9 @@ export const useAssistantStore = create<AssistantState>()(
                         const updated = [...state.messages];
                         const target = updated[idx];
                         const existingTools = target.toolCalls ? [...target.toolCalls] : [];
+                        const positions = target.toolCallPositions ?? existingTools.map((tool) => ({
+                            toolCallId: tool.id, textOffset: 0,
+                        }));
                         const toolIdx = existingTools.findIndex((t) => t.id === toolCall.id);
                         if (toolIdx >= 0) {
                             existingTools[toolIdx] = toolCall;
@@ -189,6 +192,9 @@ export const useAssistantStore = create<AssistantState>()(
                         updated[idx] = {
                             ...target,
                             toolCalls: existingTools,
+                            toolCallPositions: toolIdx >= 0 ? positions : [
+                                ...positions, { toolCallId: toolCall.id, textOffset: target.content.length },
+                            ],
                         };
                         return { messages: updated };
                     }

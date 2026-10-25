@@ -10,6 +10,8 @@ interface SettingsState {
     setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
     fontSize: FontSizePreference;
     setFontSize: (size: FontSizePreference) => void;
+    userAvatar?: string;
+    setUserAvatar: (avatar?: string) => void;
     flashNoteConfig: {
         path: string;
         filename: string;
@@ -44,6 +46,8 @@ export const useSettingsStore = create<SettingsState>()(
             setThemeMode: (mode) => set({ themeMode: mode }),
             fontSize: 'standard',
             setFontSize: (size) => set({ fontSize: size }),
+            userAvatar: undefined,
+            setUserAvatar: (avatar) => set({ userAvatar: avatar }),
             flashNoteConfig: {
                 path: '',
                 filename: 'flash_notes.md',

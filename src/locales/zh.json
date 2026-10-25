@@ -9,6 +9,15 @@
     "settings": "设置",
     "me": "我"
   },
+  "me": {
+    "avatar": {
+      "title": "绿天助理形象",
+      "change": "从相册更换",
+      "clear": "恢复默认形象",
+      "pickFailed": "头像选择失败",
+      "clearFailed": "清除头像失败"
+    }
+  },
   "chat": {
     "placeholderTitle": "绿天个人助理",
     "placeholderDesc": "服务待连接。接通独立服务端后，您可在此持续与助理交流、安排事项并跟进任务进展。",
@@ -455,6 +464,10 @@
     "toolActionEdit": "编辑",
     "toolActionSearch": "搜索",
     "toolActionFetch": "访问",
-    "toolActionFile": "文件"
+    "toolActionFile": "文件",
+    "toolStatusFailed": "失败",
+    "toolDetailSummary": "摘要",
+    "toolDetailInput": "输入",
+    "toolDetailOutput": "输出"
   }
 }

@@ -463,6 +463,43 @@ class FileSystemService {
 
         return { content, data, size };
     }
+
+    /**
+     * 将相册选取的临时头像安全持久化至 App 私有沙盒
+     */
+    async persistAvatar(sourceUri: string): Promise<string> {
+        const filename = `avatar-${Date.now()}.jpg`;
+        const targetPath = `${FileSystem.documentDirectory ?? ''}${filename}`;
+        await FileSystem.copyAsync({
+            from: sourceUri,
+            to: targetPath,
+        });
+        return filename;
+    }
+
+    /**
+     * 删除指定的头像文件
+     */
+    async deleteAvatar(filename?: string | null): Promise<void> {
+        const uri = this.resolveAvatarUri(filename);
+        const docDir = FileSystem.documentDirectory ?? '';
+        if (uri && docDir && uri.startsWith(docDir)) {
+            try {
+                await FileSystem.deleteAsync(uri, { idempotent: true });
+            } catch {
+                // ignore cleanup error
+            }
+        }
+    }
+
+    /**
+     * 解析头像在本地的绝对 URI
+     */
+    resolveAvatarUri(filename?: string | null): string | undefined {
+        if (!filename) return undefined;
+        if (filename.includes('://')) return filename;
+        return `${FileSystem.documentDirectory ?? ''}${filename}`;
+    }
 }
 
 export const fsService = new FileSystemService();

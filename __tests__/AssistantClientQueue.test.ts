@@ -581,7 +581,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
             pendingCancelQueue: [],
         });
 
-        // 离线撤销
+        // 离线撤销：无条件入队 pendingCancelQueue 并从本地 messages 移除
         const success = client.cancelQueued('m-offline-cancel');
         expect(success).toBe(false);
 
@@ -593,8 +593,22 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         client.flushPendingCancelQueue();
 
         state = useAssistantStore.getState();
-        expect(state.pendingCancelQueue.length).toBe(0);
+        // 补发调用后不盲目出队，依然保持在队列中，杜绝半开连接假死时丢失撤销
+        expect(state.pendingCancelQueue).toEqual(['m-offline-cancel']);
         expect(sendRawSpy).toHaveBeenCalledTimes(2);
+
+        // 收到服务端确认回执后才安全出队
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+        handleServerMessage({
+            type: 'message_deleted',
+            sessionId: 'main',
+            messageId: 'm-offline-cancel',
+        });
+
+        state = useAssistantStore.getState();
+        expect(state.pendingCancelQueue.length).toBe(0);
 
         sendRawSpy.mockRestore();
     });

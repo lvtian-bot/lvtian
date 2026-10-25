@@ -11,6 +11,7 @@ import {
     Alert,
     Platform,
     AppState,
+    Keyboard,
     type LayoutChangeEvent,
     type ScrollViewProps,
     type NativeSyntheticEvent,
@@ -42,10 +43,12 @@ import { theme } from '../utils/theme';
 import {
     getInvertedChatScrollTarget,
     getInvertedDistanceFromBottom,
+    shouldShowChatScrollBottom,
 } from '../utils/chatScrollMetrics';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ToolCallState } from '../types/assistantProtocol';
+import { getAssistantMessageParts } from '../utils/assistantMessageParts';
 import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics, FontSizeMetrics } from '../utils/fontSize';
@@ -135,9 +138,43 @@ interface ToolCallsCardProps {
 }
 
 export function formatToolSummaryLocalized(
-    tool: { summary?: string; name?: string },
+    tool: { summary?: string; name?: string; input?: Record<string, unknown> },
     t: TFunction
 ): string {
+    const name = tool.name?.split('.').pop()?.toLowerCase();
+    const inputText = (key: string) => {
+        const value = tool.input?.[key];
+        return typeof value === 'string' ? value.trim() : '';
+    };
+    if (name && ['bash', 'pwsh', 'sh', 'shell', 'terminal', 'exec', 'execute', 'cmd', 'run_code'].includes(name)) {
+        const description = inputText('description');
+        if (description) return description;
+        const command = inputText('command') || inputText('cmd') || inputText('script');
+        if (command) return command.startsWith('$') ? command : `$ ${command}`;
+    }
+    const fileActions: Record<string, string> = {
+        read: 'assistant.toolActionRead',
+        read_image: 'assistant.toolActionRead',
+        read_file: 'assistant.toolActionRead',
+        write: 'assistant.toolActionWrite',
+        write_file: 'assistant.toolActionWrite',
+        edit: 'assistant.toolActionEdit',
+        edit_file: 'assistant.toolActionEdit',
+    };
+    const filePath = inputText('file_path') || inputText('path') || inputText('filePath') || inputText('target') || inputText('file');
+    if (name && fileActions[name] && filePath) {
+        return `${t(fileActions[name])} ${filePath}`;
+    }
+    if (name && ['grep', 'glob'].includes(name) && inputText('pattern')) {
+        return `${t('assistant.toolActionSearch')} ${inputText('pattern')}${filePath ? ` · ${filePath}` : ''}`;
+    }
+    if (name === 'web_fetch' && inputText('url')) {
+        return `${t('assistant.toolActionFetch')} ${inputText('url')}`;
+    }
+    if (name === 'web_search' && Array.isArray(tool.input?.queries)) {
+        const queries = tool.input.queries.filter((query): query is string => typeof query === 'string').join(', ');
+        if (queries) return `${t('assistant.toolActionSearch')} ${queries}`;
+    }
     const summary = tool.summary;
     if (!summary) return tool.name || '';
     if (summary.startsWith('$')) {
@@ -168,139 +205,72 @@ export function formatToolSummaryLocalized(
     return summary;
 }
 
-export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProcessing }) => {
+function ToolCallCard({ tool }: { tool: ToolCallState }) {
     const { t } = useTranslation();
-    const isSingle = toolCalls.length === 1;
-    // 多工具调用默认折叠，单工具调用默认展开；在流式执行中新增工具时，未手动干预则自适应折叠
-    const [userToggled, setUserToggled] = useState(false);
-    const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
-    const expanded = userToggled && manualExpanded !== null ? manualExpanded : isSingle;
-
-    const hasRunning =
-        toolCalls.some((tc) => tc.status === 'running') ||
-        Boolean(isProcessing && toolCalls[toolCalls.length - 1]?.status === 'running');
-    const hasFailed = toolCalls.some((tc) => tc.status === 'failed');
-
-    const runningTool = [...toolCalls].reverse().find((tc) => tc.status === 'running');
-    const latestTool = toolCalls[toolCalls.length - 1];
-
-    let headerTitle = '';
-    if (isSingle) {
-        headerTitle = formatToolSummaryLocalized(latestTool, t);
-    } else if (hasRunning) {
-        const activeName = runningTool
-            ? formatToolSummaryLocalized(runningTool, t)
-            : t('assistant.executingTool', '系统操作');
-        headerTitle = `${t('assistant.runningAction', '正在执行')}: ${activeName}`;
-    } else if (hasFailed) {
-        headerTitle = `${t('assistant.completedWithErrors', '已执行')} ${toolCalls.length} ${t('assistant.actionsCount', '项操作 (含失败)')}`;
-    } else {
-        headerTitle = `${t('assistant.completedActions', '已完成')} ${toolCalls.length} ${t('assistant.actionsCount', '项操作')}`;
-    }
-
+    const [expanded, setExpanded] = useState(false);
+    const statusLabel = tool.status === 'running'
+        ? t('assistant.runningAction')
+        : tool.status === 'failed'
+            ? t('assistant.toolStatusFailed')
+            : t('assistant.completedActions');
+    const statusColor = tool.status === 'running' ? theme.colors.primaryDark
+        : tool.status === 'failed' ? theme.colors.dangerText : theme.colors.successText;
     return (
-        <View style={styles.toolCardContainer}>
+        <View style={styles.toolCardContainer} testID={`tool-card-${tool.id}`}>
             <TouchableOpacity
                 style={styles.toolCardHeader}
                 activeOpacity={0.7}
-                onPress={() => {
-                    setUserToggled(true);
-                    setManualExpanded(!expanded);
-                }}
+                accessibilityRole="button"
+                accessibilityState={{ expanded }}
+                accessibilityLabel={`${formatToolSummaryLocalized(tool, t)} · ${statusLabel}`}
+                onPress={() => setExpanded((value) => !value)}
             >
                 <View style={styles.toolCardHeaderLeft}>
-                    {hasRunning ? (
-                        <ActivityIndicator
-                            size="small"
-                            color={theme.colors.primaryDark}
-                            style={styles.toolStatusIcon}
-                        />
-                    ) : hasFailed ? (
-                        <Icon
-                            name="error"
-                            size={16}
-                            color={theme.colors.dangerText}
-                            style={styles.toolStatusIcon}
-                        />
-                    ) : (
-                        <Icon
-                            name="check-circle"
-                            size={16}
-                            color={theme.colors.successText}
-                            style={styles.toolStatusIcon}
-                        />
-                    )}
-                    <Text style={styles.toolCardHeaderTitle} numberOfLines={1}>
-                        {headerTitle}
-                    </Text>
+                    <Text style={styles.toolCardHeaderTitle}>{formatToolSummaryLocalized(tool, t)}</Text>
+                    <View style={styles.toolItemStatusRow}>
+                        {tool.status === 'running' ? (
+                            <ActivityIndicator size="small" color={statusColor} style={styles.toolStatusIcon} />
+                        ) : (
+                            <Icon name={tool.status === 'failed' ? 'error' : 'check-circle'} size={14} color={statusColor} style={styles.toolStatusIcon} />
+                        )}
+                        <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
+                    </View>
                 </View>
-                <Icon
-                    name={expanded ? 'expand-less' : 'expand-more'}
-                    size={20}
-                    color="#6B7280"
-                />
+                <Icon name={expanded ? 'expand-less' : 'expand-more'} size={20} color="#6B7280" />
             </TouchableOpacity>
-
             {expanded && (
                 <View style={styles.toolCardBody}>
-                    {toolCalls.map((tool, idx) => {
-                        const isCmd = Boolean(tool.summary?.startsWith('$'));
-                        const displaySummary = formatToolSummaryLocalized(tool, t);
-                        return (
-                            <View key={tool.id || idx} style={styles.toolItemRow}>
-                                <View style={styles.toolItemHeader}>
-                                    <View style={styles.toolItemStatusRow}>
-                                        {tool.status === 'running' ? (
-                                            <ActivityIndicator
-                                                size="small"
-                                                color={theme.colors.primaryDark}
-                                                style={styles.toolMiniIcon}
-                                            />
-                                        ) : tool.status === 'done' ? (
-                                            <Icon
-                                                name="check-circle"
-                                                size={13}
-                                                color={theme.colors.successText}
-                                                style={styles.toolMiniIcon}
-                                            />
-                                        ) : (
-                                            <Icon
-                                                name="error"
-                                                size={13}
-                                                color={theme.colors.dangerText}
-                                                style={styles.toolMiniIcon}
-                                            />
-                                        )}
-                                        <Text style={styles.toolItemName}>
-                                            {tool.name}
-                                        </Text>
-                                    </View>
-                                </View>
-                                {tool.summary ? (
-                                    <View style={[styles.toolCommandBox, isCmd ? styles.terminalBox : null]}>
-                                        <Text
-                                            style={[styles.toolCommandText, isCmd ? styles.terminalText : null]}
-                                            selectable={true}
-                                        >
-                                            {displaySummary}
-                                        </Text>
-                                    </View>
-                                ) : null}
-                                {tool.output ? (
-                                    <View style={styles.toolOutputBox}>
-                                        <Text style={styles.toolOutputText} selectable={true} numberOfLines={8}>
-                                            {tool.output.trim()}
-                                        </Text>
-                                    </View>
-                                ) : null}
-                            </View>
-                        );
-                    })}
+                    <Text style={styles.toolItemName} selectable>{tool.name}</Text>
+                    {tool.summary !== undefined && (
+                        <View style={styles.toolCommandBox}>
+                            <Text style={styles.toolItemName}>{t('assistant.toolDetailSummary')}</Text>
+                            <Text style={styles.toolCommandText} selectable>{tool.summary}</Text>
+                        </View>
+                    )}
+                    {tool.input !== undefined && (
+                        <View style={styles.toolCommandBox}>
+                            <Text style={styles.toolItemName}>{t('assistant.toolDetailInput')}</Text>
+                            <Text style={styles.toolCommandText} selectable>{JSON.stringify(tool.input, null, 2)}</Text>
+                        </View>
+                    )}
+                    {tool.output !== undefined && (
+                        <View style={styles.toolOutputBox}>
+                            <Text style={styles.toolItemName}>{t('assistant.toolDetailOutput')}</Text>
+                            <Text style={styles.toolOutputText} selectable>{tool.output}</Text>
+                        </View>
+                    )}
                 </View>
             )}
         </View>
     );
-};
+}
+
+// Keep the public wrapper compatible; each keyed tool owns its disclosure state.
+export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls }) => (
+    <View style={styles.toolCallsList}>
+        {toolCalls.map((tool) => <ToolCallCard key={tool.id} tool={tool} />)}
+    </View>
+);
 
 export const ChatScreen = () => {
     const { t } = useTranslation();
@@ -316,7 +286,7 @@ export const ChatScreen = () => {
     const extraContentPadding = useSharedValue(0);
     const composerHeight = useSharedValue(60);
 
-    // 监听应用切回前台（热启动）：彻底阻止软键盘误触自动弹出
+    // 监听应用切回前台（热启动）：彻底阻止软键盘误触自动弹出（前台重连由 AssistantClient 统一守护）
     useEffect(() => {
         const subscription = AppState.addEventListener('change', (nextAppState) => {
             if (nextAppState === 'active') {
@@ -327,6 +297,8 @@ export const ChatScreen = () => {
             subscription.remove();
         };
     }, []);
+
+
     const handleComposerLayout = useCallback((event: LayoutChangeEvent) => {
         composerHeight.value = event.nativeEvent.layout.height;
     }, [composerHeight]);
@@ -374,6 +346,25 @@ export const ChatScreen = () => {
     const [inputContent, setInputContent] = useState('');
     const [isAttachMenuVisible, setIsAttachMenuVisible] = useState(false);
     const [showScrollBottom, setShowScrollBottom] = useState(false);
+    const scrollGestureRef = useRef({ active: false, startDistance: Number.NaN });
+    useEffect(() => {
+        // Keyboard/layout movement is not evidence that the user is browsing history.
+        const cancelGesture = () => {
+            scrollGestureRef.current = { active: false, startDistance: Number.NaN };
+        };
+        // Interactive keyboard dismissal can be part of an intentional history drag.
+        // Keep that drag alive, but discard keyboard-induced distance changes.
+        const rebaseGesture = () => {
+            scrollGestureRef.current.startDistance = Number.NaN;
+        };
+        const subscriptions = [
+            Keyboard.addListener('keyboardWillShow', cancelGesture),
+            Keyboard.addListener('keyboardDidShow', cancelGesture),
+            Keyboard.addListener('keyboardWillHide', rebaseGesture),
+            Keyboard.addListener('keyboardDidHide', rebaseGesture),
+        ];
+        return () => subscriptions.forEach((subscription) => subscription.remove());
+    }, []);
     const INITIAL_WINDOW_SIZE = 30;
     const WINDOW_BATCH_SIZE = 30;
     const [renderedCount, setRenderedCount] = useState(INITIAL_WINDOW_SIZE);
@@ -425,10 +416,34 @@ export const ChatScreen = () => {
         const offsetY = event.nativeEvent.contentOffset.y;
         // 倒序列表中，根据顶部 inset 补偿计算视口距最新消息的物理距离；向旧消息上滑时距离增大
         const distanceFromBottom = getInvertedDistanceFromBottom(offsetY, contentInsetsRef.current.top);
-        setShowScrollBottom(distanceFromBottom > 160);
+        const gesture = scrollGestureRef.current;
+        if (distanceFromBottom <= 32 || (gesture.active && !Number.isFinite(gesture.startDistance))) {
+            gesture.startDistance = distanceFromBottom;
+        }
+        setShowScrollBottom((visible) => shouldShowChatScrollBottom(
+            visible, distanceFromBottom, gesture.active, gesture.startDistance,
+        ));
+    }, []);
+
+    const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        setIsAttachMenuVisible(false);
+        const distance = getInvertedDistanceFromBottom(
+            event.nativeEvent.contentOffset.y, contentInsetsRef.current.top,
+        );
+        const previousStart = scrollGestureRef.current.startDistance;
+        scrollGestureRef.current = {
+            active: true,
+            // Preserve progress across short drags, but rebase after keyboard movement.
+            startDistance: Number.isFinite(previousStart) ? Math.min(previousStart, distance) : distance,
+        };
+    }, []);
+    const handleScrollEndDrag = useCallback(() => {
+        scrollGestureRef.current.active = false;
     }, []);
 
     const scrollToBottom = useCallback(() => {
+        scrollGestureRef.current = { active: false, startDistance: Number.NaN };
+        setShowScrollBottom(false);
         const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
         flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
     }, []);
@@ -699,7 +714,8 @@ export const ChatScreen = () => {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
-                onScrollBeginDrag={() => setIsAttachMenuVisible(false)}
+                onScrollBeginDrag={handleScrollBeginDrag}
+                onScrollEndDrag={handleScrollEndDrag}
                 onTouchStart={() => {
                     if (isAttachMenuVisible) {
                         setIsAttachMenuVisible(false);
@@ -716,7 +732,10 @@ export const ChatScreen = () => {
                 ListFooterComponent={renderListFooter}
                 renderItem={({ item }) => {
                     const isUser = item.role === 'user';
-                    const hasTools = Boolean(item.toolCalls && item.toolCalls.length > 0);
+                    const hasTools = !isUser && Boolean(item.toolCalls?.length);
+                    const hasProseBubble = isUser || Boolean(item.attachments?.length ||
+                        item.errorMessage || (item.stopReason && item.stopReason !== 'end_turn') ||
+                        (item.status === 'processing' && !hasTools && !item.content));
                     return (
                         <View
                             style={[
@@ -724,16 +743,23 @@ export const ChatScreen = () => {
                                 isUser ? styles.userRow : styles.assistantRow,
                             ]}
                         >
-                            <View
-                                style={[
-                                    styles.bubble,
-                                    isUser
-                                        ? styles.userBubble
-                                        : [
-                                              styles.assistantBubble,
-                                              hasTools ? styles.assistantBubbleWithTools : null,
-                                          ],
-                                ]}
+                            <View style={isUser ? styles.userMessageGroup : styles.assistantMessageGroup}>
+                            {!isUser && getAssistantMessageParts(item).map((part) => part.type === 'tool' ? (
+                                <ToolCallsCard key={part.key} toolCalls={[part.tool]} />
+                            ) : (
+                                <View
+                                    key={part.key}
+                                    testID={`assistant-prose-${item.id}-${part.key}`}
+                                    style={[styles.bubble, styles.assistantBubble]}
+                                >
+                                    <Markdown style={dynamicMarkdownStyles} rules={markdownRules}>
+                                        {part.text}
+                                    </Markdown>
+                                </View>
+                            ))}
+                            {hasProseBubble && <View
+                                testID={isUser ? `user-bubble-${item.id}` : `assistant-prose-${item.id}`}
+                                style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}
                             >
                                 {item.attachments && item.attachments.map((att, idx) => {
                                     const imageUri = att.type === 'image'
@@ -795,16 +821,8 @@ export const ChatScreen = () => {
                                     </View>
                                 ) : (
                                     <View style={styles.assistantContentContainer}>
-                                        {/* 工具活动状态：DSH 规范可折叠卡片 */}
-                                        {hasTools && (
-                                            <ToolCallsCard
-                                                toolCalls={item.toolCalls!}
-                                                isProcessing={item.status === 'processing'}
-                                            />
-                                        )}
-
                                         {/* 思考中打字机动画 */}
-                                        {item.status === 'processing' && !item.content && (
+                                        {item.status === 'processing' && !item.content && !hasTools && (
                                             <View style={styles.thinkingRow}>
                                                 <ActivityIndicator
                                                     size="small"
@@ -814,13 +832,6 @@ export const ChatScreen = () => {
                                                     {t('assistant.thinkingText', '绿天正在思考中...')}
                                                 </Text>
                                             </View>
-                                        )}
-
-                                        {/* Markdown 内容（支持划词选词复制） */}
-                                        {!!item.content && (
-                                            <Markdown style={dynamicMarkdownStyles} rules={markdownRules}>
-                                                {item.content}
-                                            </Markdown>
                                         )}
 
                                         {/* 错误提示：稳定错误码按码本地化，未知码按原文兜底 */}
@@ -880,6 +891,10 @@ export const ChatScreen = () => {
                                         </TouchableOpacity>
                                     )}
                                 </View>
+                            </View>}
+                            {!hasProseBubble && <Text style={[styles.timeText, styles.assistantTime]}>
+                                {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </Text>}
                             </View>
                         </View>
                     );
@@ -1285,17 +1300,22 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
     },
+    userMessageGroup: {
+        maxWidth: '85%',
+    },
+    assistantMessageGroup: {
+        maxWidth: '92%',
+        flexShrink: 1,
+        alignItems: 'flex-start',
+        gap: 6,
+    },
     userBubble: {
         backgroundColor: '#D9EAFD',
-        maxWidth: '85%',
     },
     assistantBubble: {
         backgroundColor: '#F0F2F5',
-        maxWidth: '92%',
+        maxWidth: '100%',
         minWidth: 48,
-    },
-    assistantBubbleWithTools: {
-        width: '92%',
     },
     assistantContentContainer: {
         width: '100%',
@@ -1305,11 +1325,15 @@ const styles = StyleSheet.create({
         fontSize: 15,
         lineHeight: 23,
     },
+    toolCallsList: {
+        maxWidth: '100%',
+        alignSelf: 'stretch',
+        gap: 6,
+    },
     toolCardContainer: {
-        width: '100%',
+        maxWidth: '100%',
         backgroundColor: '#E5E7EB',
         borderRadius: 10,
-        marginBottom: 8,
         overflow: 'hidden',
     },
     toolCardHeader: {
@@ -1321,9 +1345,16 @@ const styles = StyleSheet.create({
     },
     toolCardHeaderLeft: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
         alignItems: 'center',
         flex: 1,
+        minWidth: 0,
+        gap: 6,
         marginRight: 6,
+    },
+    toolStatusText: {
+        fontSize: 11,
+        flexShrink: 1,
     },
     toolStatusIcon: {
         marginRight: 8,
@@ -1332,11 +1363,15 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600',
         color: '#374151',
-        flex: 1,
+        flexGrow: 1,
+        flexShrink: 1,
+        minWidth: 0,
+        lineHeight: 19,
     },
     toolCardBody: {
         paddingHorizontal: 8,
-        paddingBottom: 8,
+        paddingVertical: 8,
+        gap: 6,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: '#D1D5DB',
     },
