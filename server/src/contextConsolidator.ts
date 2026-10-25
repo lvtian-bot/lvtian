@@ -194,6 +194,88 @@ export class ContextConsolidator {
     }
 
     /**
+     * 针对指定会话立即执行即时提炼（无视空闲与容量门禁，专用于主动切换权限、任务重置或交接换新）
+     */
+    public async consolidateNow(sessionId: string): Promise<string | null> {
+        try {
+            const dialogue = this.sessionManager.getHistoryDialogue(sessionId);
+            if (!dialogue || dialogue.trim().length === 0) {
+                return null;
+            }
+
+            const providerConfig = resolveProviderConfig(this.options);
+            if (!providerConfig) {
+                console.log(`[ContextConsolidator] 未配置 DEEPSEEK_API_KEY / OPENAI_API_KEY，跳过即时提炼`);
+                return null;
+            }
+
+            const promptTemplate = await this.loadPromptTemplate();
+            const endpoint = normalizeChatCompletionsUrl(providerConfig.baseUrl);
+            const fetchFn = this.options.fetchFn ?? globalThis.fetch;
+
+            const callModel = async (userContent: string): Promise<string | null> => {
+                const res = await fetchFn(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${providerConfig.apiKey}`,
+                    },
+                    body: JSON.stringify({
+                        model: providerConfig.model,
+                        messages: [
+                            { role: 'system', content: promptTemplate },
+                            { role: 'user', content: userContent },
+                        ],
+                        temperature: 0.3,
+                        max_tokens: 1000,
+                    }),
+                    signal: AbortSignal.timeout(30000),
+                });
+                if (!res.ok) {
+                    const text = await res.text().catch(() => '');
+                    console.warn(`[ContextConsolidator] 即时提炼请求失败 (${res.status}): ${text.slice(0, 200)}`);
+                    return null;
+                }
+                const data = (await res.json()) as {
+                    choices?: Array<{ message?: { content?: string } }>;
+                };
+                return data.choices?.[0]?.message?.content?.trim() || null;
+            };
+
+            const chunkChars = this.options.maxDialogueChars ?? 500_000;
+            const chunks = splitDialogueByChars(dialogue, chunkChars);
+            let extracted: string | null = null;
+
+            if (chunks.length === 1) {
+                extracted = await callModel(
+                    `以下是本次会话的完整交流记录：\n\n${dialogue}\n\n请严格按要求提炼一份300~500字的心智接力备忘录。`
+                );
+            } else {
+                const partials: string[] = [];
+                for (let i = 0; i < chunks.length; i++) {
+                    const partial = await callModel(
+                        `以下是同一段长会话的第 ${i + 1}/${chunks.length} 部分。请只提炼这一部分中值得交接的事实、已定结论、未竟事项和主人的要求，不要臆测其他部分：\n\n${chunks[i]}\n\n输出 200~400 字的局部备忘。`
+                    );
+                    if (!partial) return null;
+                    partials.push(partial);
+                }
+                extracted = await callModel(
+                    `以下是同一段长会话各部分提炼出的局部备忘，请合并为一份完整的 300~500 字心智接力备忘录：保留所有仍然有效的结论与未竟事项，去掉重复，不要新增原文没有的内容。\n\n${partials.join('\n\n---\n\n')}`
+                );
+            }
+
+            if (extracted) {
+                this.sessionManager.setPendingBackground(sessionId, extracted);
+                console.log(`[ContextConsolidator] 会话 ${sessionId} 即时心智提炼完成 (${extracted.length} 字符)`);
+            }
+            return extracted;
+        } catch (err: unknown) {
+            console.warn(`[ContextConsolidator] 即时提炼异常 (已静默容错): ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+        }
+    }
+
+    /**
      * 对指定会话执行直发模型提炼（自发自解、原子落盘）
      */
     public async consolidate(sessionId: string): Promise<string | null> {

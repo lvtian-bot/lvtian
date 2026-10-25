@@ -8,6 +8,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { ToolCallState, ApprovalRequest, ChatAttachment } from './protocol.js';
+import type { ContextConsolidator } from './contextConsolidator.js';
 
 /**
  * 引擎模块用户可见消息的错误码：客户端按码本地化渲染（i18n），码值是持久化与流式的稳定契约。
@@ -57,6 +58,10 @@ export interface AcpEngineManagerOptions {
     minCapacityRatio?: number;
     /** 引擎连接工厂，默认 spawn dsh --profile acp；测试注入进程内模拟连接 */
     connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+    /** 上下文提炼整合器（用于主动交接、权限切换时即时提炼心智备忘录） */
+    contextConsolidator?: ContextConsolidator;
+    /** DSH 配置文件自定义目录 (~/.dsh/profiles/acp)，用于测试隔离或非标准安装路径对齐 */
+    dshProfileDir?: string;
 }
 
 /** 会话任务运行时状态：一次 prompt 执行期间的聚合上下文 */
@@ -294,6 +299,8 @@ export class AcpEngineManager {
     private idleTimeoutMs: number;
     private minCapacityRatio: number;
     private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+    private contextConsolidator: ContextConsolidator | null = null;
+    private dshProfileDir?: string;
 
     private connection: EngineConnection | null = null;
     private engineStarting: Promise<void> | null = null;
@@ -302,6 +309,10 @@ export class AcpEngineManager {
 
     /** 已受理（含引擎启动、建会话窗口）的会话 → 对应助理消息 ID：execute 入口同步登记，用于并发去重与停止时消息终态化 */
     private activeSessions: Map<string, string> = new Map();
+    /** 活跃执行任务 Promise（键为 sessionId）：用于交接时显式等待旧执行完全退出 */
+    private activeExecutions: Map<string, Promise<void>> = new Map();
+    /** 正在执行交接提炼中的会话：交接异步期间锁定会话，防止并发消息在旧引擎执行被销毁 */
+    private handoffInProgressSessions: Set<string> = new Set();
     private runtimes: Map<string, SessionRuntime> = new Map();
     /** 引擎侧会话 ID → 绿天会话 ID 反查（审批请求与事件路由使用） */
     private engineSessionIndex: Map<string, string> = new Map();
@@ -338,10 +349,109 @@ export class AcpEngineManager {
             ?? (Number.isFinite(envRatio) && envRatio > 0 ? envRatio : 0.2);
 
         this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
+        this.contextConsolidator = options?.contextConsolidator ?? null;
+        this.dshProfileDir = options?.dshProfileDir;
+    }
+
+    public setContextConsolidator(cc: ContextConsolidator): void {
+        this.contextConsolidator = cc;
+    }
+
+    public getDshProfileDir(): string | undefined {
+        return this.dshProfileDir;
+    }
+
+    /**
+     * 统一会话交接流水线 (Handover Pipeline)：
+     * 用于主动切换权限、任务重置或交接换新时，即时提炼对话心智备忘录，注销旧 DSH 会话并回收引擎连接，
+     * 下一轮交互到达时将自动以新会话启动并全量注入前文备忘录与上下文。
+     */
+    public async triggerHandover(sessionId: string, reason: string): Promise<void> {
+        console.log(`[AcpEngine] 会话 ${sessionId} 触发会话交接 (原因: ${reason})`);
+        if (this.handoffInProgressSessions.has(sessionId)) {
+            return;
+        }
+
+        // 收集受影响会话：主交接会话以及当前所有活跃会话（因底层共享连接即将被回收）
+        const affectedSessions = new Set<string>([sessionId, ...this.activeSessions.keys()]);
+        for (const sid of affectedSessions) {
+            this.handoffInProgressSessions.add(sid);
+        }
+
+        try {
+            // 1. 若当前会话或其它受影响会话正在运行，先停止任务并触发 stopped 状态回调广播
+            for (const sid of affectedSessions) {
+                if (this.activeSessions.has(sid)) {
+                    const runtime = this.runtimes.get(sid);
+                    this.stop(sid);
+                    if (runtime?.callbacks?.onStatusChange) {
+                        try {
+                            runtime.callbacks.onStatusChange('stopped', { code: 'task_stopped' });
+                        } catch (err) {
+                            console.warn(`[AcpEngine] 交接广播停止状态失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
+                        }
+                    }
+                }
+            }
+
+            // 2. 关键时序保障：先回收旧引擎连接并等待旧执行彻底收尾退出，确保旧执行不能在连接关闭期间误清除或覆盖新交接状态
+            try {
+                await this.reclaimConnection();
+            } catch (err) {
+                console.warn(`[AcpEngine] 交接回收引擎连接异常: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            const pendingExecutions = Array.from(affectedSessions)
+                .map((sid) => this.activeExecutions.get(sid))
+                .filter(Boolean) as Promise<void>[];
+            if (pendingExecutions.length > 0) {
+                await Promise.allSettled(pendingExecutions);
+            }
+
+            // 3. 在被中断的旧执行彻底退出后，即时执行心智提炼，生成《心智接力备忘录》
+            if (this.contextConsolidator) {
+                try {
+                    await this.contextConsolidator.consolidateNow(sessionId);
+                } catch (err) {
+                    console.warn(`[AcpEngine] 交接即时提炼异常 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
+
+            // 4. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定（容错落盘异常）
+            try {
+                this.sessionManager.setHandoffPending(sessionId, true);
+            } catch (err) {
+                console.warn(`[AcpEngine] 标记 handoffPending 失败 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+            }
+
+            // 5. 清除旧 DSH 会话绑定与索引
+            const saved = this.sessionManager.getDshSessionId(sessionId);
+            if (saved) {
+                this.engineSessionIndex.delete(saved);
+            }
+            try {
+                this.sessionManager.setDshSessionId(sessionId, '');
+            } catch (err) {
+                console.warn(`[AcpEngine] 清除 dshSessionId 失败 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+            }
+        } finally {
+            // 6. 核心安全底线：无论心智提炼或会话持久化是否抛错，必须保证旧引擎连接被可靠回收
+            try {
+                await this.reclaimConnection();
+            } catch (err) {
+                console.warn(`[AcpEngine] 交接回收引擎连接异常: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            for (const sid of affectedSessions) {
+                this.handoffInProgressSessions.delete(sid);
+            }
+        }
     }
 
     public isRunning(sessionId: string): boolean {
-        return this.activeSessions.has(sessionId);
+        return this.activeSessions.has(sessionId) || this.handoffInProgressSessions.has(sessionId);
+    }
+
+    public isHandoffInProgress(sessionId: string): boolean {
+        return this.handoffInProgressSessions.has(sessionId);
     }
 
     public handleApproval(sessionId: string, approvalId: string, approved: boolean): boolean {
@@ -439,14 +549,19 @@ export class AcpEngineManager {
         this.taskWatchdogTimers.set(sessionId, timer);
     }
 
-    /** 强制回收引擎连接：同步置空连接并清理映射再异步关闭，防止下一个请求抢在清理前复用已关闭的死连接 */
-    private reclaimConnection(): void {
+    /** 强制回收引擎连接：若有在途启动中的引擎先等待就位，同步置空连接并清理映射再异步关闭，防止下一个请求抢在清理前复用已关闭的死连接 */
+    private async reclaimConnection(): Promise<void> {
+        if (this.engineStarting) {
+            await this.engineStarting.catch(() => undefined);
+        }
         const conn = this.connection;
         this.connection = null;
         this.engineSessionIndex.clear();
-        conn?.close().catch((err: unknown) => {
-            console.warn(`[AcpEngine] 强制回收连接失败: ${err instanceof Error ? err.message : String(err)}`);
-        });
+        if (conn) {
+            await conn.close().catch((err: unknown) => {
+                console.warn(`[AcpEngine] 强制回收连接失败: ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
     }
 
     /** 优雅关停：停止全部受理中的任务（含引擎启动窗口）、等待启动中的引擎就位后关闭连接 */
@@ -454,20 +569,7 @@ export class AcpEngineManager {
         for (const sessionId of [...this.activeSessions.keys()]) {
             this.stop(sessionId);
         }
-        // 引擎仍在启动时等待其完成再关闭：否则启动完成后连接与进行中任务会残留到关停之后
-        if (this.engineStarting) {
-            await this.engineStarting.catch(() => undefined);
-        }
-        const conn = this.connection;
-        this.connection = null;
-        // 主动关停将 connection 置空，closed 处理器的连接比对不再命中，
-        // 连接级会话映射须在此显式清理，否则下次懒重启后会话被误判为本连接活跃会话
-        this.engineSessionIndex.clear();
-        if (conn) {
-            await conn.close().catch((err: unknown) => {
-                console.warn(`[AcpEngine] 关闭引擎连接失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
-            });
-        }
+        await this.reclaimConnection();
     }
 
     public async execute(
@@ -478,10 +580,15 @@ export class AcpEngineManager {
         attachments?: ChatAttachment[]
     ): Promise<void> {
         // 入口同步预留（任何 await 之前）：同一会话的并发消息在此被拒绝，
-        // 否则引擎启动/建会话窗口内两次调用都会通过检查、互踩运行时状态
-        if (this.activeSessions.has(sessionId)) {
+        // 且交接提炼期间锁定会话，防止在即将回收的旧引擎上并发启动新任务
+        if (this.activeSessions.has(sessionId) || this.handoffInProgressSessions.has(sessionId)) {
             return;
         }
+        let resolveDone!: () => void;
+        const donePromise = new Promise<void>((resolve) => {
+            resolveDone = resolve;
+        });
+        this.activeExecutions.set(sessionId, donePromise);
         this.activeSessions.set(sessionId, assistantMessageId);
         // 门禁判定以「消息到达时刻」为准：建引擎可能耗时数秒，不能让它把 2h59:59 的消息拖成 3h 后
         const arrivalAt = Date.now();
@@ -502,10 +609,11 @@ export class AcpEngineManager {
             }
 
             // 引擎启动等待期间收到手动停止：不再解析会话（避免 stopAll 清理映射后又被本任务重新登记），
-            // 消息已由 stop 同步终态化，这里只收尾任务状态
+            // 消息已由 stop 同步终态化，这里收尾任务状态并广播 stopped 终态
             if (this.stoppedSessions.has(sessionId)) {
                 this.stoppedSessions.delete(sessionId);
                 this.sessionManager.setTaskState(sessionId, 'stopped');
+                callbacks.onStatusChange('stopped', { code: 'task_stopped' });
                 return;
             }
 
@@ -655,7 +763,19 @@ export class AcpEngineManager {
                 }
             );
 
-            // 成功交接后清理待用提要（首次轮换、失败重试、断档接管都算交付成功），并清除交接标记
+            // 检查在此轮 prompt 执行期间是否已被中断停止（例如收到手动取消或交接流程中断）
+            if (this.stoppedSessions.has(sessionId)) {
+                this.stoppedSessions.delete(sessionId);
+                this.sessionManager.setTaskState(sessionId, 'stopped');
+                const runtime = this.runtimes.get(sessionId);
+                if (runtime) {
+                    this.finalizeTools(runtime, 'failed');
+                    this.runtimes.delete(sessionId);
+                }
+                return;
+            }
+
+            // 成功交付后清理待用提要（首次轮换、失败重试、断档接管都算交付成功），并清除交接标记
             if (needsRelay && pendingBackground) {
                 this.sessionManager.clearPendingBackground(sessionId);
             }
@@ -665,8 +785,8 @@ export class AcpEngineManager {
 
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
         } catch (err: unknown) {
-            // 若轮换首轮请求异常失败，恢复提要文件以支持用户后续重试注入
-            if (shouldRotate && pendingBackground) {
+            // 若轮换首轮请求异常失败，恢复提要文件以支持用户后续重试注入（被中断停止时不恢复旧提要，避免覆盖新提要）
+            if (shouldRotate && pendingBackground && !this.stoppedSessions.has(sessionId)) {
                 this.sessionManager.setPendingBackground(sessionId, pendingBackground);
             }
             const message = err instanceof Error ? err.message : String(err);
@@ -688,6 +808,8 @@ export class AcpEngineManager {
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
             this.activeSessions.delete(sessionId);
+            this.activeExecutions.delete(sessionId);
+            resolveDone();
             // 执行已收尾：取消停止回收与占用看门狗计时器，避免误杀同会话的后续请求
             const recoveryTimer = this.stopRecoveryTimers.get(sessionId);
             if (recoveryTimer) {
@@ -779,10 +901,21 @@ export class AcpEngineManager {
 
     private async spawnDshEngine(app: acp.ClientApp, systemPrompt: string): Promise<EngineConnection> {
         const { command, argsPrefix } = resolveDshInvocation();
+        const envExtra: Record<string, string> = {};
+        if (this.dshProfileDir) {
+            envExtra.DSH_PROFILE_DIR = this.dshProfileDir;
+            const normalized = path.resolve(this.dshProfileDir);
+            const marker = path.join('.dsh', 'profiles', 'acp');
+            if (normalized.endsWith(marker)) {
+                envExtra.HOME = normalized.slice(0, -marker.length).replace(/[/\\]+$/, '') || '/';
+            }
+        }
+
         const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp'], {
             cwd: this.workspace,
             env: {
                 ...process.env,
+                ...envExtra,
                 DSH_WORKSPACE: this.workspace,
                 DSH_SYSTEM_PROMPT: systemPrompt,
                 DEEPSEEK_SYSTEM_PROMPT: systemPrompt,

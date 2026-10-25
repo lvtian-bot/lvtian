@@ -23,9 +23,11 @@ interface AssistantState {
     pendingApprovals: ApprovalRequest[];
     currentSeq: number;
     hasHydrated: boolean;
+    permissionMode: 'workspace-write' | 'danger-full-access';
 
     // Actions
     setHasHydrated: (hydrated: boolean) => void;
+    setPermissionMode: (mode: 'workspace-write' | 'danger-full-access') => void;
     setServerConfig: (url: string, token: string) => Promise<void>;
     loadSavedCredentials: () => Promise<{ url: string; token: string }>;
     setConnectionState: (state: ConnectionState, error?: string | null) => void;
@@ -55,8 +57,10 @@ export const useAssistantStore = create<AssistantState>()(
             currentSeq: 0,
             clearedSeq: 0,
             hasHydrated: false,
+            permissionMode: 'workspace-write',
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
+            setPermissionMode: (mode) => set({ permissionMode: mode }),
 
             setServerConfig: async (url, token) => {
                 const cleanUrl = url.trim().replace(/\/+$/, '');
@@ -239,6 +243,7 @@ export const useAssistantStore = create<AssistantState>()(
                     messages: persistedMessages,
                     currentSeq: durableSeq,
                     clearedSeq: state.clearedSeq ?? 0,
+                    permissionMode: state.permissionMode ?? 'workspace-write',
                 };
             },
             onRehydrateStorage: () => (state) => {

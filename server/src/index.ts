@@ -5,6 +5,7 @@ import { SessionManager } from './sessionManager.js';
 import { AcpEngineManager } from './acpEngineManager.js';
 import { FileManager } from './fileManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
+import { getDshPermissionMode } from './dshConfigManager.js';
 import { LvtianServer } from './server.js';
 
 function parseArgs(): Partial<ServerConfig> {
@@ -64,14 +65,18 @@ async function main() {
 
     const memoryManager = new MemoryManager(config.workspace);
     const sessionManager = new SessionManager(config.dataDir);
-    const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager);
-    const fileManager = new FileManager(config.workspace);
     const contextConsolidator = new ContextConsolidator(sessionManager);
+    const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager, {
+        contextConsolidator,
+        dshProfileDir: config.dshProfileDir,
+    });
+    const fileManager = new FileManager(config.workspace);
 
     const server = new LvtianServer(config, sessionManager, memoryManager, acpEngine, fileManager, contextConsolidator);
     await server.start();
 
     const maskedToken = `${config.token.slice(0, 4)}****${config.token.slice(-4)}`;
+    const currentMode = getDshPermissionMode(config.dshProfileDir);
 
     console.log(`\n🚀 服务已成功启动并在端口 ${config.port} 监听:`);
     console.log(`   - 本地回环:  http://127.0.0.1:${config.port}`);
@@ -79,6 +84,7 @@ async function main() {
         console.log(`   - 网络访问:  http://${ip}:${config.port}`);
     }
     console.log(`\n🔑 访问令牌:         ${maskedToken} (安全脱敏，查看完整凭据: npm run token 或 node dist/index.js --show-token)`);
+    console.log(`🛡️ 助理权限模式:     ${currentMode === 'danger-full-access' ? '完全权限模式 (danger-full-access)' : '安全工作区模式 (workspace-write)'}`);
     console.log(`📂 工作区目录:       ${config.workspace}`);
     console.log(`🧠 记忆系统目录:     ${memoryManager.getBaseDir()} (SOUL.md, MEMORY.md, USER.md)`);
     console.log(`⚙️ 配置文件路径:     ~/.config/lvtian/config.json (权限 0600)`);

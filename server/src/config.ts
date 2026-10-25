@@ -10,6 +10,7 @@ export interface ServerConfig {
     workspace: string;
     dataDir: string;
     assistantName: string;
+    dshProfileDir?: string;
 }
 
 export function resolveUserPath(p: string): string {
@@ -49,6 +50,7 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
     const workspace = resolveUserPath(overrides?.workspace || existing.workspace || '~/workspace');
     const dataDir = resolveUserPath(overrides?.dataDir || existing.dataDir || path.join(configDir, 'data'));
     const assistantName = overrides?.assistantName || existing.assistantName || '绿天';
+    const dshProfileDir = overrides?.dshProfileDir || existing.dshProfileDir;
 
     const mergedConfig: ServerConfig = {
         host,
@@ -57,6 +59,7 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
         workspace,
         dataDir,
         assistantName,
+        ...(dshProfileDir ? { dshProfileDir } : {}),
     };
 
     // 确保工作区和数据目录存在
