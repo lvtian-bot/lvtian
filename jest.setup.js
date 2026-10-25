@@ -41,3 +41,17 @@ jest.mock('react-native-keyboard-controller', () => {
     }),
   };
 });
+
+// @expo/vector-icons 原生字体加载在 Jest 环境下 mock 为 Text
+jest.mock('@expo/vector-icons/MaterialIcons', () => {
+  const React = require('react');
+  const { Text } = require('react-native');
+  return (props) => React.createElement(Text, props, props.name);
+});
+jest.mock('@expo/vector-icons', () => {
+  const React = require('react');
+  const { Text } = require('react-native');
+  return {
+    MaterialIcons: (props) => React.createElement(Text, props, props.name),
+  };
+});

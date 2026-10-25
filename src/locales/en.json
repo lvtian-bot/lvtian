@@ -379,6 +379,17 @@
     "connectionFailed": "Network connection failed",
     "sendInterrupted": "Send interrupted, please retry",
     "approvalFailedOffline": "Network not ready, approval request could not be delivered",
-    "sendFailedOffline": "Network connection not ready; message queued and can be retried once connected"
+    "sendFailedOffline": "Network connection not ready; message queued and can be retried once connected",
+    "executingTool": "System operation",
+    "runningAction": "Running",
+    "completedActions": "Completed",
+    "completedWithErrors": "Executed",
+    "actionsCount": "actions",
+    "toolActionRead": "Read",
+    "toolActionWrite": "Write",
+    "toolActionEdit": "Edit",
+    "toolActionSearch": "Search",
+    "toolActionFetch": "Fetch",
+    "toolActionFile": "File"
   }
 }

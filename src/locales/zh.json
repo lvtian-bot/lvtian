@@ -379,6 +379,17 @@
     "connectionFailed": "网络连接失败",
     "sendInterrupted": "发送中断，请重试",
     "approvalFailedOffline": "当前网络未就绪，审批指令未送达",
-    "sendFailedOffline": "网络连接未就绪，消息已暂存，连上后可重试"
+    "sendFailedOffline": "网络连接未就绪，消息已暂存，连上后可重试",
+    "executingTool": "系统操作",
+    "runningAction": "正在执行",
+    "completedActions": "已完成",
+    "completedWithErrors": "已执行",
+    "actionsCount": "项操作",
+    "toolActionRead": "读取",
+    "toolActionWrite": "写入",
+    "toolActionEdit": "编辑",
+    "toolActionSearch": "搜索",
+    "toolActionFetch": "访问",
+    "toolActionFile": "文件"
   }
 }
