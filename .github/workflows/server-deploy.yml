@@ -43,10 +43,10 @@ jobs:
           ssh -i ~/.ssh/id_rsa -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" 'bash -s' -- "$SERVER_USER" << 'EOF'
             set -euo pipefail
             SERVER_USER="${1:-ubuntu}"
-            if [ -d "/home/${SERVER_USER}/code/lvtian" ]; then
-              DEPLOY_DIR="/home/${SERVER_USER}/code/lvtian"
-            else
+            if [ -d "/home/${SERVER_USER}/lvtian-server" ]; then
               DEPLOY_DIR="/home/${SERVER_USER}/lvtian-server"
+            else
+              DEPLOY_DIR="/home/${SERVER_USER}/code/lvtian"
             fi
             echo "=== 进入部署目录: ${DEPLOY_DIR} ==="
             cd "${DEPLOY_DIR}"
@@ -70,18 +70,19 @@ jobs:
             npm run upgrade-notify || true
 
             echo "=== 确保服务重启与运行 ==="
-            # 兼容仓库标准系统级模板单元 lvtian-server@<user>.service 与用户级实例 lvtian-server.service
-            if systemctl is-active --quiet "lvtian-server@${SERVER_USER}.service" 2>/dev/null; then
-              sudo systemctl restart "lvtian-server@${SERVER_USER}.service"
-            elif systemctl --user is-active --quiet lvtian-server.service 2>/dev/null; then
+            # 优先使用无需 sudo 的用户级实例 lvtian-server.service，再尝试系统级模板单元
+            if systemctl --user is-active --quiet lvtian-server.service 2>/dev/null; then
               systemctl --user restart lvtian-server.service
+            elif systemctl is-active --quiet "lvtian-server@${SERVER_USER}.service" 2>/dev/null; then
+              sudo -n systemctl restart "lvtian-server@${SERVER_USER}.service"
             else
-              # 老进程已优雅退出处于非激活态时，依次尝试拉起系统级或用户级服务
-              sudo systemctl restart "lvtian-server@${SERVER_USER}.service" 2>/dev/null || systemctl --user restart lvtian-server.service 2>/dev/null || true
+              # 老进程已优雅退出处于非激活态时，依次尝试拉起用户级或系统级服务
+              systemctl --user restart lvtian-server.service 2>/dev/null || sudo -n systemctl restart "lvtian-server@${SERVER_USER}.service" 2>/dev/null || true
             fi
 
             echo "=== 健康检查（等待服务拉起） ==="
-            HEALTH_URL="http://127.0.0.1:1999/health"
+            PORT_DETECTED=$(grep -o '"port": *[0-9]*' /home/${SERVER_USER}/.config/lvtian/config.json 2>/dev/null | grep -o '[0-9]*' || echo "1999")
+            HEALTH_URL="http://127.0.0.1:${PORT_DETECTED:-1999}/health"
             SUCCESS=0
             for i in $(seq 1 30); do
               HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${HEALTH_URL}" || true)
