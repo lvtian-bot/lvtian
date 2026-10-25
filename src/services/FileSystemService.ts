@@ -17,6 +17,8 @@ class FileSystemService {
         this.rootDir = new Directory(Paths.document, 'lvtian_docs');
         this.rootPath = this.rootDir.uri;
 
+        this.migrateLegacyStorage();
+
         // Ensure the root directory exists
         if (!this.rootDir.exists) {
             try {
@@ -24,6 +26,45 @@ class FileSystemService {
             } catch (err) {
                 console.error('Failed to create root directory:', err);
             }
+        }
+    }
+
+    /**
+     * 兼容迁移旧版本沙盒目录（mdnote_docs -> lvtian_docs）
+     * 确保版本升级后，用户设备上原有的本地笔记、历史归档及草稿无缝保留并自动迁入新沙盒
+     */
+    private migrateLegacyStorage(): void {
+        try {
+            const oldRootDir = new Directory(Paths.document, 'mdnote_docs');
+            if (!oldRootDir.exists) return;
+
+            if (!this.rootDir.exists) {
+                if (typeof oldRootDir.move === 'function') {
+                    oldRootDir.move(this.rootDir);
+                    console.log('[FileSystemService] Migrated legacy mdnote_docs to lvtian_docs');
+                    return;
+                }
+            }
+
+            if (typeof oldRootDir.list === 'function') {
+                const items = oldRootDir.list();
+                for (const item of items) {
+                    const targetInstance = item instanceof Directory
+                        ? new Directory(this.rootDir, item.name)
+                        : new File(this.rootDir, item.name);
+                    if (!targetInstance.exists && typeof item.move === 'function') {
+                        item.move(targetInstance);
+                    }
+                }
+                if (typeof oldRootDir.delete === 'function') {
+                    try {
+                        oldRootDir.delete();
+                    } catch {}
+                }
+                console.log('[FileSystemService] Merged legacy mdnote_docs contents into lvtian_docs');
+            }
+        } catch (err) {
+            console.error('[FileSystemService] Legacy storage migration failed:', err);
         }
     }
 

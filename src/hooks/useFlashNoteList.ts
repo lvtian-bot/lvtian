@@ -191,7 +191,10 @@ export function useFlashNoteList<T extends { id: string }>({
 
     // 3. Refresh loaded data (without changing pagination depth)
     const refreshLoadedData = useCallback(async () => {
-        if (loadedFilePaths.length === 0) return;
+        if (loadedFilePaths.length === 0) {
+            await fetchLocalData();
+            return;
+        }
 
         try {
             let combinedData: T[] = [];
@@ -204,7 +207,7 @@ export function useFlashNoteList<T extends { id: string }>({
         } catch (error) {
             console.error('Failed to refresh data:', error);
         }
-    }, [loadedFilePaths, loadFileContent, sorter]);
+    }, [loadedFilePaths, loadFileContent, sorter, fetchLocalData]);
 
     // Listeners
     useEffect(() => {
