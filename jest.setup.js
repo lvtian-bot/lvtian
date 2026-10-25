@@ -51,11 +51,17 @@ jest.mock('@expo/vector-icons/MaterialIcons', () => {
   const { Text } = require('react-native');
   return (props) => React.createElement(Text, props, props.name);
 });
+jest.mock('@expo/vector-icons/MaterialCommunityIcons', () => {
+  const React = require('react');
+  const { Text } = require('react-native');
+  return (props) => React.createElement(Text, props, props.name);
+});
 jest.mock('@expo/vector-icons', () => {
   const React = require('react');
   const { Text } = require('react-native');
   return {
     MaterialIcons: (props) => React.createElement(Text, props, props.name),
+    MaterialCommunityIcons: (props) => React.createElement(Text, props, props.name),
   };
 });
 
