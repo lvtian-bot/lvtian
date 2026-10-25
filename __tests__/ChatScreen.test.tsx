@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { Alert, TextInput, TouchableOpacity } from 'react-native';
+import { Alert, Text, TextInput, TouchableOpacity } from 'react-native';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
@@ -47,7 +47,7 @@ describe('ChatScreen 输入区与操作菜单', () => {
         const root = renderer!.root;
 
         // MaterialIcons mock 会将 props.name 作为文字渲染
-        const allTexts = root.findAllByType('Text' as any).map((node) => node.props.children);
+        const allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts).not.toContain('mic');
         expect(allTexts).not.toContain('add');
         expect(allTexts).not.toContain('arrow-upward');
@@ -66,14 +66,14 @@ describe('ChatScreen 输入区与操作菜单', () => {
             textInput.props.onChangeText('你好，绿天');
         });
 
-        let allTexts = root.findAllByType('Text' as any).map((node) => node.props.children);
+        let allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts).toContain('arrow-upward');
 
         await ReactTestRenderer.act(async () => {
             textInput.props.onChangeText('');
         });
 
-        allTexts = root.findAllByType('Text' as any).map((node) => node.props.children);
+        allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts).not.toContain('arrow-upward');
     });
 
