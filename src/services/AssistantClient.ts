@@ -8,6 +8,7 @@ import {
 
 export class AssistantClient {
     private static instance: AssistantClient | null = null;
+    private static messageSeq = 0;
     private ws: WebSocket | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -261,7 +262,7 @@ export class AssistantClient {
      */
     public sendMessage(content: string, customMessageId?: string): string {
         const store = useAssistantStore.getState();
-        const messageId = customMessageId || `msg-${Date.now()}`;
+        const messageId = customMessageId || `msg-${Date.now()}-${++AssistantClient.messageSeq}`;
 
         const localMessage: AssistantMessage = {
             id: messageId,
@@ -310,27 +311,31 @@ export class AssistantClient {
     }
 
     /**
-     * 自动静默补发待发队列中的积压消息（FIFO 顺序）
+     * 自动静默补发待发队列中的积压消息（FIFO 串行推进）
+     * 遵循服务端单会话单任务约束：仅在当前无进行中任务时补发第一条，
+     * 待收到服务端成功回执后移出队列，并在上一任务执行完毕后自动推进下一条。
      */
     public flushPendingSendQueue(): void {
         const store = useAssistantStore.getState();
-        const queue = [...store.pendingSendQueue];
+        if (store.isServerUpgrading) {
+            return;
+        }
+        // 若当前有任务正在执行中，等待其终态收尾后再推进队列下一条
+        if (store.taskState === 'processing' || store.taskState === 'awaiting_approval') {
+            return;
+        }
+
+        const queue = store.pendingSendQueue;
         if (queue.length === 0) return;
 
-        for (const item of queue) {
-            const sent = this.sendRaw({
-                type: 'chat',
-                sessionId: item.sessionId || 'main',
-                messageId: item.messageId,
-                content: item.content,
-            });
-            if (sent) {
-                store.removeFromPendingSendQueue(item.messageId);
-            } else {
-                // 网络或连接尚未完全就绪，留存后续继续发
-                break;
-            }
-        }
+        const nextItem = queue[0];
+        this.sendRaw({
+            type: 'chat',
+            sessionId: nextItem.sessionId || 'main',
+            messageId: nextItem.messageId,
+            content: nextItem.content,
+        });
+        // 收到服务端确认前保持保留在队列中，防止网络闪断丢消息
     }
 
     /**
@@ -444,6 +449,9 @@ export class AssistantClient {
                 // 服务端下发的有效消息优先覆盖更新
                 for (const m of validServerMessages) {
                     msgMap.set(m.id, m);
+                    if (pendingIds.has(m.id)) {
+                        store.removeFromPendingSendQueue(m.id);
+                    }
                 }
 
                 const merged = Array.from(msgMap.values()).sort(
@@ -542,6 +550,9 @@ export class AssistantClient {
                             stopReason: msg.stopReason,
                         });
                     }
+
+                    // 上一个任务已结束，串行推进待发队列中的下一条排队消息
+                    this.flushPendingSendQueue();
                 }
                 break;
             }

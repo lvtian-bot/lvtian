@@ -57,19 +57,20 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(useAssistantStore.getState().isServerUpgrading).toBe(true);
     });
 
-    test('收到 sync_result 时解除升级态、保持待发消息 sending 状态并自动补发', () => {
+    test('收到 sync_result 时解除升级态、保持待发消息 sending 状态并自动补发第一条', () => {
         const handleServerMessage = (client as unknown as {
             handleServerMessage: (msg: ServerMessage) => void;
         }).handleServerMessage.bind(client);
 
-        // 模拟升级期间用户发送了消息并处于排队中
+        // 模拟升级期间用户发送了两条消息并处于排队中
         useAssistantStore.setState({
             isServerUpgrading: true,
             connectionState: 'connected',
         });
 
-        const msgId = client.sendMessage('排队待补发消息');
-        expect(useAssistantStore.getState().pendingSendQueue.length).toBe(1);
+        const msgId1 = client.sendMessage('第一条消息');
+        const msgId2 = client.sendMessage('第二条消息');
+        expect(useAssistantStore.getState().pendingSendQueue.length).toBe(2);
 
         // 模拟 mock sendRaw 监控补发情况
         const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
@@ -87,22 +88,56 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(useAssistantStore.getState().isServerUpgrading).toBe(false);
 
         // 2. 验证本地消息没有被错误地标记为 error（仍为 sending 等待补发完成）
-        const localMsg = useAssistantStore.getState().messages.find((m) => m.id === msgId);
-        expect(localMsg).toBeDefined();
-        expect(localMsg!.status).toBe('sending');
+        const localMsg1 = useAssistantStore.getState().messages.find((m) => m.id === msgId1);
+        expect(localMsg1?.status).toBe('sending');
 
-        // 3. 验证自动调用 sendRaw 静默补发了队列中的消息
+        // 3. 遵循单会话串行执行约束：仅补发第一条消息，不并发抢占会话
+        expect(sendRawSpy).toHaveBeenCalledTimes(1);
         expect(sendRawSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 type: 'chat',
                 sessionId: 'main',
-                messageId: msgId,
-                content: '排队待补发消息',
+                messageId: msgId1,
+                content: '第一条消息',
             })
         );
 
-        // 4. 验证已从 pendingSendQueue 移出
-        expect(useAssistantStore.getState().pendingSendQueue.length).toBe(0);
+        // 4. 发送但尚未收到回执前，队列依然保留该消息（防丢包），等待 message_ack 确认出队
+        expect(useAssistantStore.getState().pendingSendQueue.length).toBe(2);
+
+        // 收到第一条消息的确认回执，第一条出队
+        handleServerMessage({
+            type: 'message_ack',
+            messageId: msgId1,
+            seq: 11,
+            status: 'sent',
+            role: 'user',
+        });
+        expect(useAssistantStore.getState().pendingSendQueue.length).toBe(1);
+        expect(useAssistantStore.getState().pendingSendQueue[0].messageId).toBe(msgId2);
+
+        // 第一条任务处理中 (processing) 时，不发送第二条
+        useAssistantStore.setState({ taskState: 'processing' });
+        client.flushPendingSendQueue();
+        expect(sendRawSpy).toHaveBeenCalledTimes(1);
+
+        // 第一条任务完成终态，自动触发补发第二条消息
+        handleServerMessage({
+            type: 'task_status',
+            seq: 12,
+            sessionId: 'main',
+            state: 'completed',
+        });
+
+        expect(sendRawSpy).toHaveBeenCalledTimes(2);
+        expect(sendRawSpy).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                type: 'chat',
+                sessionId: 'main',
+                messageId: msgId2,
+                content: '第二条消息',
+            })
+        );
 
         sendRawSpy.mockRestore();
     });

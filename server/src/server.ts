@@ -471,15 +471,14 @@ export class LvtianServer {
         userMessageId: string,
         content: string
     ): void {
-        // 服务端正在优雅停机升级中，拒绝受理新任务
+        // 服务端正在优雅停机升级中，拒绝受理新任务并返回可国际化的稳定错误码
         if (this.isDraining) {
-            const errMsg = '服务端正在升级维护中，请稍候';
             this.send(ws, {
                 type: 'message_ack',
                 messageId: userMessageId,
                 seq: 0,
                 status: 'error',
-                error: errMsg,
+                error: 'service_upgrading',
             });
             return;
         }

@@ -359,6 +359,7 @@
     "errorApprovalTimeout": "Approval timed out and the task was stopped",
     "errorEngineRefusal": "The assistant declined this request",
     "errorEngineError": "The assistant hit an unexpected error. Please try again",
+    "errorServiceUpgrading": "Server is updating, will resume shortly",
     "replyTruncated": "Reply was truncated at maximum length",
     "loadingEarlierMessages": "Loading earlier messages...",
     "stop": "Stop Execution",

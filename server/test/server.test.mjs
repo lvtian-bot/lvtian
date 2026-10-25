@@ -1050,7 +1050,7 @@ test('服务端优雅停机避让：等待活跃任务完成后再广播升级�
     ws2.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u-drain-2', content: '排空中被拒' }));
     await waitForMsg(receivedReject, (m) => m.type === 'message_ack' && m.status === 'error', '排空期拒绝回执');
     const rejAck = receivedReject.find((m) => m.type === 'message_ack' && m.messageId === 'u-drain-2');
-    assert.ok(rejAck && rejAck.error && rejAck.error.includes('升级维护'));
+    assert.equal(rejAck?.error, 'service_upgrading', '排空期拒绝回执应使用可国际化的稳定错误码');
 
     await drainPromise;
 

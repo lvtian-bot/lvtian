@@ -58,8 +58,16 @@ jobs:
             echo "=== 发送优雅升级信号 ==="
             npm run upgrade-notify || true
 
-            # 确保 systemd user service 正常运行
-            systemctl --user restart lvtian-server || true
+            echo "=== 确保服务重启与运行 ==="
+            # 兼容仓库标准系统级模板单元 lvtian-server@<user>.service 与用户级实例 lvtian-server.service
+            if systemctl is-active --quiet "lvtian-server@${SERVER_USER}.service" 2>/dev/null; then
+              sudo systemctl restart "lvtian-server@${SERVER_USER}.service"
+            elif systemctl --user is-active --quiet lvtian-server.service 2>/dev/null; then
+              systemctl --user restart lvtian-server.service
+            else
+              # 老进程已优雅退出处于非激活态时，依次尝试拉起系统级或用户级服务
+              sudo systemctl restart "lvtian-server@${SERVER_USER}.service" 2>/dev/null || systemctl --user restart lvtian-server.service 2>/dev/null || true
+            fi
 
             echo "=== 健康检查（等待服务拉起） ==="
             HEALTH_URL="http://127.0.0.1:3000/health"
@@ -77,7 +85,7 @@ jobs:
 
             if [ "$SUCCESS" -ne 1 ]; then
               echo "❌ 60 秒内服务健康检查失败！输出最近系统日志:"
-              journalctl --user -u lvtian-server.service -n 50 --no-pager || true
+              journalctl -u "lvtian-server@${SERVER_USER}.service" -n 50 --no-pager 2>/dev/null || journalctl --user -u lvtian-server.service -n 50 --no-pager 2>/dev/null || true
               exit 1
             fi
             echo "🎉 绿天独立服务端优雅升级部署成功！"

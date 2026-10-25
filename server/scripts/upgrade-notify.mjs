@@ -18,23 +18,68 @@ function isPidAlive(pid) {
     }
 }
 
+/** 严格核验目标 PID 确实对应当前工作目录下的绿天独立服务端实例，防止操作系统复用 PID 误伤无关进程 */
+function isCurrentServerProcess(pid) {
+    if (!isPidAlive(pid)) {
+        return false;
+    }
+
+    const target = path.join(serverDir, 'dist', 'index.js');
+    const cmdlinePath = `/proc/${pid}/cmdline`;
+    const cwdPath = `/proc/${pid}/cwd`;
+
+    try {
+        if (fs.existsSync(cmdlinePath)) {
+            const raw = fs.readFileSync(cmdlinePath);
+            const args = raw.toString('utf8').split('\0');
+            // 完整路径直接匹配
+            if (args.includes(target)) {
+                return true;
+            }
+            // 相对路径且 cwd 匹配当前 serverDir
+            if (fs.existsSync(cwdPath)) {
+                const resolvedCwd = fs.realpathSync(cwdPath);
+                if (resolvedCwd === serverDir) {
+                    if (args.includes('dist/index.js') || args.includes('./dist/index.js')) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    } catch {}
+
+    // 非 Linux /proc 兜底使用 ps 逐项比对
+    try {
+        const psArgs = execSync(`ps -p ${pid} -o args=`, { encoding: 'utf8' }).trim();
+        const args = psArgs.split(/\s+/);
+        if (args.includes(target) || args.includes('dist/index.js') || args.includes('./dist/index.js')) {
+            return true;
+        }
+    } catch {}
+
+    return false;
+}
+
 function findServerPid() {
     if (fs.existsSync(pidFile)) {
         try {
             const raw = fs.readFileSync(pidFile, 'utf8').trim();
             const pid = parseInt(raw, 10);
-            if (Number.isFinite(pid) && isPidAlive(pid)) {
+            if (Number.isFinite(pid) && isCurrentServerProcess(pid)) {
                 return pid;
             }
         } catch {}
     }
 
-    // 通过 pgrep 兜底查找运行中的服务端进程
+    // 通过 pgrep 兜底查找运行中的服务端进程，并同样通过 isCurrentServerProcess 严格校验实例归属
     try {
         const output = execSync('pgrep -f "dist/index.js"', { encoding: 'utf8' }).trim();
         const pids = output.split(/\s+/).map((p) => parseInt(p, 10)).filter((p) => Number.isFinite(p) && p !== process.pid);
-        if (pids.length > 0) {
-            return pids[0];
+        for (const candidatePid of pids) {
+            if (isCurrentServerProcess(candidatePid)) {
+                return candidatePid;
+            }
         }
     } catch {}
 

@@ -53,6 +53,7 @@ const ERROR_CODE_I18N_KEYS: Record<string, string> = {
     approval_timeout: 'assistant.errorApprovalTimeout',
     engine_refusal: 'assistant.errorEngineRefusal',
     engine_error: 'assistant.errorEngineError',
+    service_upgrading: 'assistant.errorServiceUpgrading',
 };
 
 const translateErrorMessage = (message: string): string => {
