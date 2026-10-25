@@ -292,10 +292,87 @@ test('AcpEngineManager: triggerHandover 中断运行中任务并广播 stopped�
         assert.ok(stoppedStatusReceived);
         assert.equal(stoppedStatusReceived.code, 'task_stopped');
         assert.equal(sessionManager.getOrCreateSession('sess-1').taskState, 'stopped');
+        // 被中断退出的任务绝不能擦除交接标记
+        assert.equal(sessionManager.isHandoffPending('sess-1'), true);
 
         assert.ok(stoppedStatusReceived2);
         assert.equal(stoppedStatusReceived2.code, 'task_stopped');
         assert.equal(sessionManager.getOrCreateSession('sess-2').taskState, 'stopped');
+
+        await engine.stopAll();
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('AcpEngineManager: 轮换交接首轮 prompt 被中断退出时，绝不擦除心智提要与交接标记', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-relay-interrupt-test-'));
+    try {
+        const workspaceDir = path.join(tmpDir, 'workspace');
+        const dataDir = path.join(tmpDir, 'data');
+        const dshProfileDir = path.join(tmpDir, 'dsh', 'profiles', 'acp');
+        fs.mkdirSync(workspaceDir, { recursive: true });
+        fs.mkdirSync(dataDir, { recursive: true });
+
+        const sessionManager = new SessionManager(dataDir);
+        const memoryManager = new MemoryManager(workspaceDir);
+
+        let resolvePromptArrived;
+        const promptArrived = new Promise((resolve) => { resolvePromptArrived = resolve; });
+        let releasePrompt;
+        const promptHold = new Promise((resolve) => { releasePrompt = resolve; });
+
+        const mockApp = acp.agent({ name: 'mock-engine-relay' })
+            .onRequest(acp.methods.agent.initialize, () => ({
+                protocolVersion: acp.PROTOCOL_VERSION,
+                agentCapabilities: {},
+            }))
+            .onRequest(acp.methods.agent.authenticate, () => ({}))
+            .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'engine-sess-relay' }))
+            .onRequest(acp.methods.agent.session.prompt, async () => {
+                resolvePromptArrived();
+                await promptHold;
+                return { stopReason: 'end_turn' };
+            });
+
+        const engine = new AcpEngineManager(workspaceDir, memoryManager, sessionManager, {
+            connectEngine: connectMockEngine(mockApp),
+            dshProfileDir,
+        });
+
+        const sid = 'sess-relay';
+        sessionManager.getOrCreateSession(sid);
+        sessionManager.setPendingBackground(sid, '### 1. 核心共识与最终盘面\n- 必须保留的重要历史记忆');
+        sessionManager.setHandoffPending(sid, true);
+
+        const asstMsg = sessionManager.addMessage(sid, {
+            id: 'asst-relay-1',
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            status: 'processing',
+        });
+
+        // 启动首轮提示词执行（needsRelay 为 true）
+        const execPromise = engine.execute(sid, asstMsg.id, '请基于备忘录继续工作', {
+            onDelta: () => {},
+            onStatusChange: () => {},
+            onToolCall: () => {},
+        });
+
+        await promptArrived;
+        assert.equal(engine.isRunning(sid), true);
+
+        // 此时被中途交接打断
+        const handoverPromise = engine.triggerHandover(sid, 'test_handover');
+        // 释放 prompt 返回，模拟 prompt 正常返回或因取消返回
+        releasePrompt();
+        await handoverPromise;
+        await execPromise.catch(() => undefined);
+
+        // 核心断言：被中断退出的老执行绝不能擦除待用提要或重置交接标记
+        assert.equal(sessionManager.isHandoffPending(sid), true);
+        assert.ok(sessionManager.getPendingBackground(sid));
 
         await engine.stopAll();
     } finally {
@@ -386,6 +463,21 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
             body: JSON.stringify({ permissionMode: 'root' }),
         });
         assert.equal(badPostRes.status, 400);
+
+        // 4.5 当任务正在运行中，POST 切换权限应被门禁拦截返回 409 TASK_RUNNING
+        mockEngine.isRunning = (sid) => sid === 'main';
+        const busyPostRes = await fetch(`${baseUrl}/api/permission`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ permissionMode: 'danger-full-access' }),
+        });
+        assert.equal(busyPostRes.status, 409);
+        const busyData = await busyPostRes.json();
+        assert.equal(busyData.code, 'TASK_RUNNING');
+        mockEngine.isRunning = () => false;
 
         // 5. POST 正确切换至 danger-full-access
         let handoverCount = 0;

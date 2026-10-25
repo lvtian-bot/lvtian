@@ -346,6 +346,7 @@
     "permissionDangerAlertContent": "The assistant will gain full system execution permissions and seamlessly relay your conversation context. Continue?",
     "permissionSwitchSuccess": "Permission mode switched successfully with session handover",
     "permissionSwitchFailed": "Failed to switch permission mode. Please check connection",
+    "taskRunningCannotSwitch": "A task is currently running. Please stop it in the chat screen before switching permission mode.",
     "urlRequired": "Server URL cannot be empty",
     "tokenRequired": "Access token cannot be empty",
     "unconfiguredTitle": "Assistant Not Connected",

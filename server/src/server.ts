@@ -206,6 +206,18 @@ export class LvtianServer {
         // 修改当前 DSH 权限模式并触发统一会话交接
         if (pathname === '/api/permission' && req.method === 'POST') {
             try {
+                // 门禁检查：若当前已有任务正在执行，禁止切换权限模式
+                if (this.acpEngine.isRunning('main')) {
+                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    res.end(
+                        JSON.stringify({
+                            error: '当前有正在执行的任务，请先停止任务后再切换权限模式',
+                            code: 'TASK_RUNNING',
+                        })
+                    );
+                    return;
+                }
+
                 const body = await this.readJsonBody<{ permissionMode?: string }>(req, 1024);
                 const targetMode = body.permissionMode;
                 if (targetMode !== 'workspace-write' && targetMode !== 'danger-full-access') {

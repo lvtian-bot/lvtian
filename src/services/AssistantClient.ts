@@ -147,10 +147,10 @@ export class AssistantClient {
         serverUrl: string,
         token: string,
         mode: 'workspace-write' | 'danger-full-access'
-    ): Promise<boolean> {
+    ): Promise<{ success: boolean; code?: string; message?: string }> {
         const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
         const httpUrl = cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
-        if (!httpUrl || !token) return false;
+        if (!httpUrl || !token) return { success: false, code: 'PARAM_INVALID' };
         try {
             const controller = new AbortController();
             // 权限切换可能包含服务端即时提炼《心智接力备忘录》的深度大模型调用，放宽超时至 60 秒
@@ -165,9 +165,17 @@ export class AssistantClient {
                 signal: controller.signal,
             });
             clearTimeout(timeoutId);
-            return res.ok;
+            if (res.ok) {
+                return { success: true };
+            }
+            const data = (await res.json().catch(() => null)) as { code?: string; error?: string } | null;
+            return {
+                success: false,
+                code: data?.code,
+                message: data?.error,
+            };
         } catch {
-            return false;
+            return { success: false, code: 'NETWORK_ERROR' };
         }
     }
 

@@ -309,6 +309,8 @@ export class AcpEngineManager {
 
     /** 已受理（含引擎启动、建会话窗口）的会话 → 对应助理消息 ID：execute 入口同步登记，用于并发去重与停止时消息终态化 */
     private activeSessions: Map<string, string> = new Map();
+    /** 活跃执行任务 Promise（键为 sessionId）：用于交接时显式等待旧执行完全退出 */
+    private activeExecutions: Map<string, Promise<void>> = new Map();
     /** 正在执行交接提炼中的会话：交接异步期间锁定会话，防止并发消息在旧引擎执行被销毁 */
     private handoffInProgressSessions: Set<string> = new Set();
     private runtimes: Map<string, SessionRuntime> = new Map();
@@ -392,7 +394,20 @@ export class AcpEngineManager {
                 }
             }
 
-            // 2. 即时执行心智提炼，生成《心智接力备忘录》
+            // 2. 关键时序保障：先回收旧引擎连接并等待旧执行彻底收尾退出，确保旧执行不能在连接关闭期间误清除或覆盖新交接状态
+            try {
+                await this.reclaimConnection();
+            } catch (err) {
+                console.warn(`[AcpEngine] 交接回收引擎连接异常: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            const pendingExecutions = Array.from(affectedSessions)
+                .map((sid) => this.activeExecutions.get(sid))
+                .filter(Boolean) as Promise<void>[];
+            if (pendingExecutions.length > 0) {
+                await Promise.allSettled(pendingExecutions);
+            }
+
+            // 3. 在被中断的旧执行彻底退出后，即时执行心智提炼，生成《心智接力备忘录》
             if (this.contextConsolidator) {
                 try {
                     await this.contextConsolidator.consolidateNow(sessionId);
@@ -401,14 +416,14 @@ export class AcpEngineManager {
                 }
             }
 
-            // 3. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定（容错落盘异常）
+            // 4. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定（容错落盘异常）
             try {
                 this.sessionManager.setHandoffPending(sessionId, true);
             } catch (err) {
                 console.warn(`[AcpEngine] 标记 handoffPending 失败 (已容错): ${err instanceof Error ? err.message : String(err)}`);
             }
 
-            // 4. 清除旧 DSH 会话绑定与索引
+            // 5. 清除旧 DSH 会话绑定与索引
             const saved = this.sessionManager.getDshSessionId(sessionId);
             if (saved) {
                 this.engineSessionIndex.delete(saved);
@@ -419,7 +434,7 @@ export class AcpEngineManager {
                 console.warn(`[AcpEngine] 清除 dshSessionId 失败 (已容错): ${err instanceof Error ? err.message : String(err)}`);
             }
         } finally {
-            // 5. 核心安全底线：无论心智提炼或会话持久化是否抛错，必须保证旧引擎连接被可靠回收
+            // 6. 核心安全底线：无论心智提炼或会话持久化是否抛错，必须保证旧引擎连接被可靠回收
             try {
                 await this.reclaimConnection();
             } catch (err) {
@@ -568,6 +583,11 @@ export class AcpEngineManager {
         if (this.activeSessions.has(sessionId) || this.handoffInProgressSessions.has(sessionId)) {
             return;
         }
+        let resolveDone!: () => void;
+        const donePromise = new Promise<void>((resolve) => {
+            resolveDone = resolve;
+        });
+        this.activeExecutions.set(sessionId, donePromise);
         this.activeSessions.set(sessionId, assistantMessageId);
         // 门禁判定以「消息到达时刻」为准：建引擎可能耗时数秒，不能让它把 2h59:59 的消息拖成 3h 后
         const arrivalAt = Date.now();
@@ -703,7 +723,19 @@ export class AcpEngineManager {
                 }
             );
 
-            // 成功交接后清理待用提要（首次轮换、失败重试、断档接管都算交付成功），并清除交接标记
+            // 检查在此轮 prompt 执行期间是否已被中断停止（例如收到手动取消或交接流程中断）
+            if (this.stoppedSessions.has(sessionId)) {
+                this.stoppedSessions.delete(sessionId);
+                this.sessionManager.setTaskState(sessionId, 'stopped');
+                const runtime = this.runtimes.get(sessionId);
+                if (runtime) {
+                    this.finalizeTools(runtime, 'failed');
+                    this.runtimes.delete(sessionId);
+                }
+                return;
+            }
+
+            // 成功交付后清理待用提要（首次轮换、失败重试、断档接管都算交付成功），并清除交接标记
             if (needsRelay && pendingBackground) {
                 this.sessionManager.clearPendingBackground(sessionId);
             }
@@ -713,8 +745,8 @@ export class AcpEngineManager {
 
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
         } catch (err: unknown) {
-            // 若轮换首轮请求异常失败，恢复提要文件以支持用户后续重试注入
-            if (shouldRotate && pendingBackground) {
+            // 若轮换首轮请求异常失败，恢复提要文件以支持用户后续重试注入（被中断停止时不恢复旧提要，避免覆盖新提要）
+            if (shouldRotate && pendingBackground && !this.stoppedSessions.has(sessionId)) {
                 this.sessionManager.setPendingBackground(sessionId, pendingBackground);
             }
             const message = err instanceof Error ? err.message : String(err);
@@ -736,6 +768,8 @@ export class AcpEngineManager {
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
             this.activeSessions.delete(sessionId);
+            this.activeExecutions.delete(sessionId);
+            resolveDone();
             // 执行已收尾：取消停止回收与占用看门狗计时器，避免误杀同会话的后续请求
             const recoveryTimer = this.stopRecoveryTimers.get(sessionId);
             if (recoveryTimer) {

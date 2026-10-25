@@ -22,7 +22,8 @@ import { AssistantClient } from '../services/AssistantClient';
 export const AssistantConfigScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation();
-    const { serverUrl, serverToken, setServerConfig, permissionMode, setPermissionMode } = useAssistantStore();
+    const { serverUrl, serverToken, setServerConfig, permissionMode, setPermissionMode, taskState } = useAssistantStore();
+    const isTaskRunning = taskState === 'processing' || taskState === 'awaiting_approval';
 
     const [url, setUrl] = useState(serverUrl);
     const [token, setToken] = useState(serverToken);
@@ -99,6 +100,13 @@ export const AssistantConfigScreen = () => {
     };
 
     const handleSelectMode = (mode: 'workspace-write' | 'danger-full-access') => {
+        if (isTaskRunning) {
+            Alert.alert(
+                t('settings.failure', '失败'),
+                t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式')
+            );
+            return;
+        }
         hasUserSelectedRef.current = true;
         if (mode === selectedMode) return;
         if (mode === 'danger-full-access') {
@@ -131,17 +139,24 @@ export const AssistantConfigScreen = () => {
             Alert.alert(t('settings.failure', '失败'), t('assistant.tokenRequired', '访问令牌（Token）不能为空'));
             return;
         }
+        if (isTaskRunning && selectedMode !== permissionMode) {
+            Alert.alert(
+                t('settings.failure', '失败'),
+                t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式')
+            );
+            return;
+        }
 
         setSaving(true);
         try {
             // 1. 先验证并同步权限模式至服务端（若失败则不修改本地配置，避免状态半持久化分裂）
-            const permSuccess = await AssistantClient.updatePermissionMode(url, token, selectedMode);
-            if (!permSuccess) {
+            const permResult = await AssistantClient.updatePermissionMode(url, token, selectedMode);
+            if (!permResult.success) {
                 setSaving(false);
-                Alert.alert(
-                    t('settings.failure', '失败'),
-                    t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接')
-                );
+                const failMessage = permResult.code === 'TASK_RUNNING'
+                    ? (permResult.message || t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式'))
+                    : t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接');
+                Alert.alert(t('settings.failure', '失败'), failMessage);
                 return;
             }
 
