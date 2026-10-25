@@ -147,7 +147,7 @@ export class AssistantClient {
         serverUrl: string,
         token: string,
         mode: 'workspace-write' | 'danger-full-access'
-    ): Promise<{ success: boolean; code?: string; message?: string }> {
+    ): Promise<{ success: boolean; changed?: boolean; code?: string; message?: string }> {
         const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
         const httpUrl = cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
         if (!httpUrl || !token) return { success: false, code: 'PARAM_INVALID' };
@@ -166,7 +166,8 @@ export class AssistantClient {
             });
             clearTimeout(timeoutId);
             if (res.ok) {
-                return { success: true };
+                const data = (await res.json().catch(() => null)) as { changed?: boolean } | null;
+                return { success: true, changed: data?.changed };
             }
             const data = (await res.json().catch(() => null)) as { code?: string; error?: string } | null;
             return {

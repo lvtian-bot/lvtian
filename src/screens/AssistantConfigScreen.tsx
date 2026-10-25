@@ -142,7 +142,6 @@ export const AssistantConfigScreen = () => {
             );
             return;
         }
-        if (mode === selectedMode) return;
         if (mode === 'danger-full-access') {
             Alert.alert(
                 t('assistant.permissionDangerAlertTitle', '确认切换至完全权限？'),
