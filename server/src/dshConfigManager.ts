@@ -37,14 +37,21 @@ export function getDshPermissionMode(customDir?: string): DshPermissionMode {
             return DEFAULT_PERMISSION_MODE;
         }
 
-        // 优先匹配官方标准 ID 'sandbox-policy'，同时兼容旧版本 'sandboxPolicy'
-        const patchEntry = parsed.find(
+        // 优先匹配官方标准 ID 'sandbox-policy'；仅当标准项缺失时，才回退兼容旧版本 'sandboxPolicy'
+        let patchEntry = parsed.find(
             (item: unknown) =>
                 item &&
                 typeof item === 'object' &&
-                ((item as { id?: string }).id === DSH_PATCH_SANDBOX_POLICY_ID ||
-                 (item as { id?: string }).id === LEGACY_DSH_PATCH_SANDBOX_POLICY_ID)
+                (item as { id?: string }).id === DSH_PATCH_SANDBOX_POLICY_ID
         );
+        if (!patchEntry) {
+            patchEntry = parsed.find(
+                (item: unknown) =>
+                    item &&
+                    typeof item === 'object' &&
+                    (item as { id?: string }).id === LEGACY_DSH_PATCH_SANDBOX_POLICY_ID
+            );
+        }
 
         if (patchEntry && typeof patchEntry === 'object') {
             const config = (patchEntry as { config?: { mode?: string } }).config;
@@ -57,6 +64,60 @@ export function getDshPermissionMode(customDir?: string): DshPermissionMode {
     }
 
     return DEFAULT_PERMISSION_MODE;
+}
+
+/**
+ * 预测写入目标权限模式是否会导致配置变更（模式变动、审批策略联动或历史遗留条目清理）
+ */
+export function willDshPermissionChange(mode: DshPermissionMode, customDir?: string): boolean {
+    const filePath = resolveDshProfilePatchPath(customDir);
+    if (!fs.existsSync(filePath)) {
+        return mode !== DEFAULT_PERMISSION_MODE;
+    }
+
+    try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const parsed = yaml.parse(content);
+        if (!Array.isArray(parsed)) {
+            return true;
+        }
+
+        // 检查是否存在旧非标条目待清理
+        const hasLegacy = parsed.some(
+            (item: unknown) =>
+                item &&
+                typeof item === 'object' &&
+                (item as { id?: string }).id === LEGACY_DSH_PATCH_SANDBOX_POLICY_ID
+        );
+        if (hasLegacy) return true;
+
+        // 检查 sandbox-policy
+        const policyEntry = parsed.find(
+            (item: unknown) =>
+                item &&
+                typeof item === 'object' &&
+                (item as { id?: string }).id === DSH_PATCH_SANDBOX_POLICY_ID
+        ) as { config?: { mode?: string } } | undefined;
+        if (!policyEntry || policyEntry.config?.mode !== mode) {
+            return true;
+        }
+
+        // 检查 approval
+        const targetApprovalPolicy = mode === 'danger-full-access' ? 'never' : 'ask';
+        const approvalEntry = parsed.find(
+            (item: unknown) =>
+                item &&
+                typeof item === 'object' &&
+                (item as { id?: string }).id === DSH_PATCH_APPROVAL_ID
+        ) as { config?: { policy?: string } } | undefined;
+        if (!approvalEntry || approvalEntry.config?.policy !== targetApprovalPolicy) {
+            return true;
+        }
+
+        return false;
+    } catch {
+        return true;
+    }
 }
 
 /**
