@@ -20,11 +20,11 @@ jest.mock('@react-navigation/native', () => {
 });
 
 describe('ChatScreen 输入区与操作菜单', () => {
-    let activeRenderer: ReactTestRenderer.ReactTestRenderer | undefined;
+    let currentRenderer: ReactTestRenderer.ReactTestRenderer | undefined;
 
     beforeEach(async () => {
         jest.clearAllMocks();
-        activeRenderer = undefined;
+        currentRenderer = undefined;
         jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
         await ReactTestRenderer.act(async () => {
             useAssistantStore.setState({
@@ -38,35 +38,62 @@ describe('ChatScreen 输入区与操作菜单', () => {
     });
 
     afterEach(async () => {
-        if (activeRenderer) {
+        if (currentRenderer) {
             await ReactTestRenderer.act(async () => {
-                activeRenderer?.unmount();
+                currentRenderer?.unmount();
             });
-            activeRenderer = undefined;
+            currentRenderer = undefined;
         }
         jest.restoreAllMocks();
     });
 
-    it('不渲染麦克风图标和加号图标，未输入时不渲染发送按钮', async () => {
+    it('渲染加号按钮，不渲染麦克风图标，未输入时不渲染发送按钮', async () => {
         await ReactTestRenderer.act(async () => {
-            activeRenderer = ReactTestRenderer.create(<ChatScreen />);
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
 
-        const root = activeRenderer!.root;
+        const root = currentRenderer!.root;
 
         // MaterialIcons mock 会将 props.name 作为文字渲染
         const allTexts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(allTexts).toContain('add');
         expect(allTexts).not.toContain('mic');
-        expect(allTexts).not.toContain('add');
         expect(allTexts).not.toContain('arrow-upward');
+    });
+
+    it('点击加号弹出文件与图片选择菜单，且 options 支持 cancelable', async () => {
+        const alertSpy = jest.spyOn(Alert, 'alert');
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const buttons = root.findAllByType(TouchableOpacity);
+        const plusButton = buttons.find((btn) => btn.props.accessibilityLabel === '添加内容' || btn.props.accessibilityLabel === 'Add Content');
+        expect(plusButton).toBeDefined();
+
+        await ReactTestRenderer.act(async () => {
+            plusButton!.props.onPress();
+        });
+
+        expect(alertSpy).toHaveBeenCalledWith(
+            expect.stringMatching(/添加内容|Add Content/i),
+            undefined,
+            expect.arrayContaining([
+                expect.objectContaining({ text: expect.stringMatching(/图片|Image/i) }),
+                expect.objectContaining({ text: expect.stringMatching(/文件|File/i) }),
+            ]),
+            { cancelable: true },
+        );
+        alertSpy.mockRestore();
     });
 
     it('输入文字后渲染发送按钮，清空后隐藏', async () => {
         await ReactTestRenderer.act(async () => {
-            activeRenderer = ReactTestRenderer.create(<ChatScreen />);
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
 
-        const root = activeRenderer!.root;
+        const root = currentRenderer!.root;
         const textInput = root.findByType(TextInput);
 
         await ReactTestRenderer.act(async () => {
@@ -84,57 +111,57 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(allTexts).not.toContain('arrow-upward');
     });
 
-    it('连接存在时通过 navigation.setOptions 挂载 headerRight 更多菜单', async () => {
-        const alertSpy = jest.spyOn(Alert, 'alert');
+    it('页面始终不挂载多余的 headerRight 菜单，顶部保持纯粹', async () => {
         await ReactTestRenderer.act(async () => {
-            activeRenderer = ReactTestRenderer.create(<ChatScreen />);
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
-        expect(activeRenderer).toBeDefined();
+        expect(currentRenderer).toBeDefined();
 
-        expect(mockSetOptions).toHaveBeenCalled();
-        const lastCall = mockSetOptions.mock.calls[mockSetOptions.mock.calls.length - 1][0];
-        expect(typeof lastCall.headerRight).toBe('function');
-
-        // 渲染 headerRight 组件并点击
-        let headerRightRenderer: ReactTestRenderer.ReactTestRenderer | undefined;
-        await ReactTestRenderer.act(async () => {
-            headerRightRenderer = ReactTestRenderer.create(lastCall.headerRight());
-        });
-        const button = headerRightRenderer!.root.findByType(TouchableOpacity);
-
-        await ReactTestRenderer.act(async () => {
-            button.props.onPress();
-        });
-
-        expect(alertSpy).toHaveBeenCalledWith(
-            expect.stringMatching(/操作|Quick Actions/i),
-            undefined,
-            expect.arrayContaining([
-                expect.objectContaining({ text: expect.stringMatching(/清空聊天记录|Clear Chat History/i) }),
-                expect.objectContaining({ text: expect.stringMatching(/助理服务配置|Assistant Connection/i) }),
-            ]),
-        );
-        await ReactTestRenderer.act(async () => {
-            headerRightRenderer?.unmount();
-        });
-        alertSpy.mockRestore();
+        expect(mockSetOptions).not.toHaveBeenCalled();
     });
 
-    it('未配置 serverUrl 时不挂载 headerRight', async () => {
+    it('正确渲染消息气泡中的图片和文件附件', async () => {
         await ReactTestRenderer.act(async () => {
             useAssistantStore.setState({
-                serverUrl: '',
+                messages: [
+                    {
+                        id: 'msg-img',
+                        seq: 1,
+                        role: 'user',
+                        content: '这是图片',
+                        timestamp: Date.now(),
+                        status: 'sent',
+                        attachments: [
+                            {
+                                type: 'image',
+                                name: 'photo.jpg',
+                                mimeType: 'image/jpeg',
+                                data: 'base64data',
+                            },
+                        ],
+                    },
+                    {
+                        id: 'msg-file',
+                        seq: 2,
+                        role: 'user',
+                        content: '这是文件',
+                        timestamp: Date.now(),
+                        status: 'sent',
+                        attachments: [
+                            {
+                                type: 'file',
+                                name: 'document.pdf',
+                            },
+                        ],
+                    },
+                ],
             });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
 
-        await ReactTestRenderer.act(async () => {
-            activeRenderer = ReactTestRenderer.create(<ChatScreen />);
-        });
-        expect(activeRenderer).toBeDefined();
-
-        expect(mockSetOptions).toHaveBeenCalled();
-        const lastCall = mockSetOptions.mock.calls[mockSetOptions.mock.calls.length - 1][0];
-        expect(lastCall.headerRight).toBeUndefined();
+        const root = currentRenderer!.root;
+        const allTexts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(allTexts).toContain('document.pdf');
     });
 
     it('处于服务端升级状态时展示温和升级横幅，隐藏常规断开条', async () => {
@@ -147,10 +174,10 @@ describe('ChatScreen 输入区与操作菜单', () => {
         });
 
         await ReactTestRenderer.act(async () => {
-            activeRenderer = ReactTestRenderer.create(<ChatScreen />);
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
 
-        const root = activeRenderer!.root;
+        const root = currentRenderer!.root;
         const allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts.some((t) => typeof t === 'string' && /服务端正在升级|Server is updating/.test(t))).toBe(true);
         expect(allTexts.some((t) => typeof t === 'string' && /服务未连接|Disconnected/.test(t))).toBe(false);

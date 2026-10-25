@@ -4,6 +4,7 @@ import {
     ClientMessage,
     ServerMessage,
     AssistantMessage,
+    ChatAttachment,
 } from '../types/assistantProtocol';
 
 export class AssistantClient {
@@ -260,7 +261,7 @@ export class AssistantClient {
      * 遵循产品铁律：无论离线、断线还是服务端升级期间，绝不弹窗报错或中断心流，
      * 消息乐观上屏并在本地队列排队，连上对账后自动静默补发。
      */
-    public sendMessage(content: string, customMessageId?: string): string {
+    public sendMessage(content: string, attachments?: ChatAttachment[], customMessageId?: string): string {
         const store = useAssistantStore.getState();
         const messageId = customMessageId || `msg-${Date.now()}-${++AssistantClient.messageSeq}`;
 
@@ -271,6 +272,7 @@ export class AssistantClient {
             content,
             timestamp: Date.now(),
             status: 'sending',
+            attachments,
         };
 
         store.addOrUpdateMessage(localMessage);
@@ -284,6 +286,7 @@ export class AssistantClient {
                 sessionId: 'main',
                 messageId,
                 content,
+                attachments,
             });
             if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
                 this.connect();
@@ -296,6 +299,7 @@ export class AssistantClient {
             sessionId: 'main',
             messageId,
             content,
+            attachments,
         });
 
         if (!sent) {
@@ -304,6 +308,7 @@ export class AssistantClient {
                 sessionId: 'main',
                 messageId,
                 content,
+                attachments,
             });
         }
 
@@ -334,6 +339,7 @@ export class AssistantClient {
             sessionId: nextItem.sessionId || 'main',
             messageId: nextItem.messageId,
             content: nextItem.content,
+            attachments: nextItem.attachments,
         });
         // 收到服务端确认前保持保留在队列中，防止网络闪断丢消息
     }
@@ -517,6 +523,7 @@ export class AssistantClient {
                     timestamp: existing ? existing.timestamp : Date.now(),
                     status: isError ? 'error' : 'sent',
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
+                    attachments: existing?.attachments || msg.attachments,
                 });
                 store.setCurrentSeq(msg.seq);
                 // 收到服务端终态回执（成功或明确失败）：均移出本地待发队列释放队首
