@@ -359,6 +359,7 @@
     "errorEngineRefusal": "The assistant declined this request",
     "errorEngineError": "The assistant hit an unexpected error. Please try again",
     "replyTruncated": "Reply was truncated at maximum length",
+    "loadingEarlierMessages": "Loading earlier messages...",
     "stop": "Stop Execution",
     "taskRunning": "Assistant is running a task...",
     "clearHistory": "Clear Chat History",
