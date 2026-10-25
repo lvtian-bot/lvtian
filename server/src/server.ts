@@ -460,6 +460,7 @@ export class LvtianServer {
                     type: 'sync_result',
                     sessionId,
                     messages: reconcile.messages,
+                    deletedMessageIds: reconcile.deletedMessageIds,
                     taskState: reconcile.taskState,
                     pendingApprovals: reconcile.pendingApprovals,
                     pendingApproval: reconcile.pendingApproval,

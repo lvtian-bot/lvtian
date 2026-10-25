@@ -23,6 +23,8 @@ export interface SessionData {
     activeSessionStartSeq?: number;
     /** 轮换已开始但接力上下文尚未成功交付（用于失败重试时保留摘要，不被提前唤醒逻辑丢弃） */
     handoffPending?: boolean;
+    /** 被删除的消息历史与序列号记录，用于断线重连增量对账剔除 */
+    deletedMessages?: Array<{ id: string; seq: number }>;
 }
 
 /**
@@ -67,7 +69,7 @@ type SessionLogEvent =
     | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
     | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number }
     | { t: 'handoff'; at: number; handoffPending: boolean }
-    | { t: 'del_msg'; at: number; id: string };
+    | { t: 'del_msg'; at: number; seq: number; id: string };
 
 const ACTIVE_LOG = 'events.jsonl';
 const SEGMENT_PREFIX = 'seg.';
@@ -150,6 +152,7 @@ export class SessionManager {
             contextWindowSize: undefined,
             activeSessionStartSeq: 0,
             handoffPending: false,
+            deletedMessages: [],
         };
     }
 
@@ -163,6 +166,7 @@ export class SessionManager {
                 ...session,
                 messages: session.messages.map((m) => ({ ...m })),
                 pendingApprovals: [...session.pendingApprovals],
+                deletedMessages: [...(session.deletedMessages ?? [])],
             },
         };
     }
@@ -418,6 +422,11 @@ export class SessionManager {
             case 'del_msg':
                 session.messages = session.messages.filter((m) => m.id !== ev.id);
                 session.updatedAt = ev.at;
+                session.currentSeq = Math.max(session.currentSeq, ev.seq);
+                if (!session.deletedMessages) {
+                    session.deletedMessages = [];
+                }
+                session.deletedMessages.push({ id: ev.id, seq: ev.seq });
                 break;
         }
     }
@@ -672,10 +681,20 @@ export class SessionManager {
             return false;
         }
         session.messages.splice(idx, 1);
+        session.currentSeq += 1;
+        const delSeq = session.currentSeq;
         session.updatedAt = Date.now();
+        if (!session.deletedMessages) {
+            session.deletedMessages = [];
+        }
+        session.deletedMessages.push({ id: messageId, seq: delSeq });
+        if (session.deletedMessages.length > 100) {
+            session.deletedMessages.splice(0, session.deletedMessages.length - 100);
+        }
         this.appendEvent(sessionId, {
             t: 'del_msg',
             at: Date.now(),
+            seq: delSeq,
             id: messageId,
         });
         return true;
@@ -803,6 +822,7 @@ export class SessionManager {
         lastSeq: number
     ): {
         messages: AssistantMessage[];
+        deletedMessageIds?: string[];
         taskState: TaskExecutionState;
         pendingApprovals: ApprovalRequest[];
         /** 兼容保留：待审批队列的第一项 */
@@ -815,8 +835,13 @@ export class SessionManager {
             ? session.messages.filter((m) => (m.seq ?? 0) > lastSeq)
             : session.messages.slice(-100);
 
+        const deletedMessageIds = lastSeq > 0 && session.deletedMessages
+            ? session.deletedMessages.filter((d) => d.seq > lastSeq).map((d) => d.id)
+            : undefined;
+
         return {
             messages,
+            deletedMessageIds: deletedMessageIds && deletedMessageIds.length > 0 ? deletedMessageIds : undefined,
             taskState: session.taskState,
             pendingApprovals: session.pendingApprovals,
             pendingApproval: session.pendingApprovals[0],

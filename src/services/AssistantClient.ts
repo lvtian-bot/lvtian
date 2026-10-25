@@ -514,16 +514,40 @@ export class AssistantClient {
 
     /**
      * 取消排队中的消息
-     * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录
+     * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录；
+     * 若处于离线状态，将撤销请求纳入 pendingCancelQueue，待网络恢复重连对账后自动静默补发。
      */
     public cancelQueued(messageId: string): boolean {
         const store = useAssistantStore.getState();
         store.removeMessage(messageId);
-        return this.sendRaw({
+        const sent = this.sendRaw({
             type: 'cancel_queued',
             sessionId: 'main',
             messageId,
         });
+        if (!sent) {
+            store.addToPendingCancelQueue(messageId);
+        }
+        return sent;
+    }
+
+    /**
+     * 自动静默补发离线期间积压的撤销排队报文
+     */
+    public flushPendingCancelQueue(): void {
+        const store = useAssistantStore.getState();
+        const queue = store.pendingCancelQueue;
+        if (queue.length === 0) return;
+        for (const messageId of queue) {
+            const sent = this.sendRaw({
+                type: 'cancel_queued',
+                sessionId: 'main',
+                messageId,
+            });
+            if (sent) {
+                store.removeFromPendingCancelQueue(messageId);
+            }
+        }
     }
 
     /**
@@ -608,12 +632,21 @@ export class AssistantClient {
                     }
                 }
 
+                // 服务端增量删除对账：剔除服务端已删除的排队消息
+                if (msg.deletedMessageIds && msg.deletedMessageIds.length > 0) {
+                    for (const delId of msg.deletedMessageIds) {
+                        msgMap.delete(delId);
+                        store.removeFromPendingCancelQueue(delId);
+                    }
+                }
+
                 const merged = Array.from(msgMap.values()).sort(
                     (a, b) => a.timestamp - b.timestamp
                 );
                 store.setMessages(merged);
 
-                // 对账完成后，自动静默补发待发队列中的排队消息
+                // 对账完成后，自动静默补发待撤销队列与待发队列
+                this.flushPendingCancelQueue();
                 this.flushPendingSendQueue();
                 break;
             }
@@ -769,6 +802,7 @@ export class AssistantClient {
 
             case 'message_deleted': {
                 store.removeMessage(msg.messageId);
+                store.removeFromPendingCancelQueue(msg.messageId);
                 break;
             }
 

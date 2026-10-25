@@ -1342,3 +1342,35 @@ test('排队幂等去重：相同 messageId 重复到达时不重复追加排队
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('SessionManager deleteMessage 推进序列号并纳入 getReconcileData 增量对账与重启重放', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-del-'));
+    const sm = new SessionManager(tmpDir);
+
+    const m1 = sm.addMessage('test-session', {
+        id: 'u-1',
+        role: 'user',
+        content: '第一条消息',
+        timestamp: Date.now(),
+        status: 'queued',
+    });
+    const lastSeq = m1.seq;
+
+    // 删除排队消息
+    const deleted = sm.deleteMessage('test-session', 'u-1');
+    assert.equal(deleted, true);
+
+    // 增量对账：lastSeq 后的删除记录应包含 u-1
+    const reconcile = sm.getReconcileData('test-session', lastSeq);
+    assert.deepEqual(reconcile.deletedMessageIds, ['u-1']);
+    assert.ok(reconcile.currentSeq > lastSeq, '删除操作推进了序列号');
+
+    // 模拟服务端重启重放
+    const smRestarted = new SessionManager(tmpDir);
+    const session = smRestarted.getOrCreateSession('test-session');
+    assert.equal(session.messages.find((m) => m.id === 'u-1'), undefined);
+    const reconcileAfterRestart = smRestarted.getReconcileData('test-session', lastSeq);
+    assert.deepEqual(reconcileAfterRestart.deletedMessageIds, ['u-1']);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+

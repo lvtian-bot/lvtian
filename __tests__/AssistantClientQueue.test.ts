@@ -561,4 +561,83 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.taskState).toBe('processing');
         expect(state.currentSeq).toBe(10);
     });
+
+    test('离线时 cancelQueued 自动入队 pendingCancelQueue，恢复后静默补发并移除', () => {
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: (msg: unknown) => boolean }, 'sendRaw')
+            .mockReturnValueOnce(false) // 首次离线发送失败
+            .mockReturnValueOnce(true);  // 重连后补发成功
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-offline-cancel',
+                    seq: 1,
+                    role: 'user',
+                    content: '离线时撤销的排队消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingCancelQueue: [],
+        });
+
+        // 离线撤销
+        const success = client.cancelQueued('m-offline-cancel');
+        expect(success).toBe(false);
+
+        let state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-offline-cancel')).toBeUndefined();
+        expect(state.pendingCancelQueue).toEqual(['m-offline-cancel']);
+
+        // 模拟恢复连接并触发补发
+        client.flushPendingCancelQueue();
+
+        state = useAssistantStore.getState();
+        expect(state.pendingCancelQueue.length).toBe(0);
+        expect(sendRawSpy).toHaveBeenCalledTimes(2);
+
+        sendRawSpy.mockRestore();
+    });
+
+    test('收到 sync_result 携带 deletedMessageIds 时增量剔除本地对应消息', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-keep',
+                    seq: 1,
+                    role: 'user',
+                    content: '保留的消息',
+                    timestamp: Date.now() - 1000,
+                    status: 'sent',
+                },
+                {
+                    id: 'm-deleted-remote',
+                    seq: 2,
+                    role: 'user',
+                    content: '在其他端已撤销的消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingCancelQueue: ['m-deleted-remote'],
+        });
+
+        handleServerMessage({
+            type: 'sync_result',
+            sessionId: 'main',
+            currentSeq: 5,
+            taskState: 'idle',
+            messages: [],
+            deletedMessageIds: ['m-deleted-remote'],
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-deleted-remote')).toBeUndefined();
+        expect(state.messages.find((m) => m.id === 'm-keep')).toBeDefined();
+        expect(state.pendingCancelQueue.includes('m-deleted-remote')).toBe(false);
+    });
 });

@@ -91,6 +91,7 @@ export type ServerMessage =
           type: 'sync_result';
           sessionId: string;
           messages: AssistantMessage[];
+          deletedMessageIds?: string[];
           taskState: TaskExecutionState;
           /** 兼容保留：待审批队列的第一项（旧客户端仅支持单卡展示） */
           pendingApproval?: ApprovalRequest;
