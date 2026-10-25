@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useContext, forwardRef, type ComponentRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext, useMemo, forwardRef, type ComponentRef } from 'react';
 import {
     View,
     Text,
@@ -35,7 +35,10 @@ import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
 import { theme } from '../utils/theme';
-import { getChatListEndOffset } from '../utils/chatScrollMetrics';
+import {
+    getInvertedChatScrollTarget,
+    getInvertedDistanceFromBottom,
+} from '../utils/chatScrollMetrics';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ToolCallState } from '../types/assistantProtocol';
@@ -56,44 +59,21 @@ const translateErrorMessage = (message: string): string => {
     const key = ERROR_CODE_I18N_KEYS[message];
     return key ? i18n.t(key, { defaultValue: message }) : message;
 };
-type ChatListMetrics = {
-    contentHeight: number;
-    viewportHeight: number;
-    bottomInset: number;
-};
-type ChatScrollViewProps = ScrollViewProps & KeyboardChatScrollViewProps & {
-    listMetricsRef: React.MutableRefObject<ChatListMetrics>;
-};
-
 const ChatScrollView = forwardRef<
     ComponentRef<typeof KeyboardChatScrollView>,
-    ChatScrollViewProps
->(({ listMetricsRef, onLayout, onContentSizeChange, onContentInsetChange, ...props }, ref) => {
+    ScrollViewProps & KeyboardChatScrollViewProps
+>((props, ref) => {
     const tabBarHeight = useContext(TabBarHeightContext);
-    const handleLayout = useCallback((event: LayoutChangeEvent) => {
-        listMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
-        onLayout?.(event);
-    }, [listMetricsRef, onLayout]);
-    const handleContentSizeChange = useCallback((width: number, height: number) => {
-        listMetricsRef.current.contentHeight = height;
-        onContentSizeChange?.(width, height);
-    }, [listMetricsRef, onContentSizeChange]);
-    const handleContentInsetChange = useCallback((insets: Parameters<NonNullable<KeyboardChatScrollViewProps['onContentInsetChange']>>[0]) => {
-        listMetricsRef.current.bottomInset = insets.bottom;
-        onContentInsetChange?.(insets);
-    }, [listMetricsRef, onContentInsetChange]);
 
     return (
         <KeyboardChatScrollView
             ref={ref}
             {...props}
+            inverted={true}
             automaticallyAdjustContentInsets={false}
             contentInsetAdjustmentBehavior="never"
             keyboardDismissMode="interactive"
             offset={tabBarHeight}
-            onLayout={handleLayout}
-            onContentSizeChange={handleContentSizeChange}
-            onContentInsetChange={handleContentInsetChange}
         />
     );
 });
@@ -319,11 +299,7 @@ export const ChatScreen = () => {
     const tabBarHeight = useContext(TabBarHeightContext);
     const flatListRef = useRef<FlatList<AssistantMessage>>(null);
     const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
-    const listMetricsRef = useRef<ChatListMetrics>({
-        contentHeight: 0,
-        viewportHeight: 0,
-        bottomInset: 0,
-    });
+    const contentInsetsRef = useRef<{ top: number; bottom: number }>({ top: 0, bottom: 0 });
     const extraContentPadding = useSharedValue(0);
     const composerHeight = useSharedValue(60);
 
@@ -354,23 +330,22 @@ export const ChatScreen = () => {
     const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
         extraContentPadding.value = Math.max(event.nativeEvent.layout.height - 40, 0);
     }, [extraContentPadding]);
+    const handleContentInsetChange = useCallback(
+        (insets: Parameters<NonNullable<KeyboardChatScrollViewProps['onContentInsetChange']>>[0]) => {
+            contentInsetsRef.current = { top: insets.top, bottom: insets.bottom };
+        },
+        [],
+    );
     const renderChatScrollComponent = useCallback(
         (props: ScrollViewProps) => (
             <ChatScrollView
                 {...props}
                 extraContentPadding={extraContentPadding}
-                listMetricsRef={listMetricsRef}
+                onContentInsetChange={handleContentInsetChange}
             />
         ),
-        [extraContentPadding, listMetricsRef],
+        [extraContentPadding, handleContentInsetChange],
     );
-    const scrollToEnd = useCallback(() => {
-        const { contentHeight, viewportHeight, bottomInset } = listMetricsRef.current;
-        flatListRef.current?.scrollToOffset({
-            offset: getChatListEndOffset(contentHeight, viewportHeight, bottomInset),
-            animated: true,
-        });
-    }, [listMetricsRef]);
 
     const {
         serverUrl,
@@ -385,18 +360,53 @@ export const ChatScreen = () => {
 
     const [inputContent, setInputContent] = useState('');
     const [showScrollBottom, setShowScrollBottom] = useState(false);
-    const lastMessageContent = messages[messages.length - 1]?.content;
+
+    const INITIAL_WINDOW_SIZE = 30;
+    const WINDOW_BATCH_SIZE = 30;
+    const [renderedCount, setRenderedCount] = useState(INITIAL_WINDOW_SIZE);
+
+    // 倒序排列：第 0 项为最新消息（处于倒序视口最底部），数组末尾为最早历史消息
+    const reversedMessages = useMemo(() => {
+        return [...messages].reverse();
+    }, [messages]);
+
+    // 视口开窗：冷启动与初始状态仅切片装载最新批次，绝不预加载全量历史
+    const displayMessages = useMemo(() => {
+        return reversedMessages.slice(0, renderedCount);
+    }, [reversedMessages, renderedCount]);
+
+    // 用户往上翻阅历史（触达倒序列表末尾）时，增量开窗加载更早记录
+    const handleLoadEarlier = useCallback(() => {
+        if (renderedCount < reversedMessages.length) {
+            setRenderedCount((prev) => Math.min(prev + WINDOW_BATCH_SIZE, reversedMessages.length));
+        }
+    }, [renderedCount, reversedMessages.length]);
 
     const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-        const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
-        const endOffset = getChatListEndOffset(
-            contentSize.height,
-            layoutMeasurement.height,
-            listMetricsRef.current.bottomInset,
-        );
-        const distanceFromBottom = endOffset - contentOffset.y;
+        const offsetY = event.nativeEvent.contentOffset.y;
+        // 倒序列表中，根据顶部 inset 补偿计算视口距最新消息的物理距离；向旧消息上滑时距离增大
+        const distanceFromBottom = getInvertedDistanceFromBottom(offsetY, contentInsetsRef.current.top);
         setShowScrollBottom(distanceFromBottom > 160);
     }, []);
+
+    const scrollToBottom = useCallback(() => {
+        const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+        flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
+    }, []);
+
+    const renderListFooter = useCallback(() => {
+        if (renderedCount < reversedMessages.length) {
+            return (
+                <View style={styles.loadMoreContainer}>
+                    <ActivityIndicator size="small" color="#9CA3AF" />
+                    <Text style={styles.loadMoreText}>
+                        {t('assistant.loadingEarlierMessages', '正在加载更早历史...')}
+                    </Text>
+                </View>
+            );
+        }
+        return null;
+    }, [renderedCount, reversedMessages.length, t]);
 
     const handlePlusAction = useCallback(() => {
         Alert.alert(
@@ -444,17 +454,12 @@ export const ChatScreen = () => {
         }
     }, [serverUrl]);
 
-    // 收到新消息自动滚动到底部
-    useEffect(() => {
-        if (messages.length > 0) {
-            setTimeout(scrollToEnd, 100);
-        }
-    }, [messages.length, lastMessageContent, scrollToEnd]);
-
     const handleSend = () => {
         const text = inputContent.trim();
         if (!text) return;
         setInputContent('');
+        const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+        flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
         AssistantClient.getInstance().sendMessage(text);
     };
 
@@ -559,16 +564,23 @@ export const ChatScreen = () => {
                 </View>
             )}
 
-            {/* 消息流列表 */}
+            {/* 消息流列表：倒序模型 (inverted)，最新消息处于视口物理原点 0，冷启动无需滚动即在最新 */}
             <FlatList
                 ref={flatListRef}
-                data={messages}
+                data={displayMessages}
+                inverted={true}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
+                onEndReached={handleLoadEarlier}
+                onEndReachedThreshold={0.3}
+                initialNumToRender={15}
+                maxToRenderPerBatch={15}
+                windowSize={11}
                 renderScrollComponent={renderChatScrollComponent}
+                ListFooterComponent={renderListFooter}
                 renderItem={({ item }) => {
                     const isUser = item.role === 'user';
                     const hasTools = Boolean(item.toolCalls && item.toolCalls.length > 0);
@@ -685,7 +697,7 @@ export const ChatScreen = () => {
                 >
                     <TouchableOpacity
                         style={styles.scrollBottomBtn}
-                        onPress={scrollToEnd}
+                        onPress={scrollToBottom}
                         activeOpacity={0.85}
                     >
                         <Icon name="arrow-downward" size={18} color="#2563EB" />
@@ -981,8 +993,18 @@ const styles = StyleSheet.create({
     },
     messageList: {
         paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 24,
+        paddingVertical: 16,
+    },
+    loadMoreContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        gap: 8,
+    },
+    loadMoreText: {
+        fontSize: 12,
+        color: '#9CA3AF',
     },
     messageRow: {
         flexDirection: 'row',

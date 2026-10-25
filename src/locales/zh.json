@@ -359,6 +359,7 @@
     "errorEngineRefusal": "助理拒绝了本次请求",
     "errorEngineError": "助理执行出现异常，请稍后重试",
     "replyTruncated": "回复因达到最大长度被截断",
+    "loadingEarlierMessages": "正在加载更早历史...",
     "stop": "停止执行",
     "taskRunning": "助理正在执行任务...",
     "clearHistory": "清空聊天记录",
