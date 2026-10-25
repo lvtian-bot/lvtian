@@ -371,8 +371,6 @@ export const ChatScreen = () => {
     const WINDOW_BATCH_SIZE = 30;
     const [renderedCount, setRenderedCount] = useState(INITIAL_WINDOW_SIZE);
 
-    const queuedCount = messages.filter((m) => m.role === 'user' && m.status === 'queued').length;
-
     const handleCancelQueued = useCallback((msg: AssistantMessage) => {
         Alert.alert(
             t('assistant.cancelQueuedTitle', '排队中消息'),
@@ -928,21 +926,6 @@ export const ChatScreen = () => {
                 </View>
             ))}
 
-            {/* 停止执行悬浮条 */}
-            {(taskState === 'processing' || taskState === 'awaiting_approval') && (
-                <View style={styles.stopBar}>
-                    <Text style={styles.stopBarText}>
-                        {queuedCount > 0
-                            ? t('assistant.taskRunningWithQueue', '助理正在执行任务 · {{count}}条消息排队中', { count: queuedCount })
-                            : t('assistant.taskRunning', '助理正在执行任务...')}
-                    </Text>
-                    <TouchableOpacity style={styles.stopBtn} onPress={handleStop}>
-                        <Icon name="stop" size={16} color="#fff" />
-                        <Text style={styles.stopBtnText}>{t('assistant.stop', '停止执行')}</Text>
-                    </TouchableOpacity>
-                </View>
-            )}
-
             {/* 底部输入区 */}
             <View style={styles.inputArea}>
                 <View style={styles.inputCapsule}>
@@ -972,8 +955,20 @@ export const ChatScreen = () => {
                             style={styles.sendBtnActive}
                             onPress={handleSend}
                             activeOpacity={0.8}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('assistant.send', '发送')}
                         >
                             <Icon name="arrow-upward" size={18} color="#fff" />
+                        </TouchableOpacity>
+                    ) : (taskState === 'processing' || taskState === 'awaiting_approval') ? (
+                        <TouchableOpacity
+                            style={styles.stopBtnActive}
+                            onPress={handleStop}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('assistant.stop', '停止执行')}
+                        >
+                            <View style={styles.stopSquare} />
                         </TouchableOpacity>
                     ) : null}
                 </View>
@@ -1432,34 +1427,6 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontWeight: 'bold',
     },
-    stopBar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: theme.colors.warnBg,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.warnBorder,
-    },
-    stopBarText: {
-        fontSize: 13,
-        color: theme.colors.warnText,
-    },
-    stopBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: theme.colors.dangerStrong,
-        borderRadius: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-    },
-    stopBtnText: {
-        color: '#fff',
-        fontSize: 12,
-        fontWeight: 'bold',
-        marginLeft: 4,
-    },
     inputArea: {
         paddingHorizontal: 14,
         paddingVertical: 8,
@@ -1538,6 +1505,19 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 6,
+    },
+    stopBtnActive: {
+        width: 32,
+        height: 32,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 6,
+    },
+    stopSquare: {
+        width: 20,
+        height: 20,
+        backgroundColor: '#111827',
+        borderRadius: 5,
     },
     scrollBottomContainer: {
         position: 'absolute',
