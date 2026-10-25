@@ -219,6 +219,14 @@ export class LvtianServer {
                     return;
                 }
 
+                // 检查是否与当前模式相同，若相同则幂等返回，避免不必要的会话打断和开销
+                const currentMode = getDshPermissionMode(this.config.dshProfileDir);
+                if (currentMode === targetMode) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, permissionMode: targetMode, changed: false }));
+                    return;
+                }
+
                 // 1. 原子更新 DSH 官方配置文件 cordis.patch.yml
                 setDshPermissionMode(targetMode as DshPermissionMode, this.config.dshProfileDir);
 
@@ -226,7 +234,7 @@ export class LvtianServer {
                 await this.acpEngine.triggerHandover('main', `permission_switch_to_${targetMode}`);
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, permissionMode: targetMode }));
+                res.end(JSON.stringify({ success: true, permissionMode: targetMode, changed: true }));
             } catch (err: unknown) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(

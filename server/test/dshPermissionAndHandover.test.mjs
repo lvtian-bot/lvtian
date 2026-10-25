@@ -70,6 +70,15 @@ test('DshConfigManager: 默认权限、读写原子性与其它 Patch 保护', a
         const afterRevert = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
         assert.equal(afterRevert.length, 2);
         assert.equal(afterRevert[1].config.mode, 'workspace-write');
+
+        // 5. 损坏或非法 YAML 保护：抛出异常并保留原始文件内容，禁止静默覆盖清空
+        const corruptedContent = ':::invalid:yaml:content:::';
+        fs.writeFileSync(patchFile, corruptedContent, 'utf8');
+        assert.throws(
+            () => setDshPermissionMode('danger-full-access', tmpDir),
+            /读取或解析现有 DSH 配置文件失败/
+        );
+        assert.equal(fs.readFileSync(patchFile, 'utf8'), corruptedContent);
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -282,6 +291,10 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         assert.equal(badPostRes.status, 400);
 
         // 5. POST 正确切换至 danger-full-access
+        let handoverCount = 0;
+        mockEngine.triggerHandover = async () => {
+            handoverCount++;
+        };
         const postRes = await fetch(`${baseUrl}/api/permission`, {
             method: 'POST',
             headers: {
@@ -294,9 +307,25 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         const postData = await postRes.json();
         assert.equal(postData.success, true);
         assert.equal(postData.permissionMode, 'danger-full-access');
-        assert.equal(handoverTriggered, true);
+        assert.equal(postData.changed, true);
+        assert.equal(handoverCount, 1);
 
-        // 6. 再次 GET 确认更新
+        // 6. 相同模式再次 POST：应幂等返回 changed: false，且不触发 handover
+        const postSameRes = await fetch(`${baseUrl}/api/permission`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ permissionMode: 'danger-full-access' }),
+        });
+        assert.equal(postSameRes.status, 200);
+        const postSameData = await postSameRes.json();
+        assert.equal(postSameData.success, true);
+        assert.equal(postSameData.changed, false);
+        assert.equal(handoverCount, 1);
+
+        // 7. 再次 GET 确认更新
         const getUpdated = await fetch(`${baseUrl}/api/permission`, {
             headers: { Authorization: `Bearer ${config.token}` },
         });

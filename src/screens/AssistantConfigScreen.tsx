@@ -34,9 +34,14 @@ export const AssistantConfigScreen = () => {
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
     const [saving, setSaving] = useState(false);
 
+    // 凭据同步：只在 store 中的 serverUrl / serverToken 变更时初始化表单，避免权限刷新覆盖未保存的输入
     useEffect(() => {
         setUrl(serverUrl);
         setToken(serverToken);
+    }, [serverUrl, serverToken]);
+
+    // 权限模式同步：从已保存的服务端获取最新权限并保持本地选择态一致
+    useEffect(() => {
         if (permissionMode) {
             setSelectedMode(permissionMode);
         }
@@ -48,7 +53,7 @@ export const AssistantConfigScreen = () => {
                 }
             });
         }
-    }, [serverUrl, serverToken, permissionMode, setPermissionMode]);
+    }, [permissionMode, serverUrl, serverToken, setPermissionMode]);
 
     const handlePasteFromClipboard = async () => {
         try {
@@ -84,7 +89,6 @@ export const AssistantConfigScreen = () => {
         setTesting(false);
         if (res.permissionMode) {
             setSelectedMode(res.permissionMode);
-            setPermissionMode(res.permissionMode);
         }
         setTestResult({
             success: res.success,
@@ -129,12 +133,16 @@ export const AssistantConfigScreen = () => {
         try {
             await setServerConfig(url, token);
             // 同步权限模式至服务端并完成必要会话交接
-            try {
-                await AssistantClient.updatePermissionMode(url, token, selectedMode);
-                setPermissionMode(selectedMode);
-            } catch (permErr) {
-                console.warn('[AssistantConfig] 同步权限模式失败 (非致命):', permErr);
+            const permSuccess = await AssistantClient.updatePermissionMode(url, token, selectedMode);
+            if (!permSuccess) {
+                setSaving(false);
+                Alert.alert(
+                    t('settings.failure', '失败'),
+                    t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接')
+                );
+                return;
             }
+            setPermissionMode(selectedMode);
             // 强制重新发起长连接
             AssistantClient.getInstance().connect(true);
             setSaving(false);

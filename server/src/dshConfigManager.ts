@@ -69,9 +69,11 @@ export function setDshPermissionMode(mode: DshPermissionMode, customDir?: string
             const data = yaml.parse(content);
             if (Array.isArray(data)) {
                 parsed = data;
+            } else {
+                throw new Error('DSH 配置文件格式非法（根结构非数组）');
             }
-        } catch {
-            parsed = [];
+        } catch (err) {
+            throw new Error(`读取或解析现有 DSH 配置文件失败，中止更新以保护既有配置: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
 

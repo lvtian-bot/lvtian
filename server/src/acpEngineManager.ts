@@ -306,6 +306,8 @@ export class AcpEngineManager {
 
     /** 已受理（含引擎启动、建会话窗口）的会话 → 对应助理消息 ID：execute 入口同步登记，用于并发去重与停止时消息终态化 */
     private activeSessions: Map<string, string> = new Map();
+    /** 正在执行交接提炼中的会话：交接异步期间锁定会话，防止并发消息在旧引擎执行被销毁 */
+    private handoffInProgressSessions: Set<string> = new Set();
     private runtimes: Map<string, SessionRuntime> = new Map();
     /** 引擎侧会话 ID → 绿天会话 ID 反查（审批请求与事件路由使用） */
     private engineSessionIndex: Map<string, string> = new Map();
@@ -356,37 +358,49 @@ export class AcpEngineManager {
      */
     public async triggerHandover(sessionId: string, reason: string): Promise<void> {
         console.log(`[AcpEngine] 会话 ${sessionId} 触发会话交接 (原因: ${reason})`);
-
-        // 1. 若当前会话正在运行，先停止任务
-        if (this.isRunning(sessionId)) {
-            this.stop(sessionId);
+        if (this.handoffInProgressSessions.has(sessionId)) {
+            return;
         }
+        this.handoffInProgressSessions.add(sessionId);
 
-        // 2. 即时执行心智提炼，生成《心智接力备忘录》
-        if (this.contextConsolidator) {
-            try {
-                await this.contextConsolidator.consolidateNow(sessionId);
-            } catch (err) {
-                console.warn(`[AcpEngine] 交接即时提炼异常 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+        try {
+            // 1. 若当前会话正在运行，先停止任务
+            if (this.activeSessions.has(sessionId)) {
+                this.stop(sessionId);
             }
+
+            // 2. 即时执行心智提炼，生成《心智接力备忘录》
+            if (this.contextConsolidator) {
+                try {
+                    await this.contextConsolidator.consolidateNow(sessionId);
+                } catch (err) {
+                    console.warn(`[AcpEngine] 交接即时提炼异常 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
+
+            // 3. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定
+            this.sessionManager.setHandoffPending(sessionId, true);
+
+            // 4. 清除旧 DSH 会话绑定与索引
+            const saved = this.sessionManager.getDshSessionId(sessionId);
+            if (saved) {
+                this.engineSessionIndex.delete(saved);
+            }
+            this.sessionManager.setDshSessionId(sessionId, '');
+
+            // 5. 回收旧引擎连接，使下一次交互时能重新加载最新 DSH 启动配置
+            this.reclaimConnection();
+        } finally {
+            this.handoffInProgressSessions.delete(sessionId);
         }
-
-        // 3. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定
-        this.sessionManager.setHandoffPending(sessionId, true);
-
-        // 4. 清除旧 DSH 会话绑定与索引
-        const saved = this.sessionManager.getDshSessionId(sessionId);
-        if (saved) {
-            this.engineSessionIndex.delete(saved);
-        }
-        this.sessionManager.setDshSessionId(sessionId, '');
-
-        // 5. 回收旧引擎连接，使下一次交互时能重新加载最新 DSH 启动配置
-        this.reclaimConnection();
     }
 
     public isRunning(sessionId: string): boolean {
-        return this.activeSessions.has(sessionId);
+        return this.activeSessions.has(sessionId) || this.handoffInProgressSessions.has(sessionId);
+    }
+
+    public isHandoffInProgress(sessionId: string): boolean {
+        return this.handoffInProgressSessions.has(sessionId);
     }
 
     public handleApproval(sessionId: string, approvalId: string, approved: boolean): boolean {
@@ -522,8 +536,8 @@ export class AcpEngineManager {
         callbacks: EngineCallbacks
     ): Promise<void> {
         // 入口同步预留（任何 await 之前）：同一会话的并发消息在此被拒绝，
-        // 否则引擎启动/建会话窗口内两次调用都会通过检查、互踩运行时状态
-        if (this.activeSessions.has(sessionId)) {
+        // 且交接提炼期间锁定会话，防止在即将回收的旧引擎上并发启动新任务
+        if (this.activeSessions.has(sessionId) || this.handoffInProgressSessions.has(sessionId)) {
             return;
         }
         this.activeSessions.set(sessionId, assistantMessageId);
