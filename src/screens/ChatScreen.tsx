@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useContext, useMemo, f
 import {
     View,
     Text,
+    Image,
     StyleSheet,
     TextInput,
     TouchableOpacity,
@@ -31,6 +32,9 @@ import type { TFunction } from 'i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
@@ -414,6 +418,106 @@ export const ChatScreen = () => {
         }
     }, [serverUrl]);
 
+    const pickImage = useCallback(async () => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: false,
+                quality: 0.8,
+                base64: true,
+            });
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const asset = result.assets[0];
+                const name = asset.fileName || `image_${Date.now()}.jpg`;
+                const mimeType = asset.mimeType || 'image/jpeg';
+                const text = inputContent.trim() || t('chat.attachedImage', '发送了图片');
+                setInputContent('');
+                const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+                flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
+                AssistantClient.getInstance().sendMessage(text, [
+                    {
+                        type: 'image',
+                        name,
+                        mimeType,
+                        size: asset.fileSize,
+                        data: asset.base64 || undefined,
+                    },
+                ]);
+            }
+        } catch {
+            Alert.alert(t('common.error', '错误'), t('chat.pickImageError', '选择图片失败'));
+        }
+    }, [inputContent, t]);
+
+    const pickDocument = useCallback(async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                copyToCacheDirectory: true,
+            });
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const asset = result.assets[0];
+                const name = asset.name || `file_${Date.now()}`;
+                const mimeType = asset.mimeType;
+                let textContent: string | undefined;
+                let base64Data: string | undefined;
+
+                try {
+                    textContent = await FileSystem.readAsStringAsync(asset.uri, {
+                        encoding: FileSystem.EncodingType.UTF8,
+                    });
+                } catch {
+                    try {
+                        base64Data = await FileSystem.readAsStringAsync(asset.uri, {
+                            encoding: FileSystem.EncodingType.Base64,
+                        });
+                    } catch {
+                        // 忽略
+                    }
+                }
+
+                const text = inputContent.trim() || `${t('chat.attachedFile', '发送了文件')}: ${name}`;
+                setInputContent('');
+                const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+                flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
+                AssistantClient.getInstance().sendMessage(text, [
+                    {
+                        type: 'file',
+                        name,
+                        mimeType,
+                        size: asset.size,
+                        content: textContent,
+                        data: base64Data,
+                    },
+                ]);
+            }
+        } catch {
+            Alert.alert(t('common.error', '错误'), t('chat.pickDocumentError', '选择文件失败'));
+        }
+    }, [inputContent, t]);
+
+    const handlePlusAction = useCallback(() => {
+        Alert.alert(
+            t('chat.addAttachment', '添加内容'),
+            undefined,
+            [
+                {
+                    text: t('chat.pickImage', '图片'),
+                    onPress: () => {
+                        pickImage();
+                    },
+                },
+                {
+                    text: t('chat.pickDocument', '文件'),
+                    onPress: () => {
+                        pickDocument();
+                    },
+                },
+                { text: t('common.cancel', '取消'), style: 'cancel' },
+            ],
+            { cancelable: true },
+        );
+    }, [pickDocument, pickImage, t]);
+
     const handleSend = () => {
         const text = inputContent.trim();
         if (!text) return;
@@ -562,6 +666,41 @@ export const ChatScreen = () => {
                                           ],
                                 ]}
                             >
+                                {item.attachments && item.attachments.map((att, idx) => (
+                                    att.type === 'image' && att.data ? (
+                                        <Image
+                                            key={idx}
+                                            source={{ uri: `data:${att.mimeType || 'image/jpeg'};base64,${att.data}` }}
+                                            style={styles.attachmentImage}
+                                            resizeMode="cover"
+                                        />
+                                    ) : (
+                                        <View
+                                            key={idx}
+                                            style={[
+                                                styles.attachmentFileBox,
+                                                isUser ? styles.attachmentFileBoxUser : styles.attachmentFileBoxAssistant,
+                                            ]}
+                                        >
+                                            <Icon
+                                                name="insert-drive-file"
+                                                size={18}
+                                                color={isUser ? '#fff' : theme.colors.primary}
+                                                style={styles.attachmentFileIcon}
+                                            />
+                                            <Text
+                                                style={[
+                                                    styles.attachmentFileName,
+                                                    isUser ? styles.attachmentFileNameUser : styles.attachmentFileNameAssistant,
+                                                ]}
+                                                numberOfLines={1}
+                                            >
+                                                {att.name}
+                                            </Text>
+                                        </View>
+                                    )
+                                ))}
+
                                 {isUser ? (
                                     <Text style={styles.userText} selectable={true}>
                                         {item.content}
@@ -714,6 +853,15 @@ export const ChatScreen = () => {
             {/* 底部输入区 */}
             <View style={styles.inputArea}>
                 <View style={styles.inputCapsule}>
+                    <TouchableOpacity
+                        style={styles.plusBtn}
+                        onPress={handlePlusAction}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('chat.addAttachment', '添加内容')}
+                    >
+                        <Icon name="add" size={24} color="#4B5563" />
+                    </TouchableOpacity>
                     <TextInput
                         ref={chatInputRef}
                         autoFocus={false}
@@ -1216,10 +1364,53 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: '#F0F2F5',
         borderRadius: 24,
-        paddingLeft: 14,
-        paddingRight: 8,
+        paddingHorizontal: 8,
         paddingVertical: Platform.OS === 'ios' ? 6 : 2,
         minHeight: 46,
+    },
+    plusBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 4,
+    },
+    attachmentImage: {
+        width: 200,
+        height: 140,
+        borderRadius: 10,
+        marginBottom: 6,
+        backgroundColor: '#E5E7EB',
+    },
+    attachmentFileBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: 8,
+        marginBottom: 6,
+        maxWidth: 240,
+    },
+    attachmentFileBoxUser: {
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    },
+    attachmentFileBoxAssistant: {
+        backgroundColor: '#E5E7EB',
+    },
+    attachmentFileIcon: {
+        marginRight: 6,
+    },
+    attachmentFileName: {
+        fontSize: 13,
+        fontWeight: '500',
+        flexShrink: 1,
+    },
+    attachmentFileNameUser: {
+        color: '#fff',
+    },
+    attachmentFileNameAssistant: {
+        color: '#111827',
     },
     chatInput: {
         flex: 1,

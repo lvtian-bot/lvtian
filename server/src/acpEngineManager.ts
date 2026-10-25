@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import * as acp from '@agentclientprotocol/sdk';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
-import { ToolCallState, ApprovalRequest } from './protocol.js';
+import { ToolCallState, ApprovalRequest, ChatAttachment } from './protocol.js';
 
 /**
  * 引擎模块用户可见消息的错误码：客户端按码本地化渲染（i18n），码值是持久化与流式的稳定契约。
@@ -154,7 +154,7 @@ export function formatToolDetails(
     rawInput?: unknown
 ): { name: string; summary: string; input?: Record<string, unknown> } {
     const rawName = (title || kind || '系统工具').trim();
-    let inputObj: Record<string, unknown> | undefined = undefined;
+    let inputObj: Record<string, unknown> | undefined;
 
     if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
         inputObj = rawInput as Record<string, unknown>;
@@ -474,7 +474,8 @@ export class AcpEngineManager {
         sessionId: string,
         assistantMessageId: string,
         userPrompt: string,
-        callbacks: EngineCallbacks
+        callbacks: EngineCallbacks,
+        attachments?: ChatAttachment[]
     ): Promise<void> {
         // 入口同步预留（任何 await 之前）：同一会话的并发消息在此被拒绝，
         // 否则引擎启动/建会话窗口内两次调用都会通过检查、互踩运行时状态
@@ -607,11 +608,47 @@ export class AcpEngineManager {
                 fullPrompt = `[系统人设与主人记忆背景]\n${this.engineSystemPrompt}\n\n[主人当前提问与指令]\n${userPrompt}`;
             }
 
+            let attachmentContext = '';
+            const promptBlocks: Array<{ type: string; [key: string]: unknown }> = [];
+
+            if (attachments && attachments.length > 0) {
+                for (const att of attachments) {
+                    if (att.type === 'image' && att.data) {
+                        promptBlocks.push({
+                            type: 'image',
+                            data: att.data,
+                            mimeType: att.mimeType || 'image/jpeg',
+                        });
+                        attachmentContext += `\n[主人附带了图片: ${att.name}]`;
+                    } else if (att.type === 'file') {
+                        if (att.content) {
+                            attachmentContext += `\n\n[主人附带了文件内容: ${att.name}]\n\`\`\`\n${att.content}\n\`\`\``;
+                        } else if (att.data) {
+                            try {
+                                const attDir = path.join(this.workspaceDir, 'attachments');
+                                if (!fs.existsSync(attDir)) {
+                                    fs.mkdirSync(attDir, { recursive: true });
+                                }
+                                const safeName = path.basename(att.name);
+                                const targetFile = path.join(attDir, safeName);
+                                fs.writeFileSync(targetFile, Buffer.from(att.data, 'base64'));
+                                attachmentContext += `\n[主人附带了文件已保存至工作区: attachments/${safeName}]`;
+                            } catch {
+                                attachmentContext += `\n[主人附带了文件: ${att.name}]`;
+                            }
+                        }
+                    }
+                }
+            }
+
+            const promptText = attachmentContext ? `${fullPrompt}\n${attachmentContext}` : fullPrompt;
+            promptBlocks.unshift({ type: 'text', text: promptText });
+
             const response = await context.request<{ stopReason?: string }>(
                 'session/prompt',
                 {
                     sessionId: engineSessionId,
-                    prompt: [{ type: 'text', text: fullPrompt }],
+                    prompt: promptBlocks,
                 }
             );
 

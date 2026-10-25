@@ -19,6 +19,17 @@ export interface ApprovalRequest {
     status: 'pending' | 'approved' | 'rejected';
 }
 
+export interface ChatAttachment {
+    type: 'image' | 'file';
+    name: string;
+    mimeType?: string;
+    size?: number;
+    /** base64 编码数据（用于图片或二进制文件） */
+    data?: string;
+    /** 纯文本内容（UTF-8） */
+    content?: string;
+}
+
 export interface AssistantMessage {
     id: string;
     seq: number;
@@ -31,13 +42,20 @@ export interface AssistantMessage {
     errorMessage?: string;
     /** 引擎结束原因（如 max_tokens），客户端据此本地化展示截断提示 */
     stopReason?: string;
+    attachments?: ChatAttachment[];
 }
 
 // 客户端发往服务端的报文
 export type ClientMessage =
     | { type: 'auth'; token: string }
     | { type: 'sync'; sessionId: string; lastSeq: number }
-    | { type: 'chat'; sessionId: string; messageId: string; content: string }
+    | {
+          type: 'chat';
+          sessionId: string;
+          messageId: string;
+          content: string;
+          attachments?: ChatAttachment[];
+      }
     | { type: 'approval_response'; approvalId: string; approved: boolean; reason?: string }
     | { type: 'stop'; sessionId: string }
     | { type: 'ping' };
@@ -73,6 +91,7 @@ export type ServerMessage =
           role?: 'user';
           content?: string;
           error?: string;
+          attachments?: ChatAttachment[];
       }
     | {
           type: 'event_chunk';

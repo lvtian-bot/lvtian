@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { Text, TextInput } from 'react-native';
+import { Alert, Text, TextInput, TouchableOpacity } from 'react-native';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
@@ -46,7 +46,7 @@ describe('ChatScreen 输入区与操作菜单', () => {
         jest.restoreAllMocks();
     });
 
-    it('不渲染麦克风图标和加号图标，未输入时不渲染发送按钮', async () => {
+    it('渲染加号按钮，不渲染麦克风图标，未输入时不渲染发送按钮', async () => {
         await ReactTestRenderer.act(async () => {
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
@@ -55,9 +55,36 @@ describe('ChatScreen 输入区与操作菜单', () => {
 
         // MaterialIcons mock 会将 props.name 作为文字渲染
         const allTexts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(allTexts).toContain('add');
         expect(allTexts).not.toContain('mic');
-        expect(allTexts).not.toContain('add');
         expect(allTexts).not.toContain('arrow-upward');
+    });
+
+    it('点击加号弹出文件与图片选择菜单，且 options 支持 cancelable', async () => {
+        const alertSpy = jest.spyOn(Alert, 'alert');
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const buttons = root.findAllByType(TouchableOpacity);
+        const plusButton = buttons.find((btn) => btn.props.accessibilityLabel === '添加内容' || btn.props.accessibilityLabel === 'Add Content');
+        expect(plusButton).toBeDefined();
+
+        await ReactTestRenderer.act(async () => {
+            plusButton!.props.onPress();
+        });
+
+        expect(alertSpy).toHaveBeenCalledWith(
+            expect.stringMatching(/添加内容|Add Content/i),
+            undefined,
+            expect.arrayContaining([
+                expect.objectContaining({ text: expect.stringMatching(/图片|Image/i) }),
+                expect.objectContaining({ text: expect.stringMatching(/文件|File/i) }),
+            ]),
+            { cancelable: true },
+        );
+        alertSpy.mockRestore();
     });
 
     it('输入文字后渲染发送按钮，清空后隐藏', async () => {
@@ -90,5 +117,49 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(currentRenderer).toBeDefined();
 
         expect(mockSetOptions).not.toHaveBeenCalled();
+    });
+
+    it('正确渲染消息气泡中的图片和文件附件', async () => {
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({
+                messages: [
+                    {
+                        id: 'msg-img',
+                        seq: 1,
+                        role: 'user',
+                        content: '这是图片',
+                        timestamp: Date.now(),
+                        status: 'sent',
+                        attachments: [
+                            {
+                                type: 'image',
+                                name: 'photo.jpg',
+                                mimeType: 'image/jpeg',
+                                data: 'base64data',
+                            },
+                        ],
+                    },
+                    {
+                        id: 'msg-file',
+                        seq: 2,
+                        role: 'user',
+                        content: '这是文件',
+                        timestamp: Date.now(),
+                        status: 'sent',
+                        attachments: [
+                            {
+                                type: 'file',
+                                name: 'document.pdf',
+                            },
+                        ],
+                    },
+                ],
+            });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const allTexts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(allTexts).toContain('document.pdf');
     });
 });
