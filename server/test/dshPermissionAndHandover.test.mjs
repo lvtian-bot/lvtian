@@ -206,6 +206,78 @@ test('AcpEngineManager: triggerHandover 即时提炼、重置底层绑定并无�
     }
 });
 
+test('AcpEngineManager: triggerHandover 中断运行中任务并广播 stopped，同时对齐自定义 profile 目录', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-handover-interrupt-test-'));
+    try {
+        const workspaceDir = path.join(tmpDir, 'workspace');
+        const dataDir = path.join(tmpDir, 'data');
+        const dshProfileDir = path.join(tmpDir, 'dsh', 'profiles', 'acp');
+        fs.mkdirSync(workspaceDir, { recursive: true });
+        fs.mkdirSync(dataDir, { recursive: true });
+
+        const sessionManager = new SessionManager(dataDir);
+        const memoryManager = new MemoryManager(workspaceDir);
+
+        let resolvePromptStart;
+        const promptStarted = new Promise((resolve) => { resolvePromptStart = resolve; });
+
+        const mockApp = acp.agent({ name: 'mock-engine-hang' })
+            .onRequest(acp.methods.agent.initialize, () => ({
+                protocolVersion: acp.PROTOCOL_VERSION,
+                agentCapabilities: {},
+            }))
+            .onRequest(acp.methods.agent.authenticate, () => ({}))
+            .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'engine-sess-hang' }))
+            .onRequest(acp.methods.agent.session.prompt, async () => {
+                resolvePromptStart();
+                await new Promise(() => {}); // 挂起模拟长任务
+                return { stopReason: 'end_turn' };
+            });
+
+        const engine = new AcpEngineManager(workspaceDir, memoryManager, sessionManager, {
+            connectEngine: connectMockEngine(mockApp),
+            dshProfileDir,
+        });
+
+        // 验证 profile 目录对齐
+        assert.equal(engine.getDshProfileDir(), dshProfileDir);
+
+        sessionManager.getOrCreateSession('sess-1');
+        const asstMsg = sessionManager.addMessage('sess-1', {
+            id: 'asst-1',
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            status: 'processing',
+        });
+
+        let stoppedStatusReceived = null;
+        engine.execute('sess-1', asstMsg.id, '长期任务', {
+            onDelta: () => {},
+            onStatusChange: (status, payload) => {
+                if (status === 'stopped') {
+                    stoppedStatusReceived = payload;
+                }
+            },
+            onToolCall: () => {},
+        }).catch(() => undefined);
+
+        await promptStarted;
+        assert.equal(engine.isRunning('sess-1'), true);
+
+        // 触发交接，任务被打断并应广播 stopped 终态
+        await engine.triggerHandover('sess-1', 'permission_change');
+
+        assert.ok(stoppedStatusReceived);
+        assert.equal(stoppedStatusReceived.code, 'task_stopped');
+        assert.equal(sessionManager.getOrCreateSession('sess-1').taskState, 'stopped');
+
+        await engine.stopAll();
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
 test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-server-perm-test-'));
     try {

@@ -60,6 +60,8 @@ export interface AcpEngineManagerOptions {
     connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
     /** 上下文提炼整合器（用于主动交接、权限切换时即时提炼心智备忘录） */
     contextConsolidator?: ContextConsolidator;
+    /** DSH 配置文件自定义目录 (~/.dsh/profiles/acp)，用于测试隔离或非标准安装路径对齐 */
+    dshProfileDir?: string;
 }
 
 /** 会话任务运行时状态：一次 prompt 执行期间的聚合上下文 */
@@ -298,6 +300,7 @@ export class AcpEngineManager {
     private minCapacityRatio: number;
     private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
     private contextConsolidator: ContextConsolidator | null = null;
+    private dshProfileDir?: string;
 
     private connection: EngineConnection | null = null;
     private engineStarting: Promise<void> | null = null;
@@ -345,10 +348,15 @@ export class AcpEngineManager {
 
         this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
         this.contextConsolidator = options?.contextConsolidator ?? null;
+        this.dshProfileDir = options?.dshProfileDir;
     }
 
     public setContextConsolidator(cc: ContextConsolidator): void {
         this.contextConsolidator = cc;
+    }
+
+    public getDshProfileDir(): string | undefined {
+        return this.dshProfileDir;
     }
 
     /**
@@ -364,9 +372,17 @@ export class AcpEngineManager {
         this.handoffInProgressSessions.add(sessionId);
 
         try {
-            // 1. 若当前会话正在运行，先停止任务
+            // 1. 若当前会话正在运行，先停止任务并触发 stopped 状态回调广播
             if (this.activeSessions.has(sessionId)) {
+                const runtime = this.runtimes.get(sessionId);
                 this.stop(sessionId);
+                if (runtime?.callbacks?.onStatusChange) {
+                    try {
+                        runtime.callbacks.onStatusChange('stopped', { code: 'task_stopped' });
+                    } catch (err) {
+                        console.warn(`[AcpEngine] 交接广播停止状态失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                }
             }
 
             // 2. 即时执行心智提炼，生成《心智接力备忘录》
@@ -388,8 +404,8 @@ export class AcpEngineManager {
             }
             this.sessionManager.setDshSessionId(sessionId, '');
 
-            // 5. 回收旧引擎连接，使下一次交互时能重新加载最新 DSH 启动配置
-            this.reclaimConnection();
+            // 5. 等待在途启动就绪并回收旧引擎连接，使下一次交互时能重新加载最新 DSH 启动配置
+            await this.reclaimConnection();
         } finally {
             this.handoffInProgressSessions.delete(sessionId);
         }
@@ -498,14 +514,19 @@ export class AcpEngineManager {
         this.taskWatchdogTimers.set(sessionId, timer);
     }
 
-    /** 强制回收引擎连接：同步置空连接并清理映射再异步关闭，防止下一个请求抢在清理前复用已关闭的死连接 */
-    private reclaimConnection(): void {
+    /** 强制回收引擎连接：若有在途启动中的引擎先等待就位，同步置空连接并清理映射再异步关闭，防止下一个请求抢在清理前复用已关闭的死连接 */
+    private async reclaimConnection(): Promise<void> {
+        if (this.engineStarting) {
+            await this.engineStarting.catch(() => undefined);
+        }
         const conn = this.connection;
         this.connection = null;
         this.engineSessionIndex.clear();
-        conn?.close().catch((err: unknown) => {
-            console.warn(`[AcpEngine] 强制回收连接失败: ${err instanceof Error ? err.message : String(err)}`);
-        });
+        if (conn) {
+            await conn.close().catch((err: unknown) => {
+                console.warn(`[AcpEngine] 强制回收连接失败: ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
     }
 
     /** 优雅关停：停止全部受理中的任务（含引擎启动窗口）、等待启动中的引擎就位后关闭连接 */
@@ -513,20 +534,7 @@ export class AcpEngineManager {
         for (const sessionId of [...this.activeSessions.keys()]) {
             this.stop(sessionId);
         }
-        // 引擎仍在启动时等待其完成再关闭：否则启动完成后连接与进行中任务会残留到关停之后
-        if (this.engineStarting) {
-            await this.engineStarting.catch(() => undefined);
-        }
-        const conn = this.connection;
-        this.connection = null;
-        // 主动关停将 connection 置空，closed 处理器的连接比对不再命中，
-        // 连接级会话映射须在此显式清理，否则下次懒重启后会话被误判为本连接活跃会话
-        this.engineSessionIndex.clear();
-        if (conn) {
-            await conn.close().catch((err: unknown) => {
-                console.warn(`[AcpEngine] 关闭引擎连接失败 (非致命): ${err instanceof Error ? err.message : String(err)}`);
-            });
-        }
+        await this.reclaimConnection();
     }
 
     public async execute(
@@ -560,10 +568,11 @@ export class AcpEngineManager {
             }
 
             // 引擎启动等待期间收到手动停止：不再解析会话（避免 stopAll 清理映射后又被本任务重新登记），
-            // 消息已由 stop 同步终态化，这里只收尾任务状态
+            // 消息已由 stop 同步终态化，这里收尾任务状态并广播 stopped 终态
             if (this.stoppedSessions.has(sessionId)) {
                 this.stoppedSessions.delete(sessionId);
                 this.sessionManager.setTaskState(sessionId, 'stopped');
+                callbacks.onStatusChange('stopped', { code: 'task_stopped' });
                 return;
             }
 
@@ -798,10 +807,21 @@ export class AcpEngineManager {
 
     private async spawnDshEngine(app: acp.ClientApp, systemPrompt: string): Promise<EngineConnection> {
         const { command, argsPrefix } = resolveDshInvocation();
+        const envExtra: Record<string, string> = {};
+        if (this.dshProfileDir) {
+            envExtra.DSH_PROFILE_DIR = this.dshProfileDir;
+            const normalized = path.resolve(this.dshProfileDir);
+            const marker = path.join('.dsh', 'profiles', 'acp');
+            if (normalized.endsWith(marker)) {
+                envExtra.HOME = normalized.slice(0, -marker.length).replace(/[/\\]+$/, '') || '/';
+            }
+        }
+
         const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp'], {
             cwd: this.workspace,
             env: {
                 ...process.env,
+                ...envExtra,
                 DSH_WORKSPACE: this.workspace,
                 DSH_SYSTEM_PROMPT: systemPrompt,
                 DEEPSEEK_SYSTEM_PROMPT: systemPrompt,

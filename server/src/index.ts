@@ -68,6 +68,7 @@ async function main() {
     const contextConsolidator = new ContextConsolidator(sessionManager);
     const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager, {
         contextConsolidator,
+        dshProfileDir: config.dshProfileDir,
     });
     const fileManager = new FileManager(config.workspace);
 
@@ -75,7 +76,7 @@ async function main() {
     await server.start();
 
     const maskedToken = `${config.token.slice(0, 4)}****${config.token.slice(-4)}`;
-    const currentMode = getDshPermissionMode();
+    const currentMode = getDshPermissionMode(config.dshProfileDir);
 
     console.log(`\n🚀 服务已成功启动并在端口 ${config.port} 监听:`);
     console.log(`   - 本地回环:  http://127.0.0.1:${config.port}`);

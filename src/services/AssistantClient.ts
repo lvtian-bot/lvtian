@@ -153,7 +153,8 @@ export class AssistantClient {
         if (!httpUrl || !token) return false;
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            // 权限切换可能包含服务端即时提炼《心智接力备忘录》的深度大模型调用，放宽超时至 60 秒
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
             const res = await fetch(`${httpUrl}/api/permission`, {
                 method: 'POST',
                 headers: {
