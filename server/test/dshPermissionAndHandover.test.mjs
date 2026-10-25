@@ -499,7 +499,8 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         assert.equal(postData.changed, true);
         assert.equal(handoverCount, 1);
 
-        // 6. 相同模式再次 POST：应幂等返回 changed: false，且不触发 handover
+        // 6. 相同模式再次 POST：即便是任务执行中，也应幂等放行返回 changed: false，且不触发 handover
+        mockEngine.isRunning = (sid) => sid === 'main';
         const postSameRes = await fetch(`${baseUrl}/api/permission`, {
             method: 'POST',
             headers: {
@@ -513,6 +514,7 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         assert.equal(postSameData.success, true);
         assert.equal(postSameData.changed, false);
         assert.equal(handoverCount, 1);
+        mockEngine.isRunning = () => false;
 
         // 7. 再次 GET 确认更新
         const getUpdated = await fetch(`${baseUrl}/api/permission`, {

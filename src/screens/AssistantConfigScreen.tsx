@@ -34,6 +34,7 @@ export const AssistantConfigScreen = () => {
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
     const [saving, setSaving] = useState(false);
+    const [switchingPerm, setSwitchingPerm] = useState(false);
     const hasUserSelectedRef = useRef(false);
 
     // 凭据同步：只在 store 中的 serverUrl / serverToken 变更时初始化表单，避免权限刷新覆盖未保存的输入
@@ -99,6 +100,44 @@ export const AssistantConfigScreen = () => {
         });
     };
 
+    const applyPermissionSwitch = async (targetMode: 'workspace-write' | 'danger-full-access') => {
+        const activeUrl = serverUrl || url;
+        const activeToken = serverToken || token;
+        if (!activeUrl || !activeToken) {
+            Alert.alert(
+                t('settings.notice', '提示'),
+                t('assistant.serverConfigRequiredFirst', '请先配置并连接服务，再调整服务端权限模式')
+            );
+            return;
+        }
+
+        setSwitchingPerm(true);
+        try {
+            const res = await AssistantClient.updatePermissionMode(activeUrl, activeToken, targetMode);
+            setSwitchingPerm(false);
+            if (res.success) {
+                hasUserSelectedRef.current = true;
+                setSelectedMode(targetMode);
+                setPermissionMode(targetMode);
+                Alert.alert(
+                    t('settings.success', '成功'),
+                    t('assistant.permissionSwitchSuccess', '权限已成功切换并完成会话交接')
+                );
+            } else {
+                const failMessage = res.code === 'TASK_RUNNING'
+                    ? t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式')
+                    : t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接');
+                Alert.alert(t('settings.failure', '失败'), failMessage);
+            }
+        } catch {
+            setSwitchingPerm(false);
+            Alert.alert(
+                t('settings.failure', '失败'),
+                t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接')
+            );
+        }
+    };
+
     const handleSelectMode = (mode: 'workspace-write' | 'danger-full-access') => {
         if (isTaskRunning) {
             Alert.alert(
@@ -107,7 +146,6 @@ export const AssistantConfigScreen = () => {
             );
             return;
         }
-        hasUserSelectedRef.current = true;
         if (mode === selectedMode) return;
         if (mode === 'danger-full-access') {
             Alert.alert(
@@ -121,12 +159,12 @@ export const AssistantConfigScreen = () => {
                     {
                         text: t('common.confirm', '确认切换'),
                         style: 'destructive',
-                        onPress: () => setSelectedMode('danger-full-access'),
+                        onPress: () => applyPermissionSwitch('danger-full-access'),
                     },
                 ]
             );
         } else {
-            setSelectedMode('workspace-write');
+            applyPermissionSwitch('workspace-write');
         }
     };
 
@@ -139,32 +177,13 @@ export const AssistantConfigScreen = () => {
             Alert.alert(t('settings.failure', '失败'), t('assistant.tokenRequired', '访问令牌（Token）不能为空'));
             return;
         }
-        if (isTaskRunning && selectedMode !== permissionMode) {
-            Alert.alert(
-                t('settings.failure', '失败'),
-                t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式')
-            );
-            return;
-        }
 
         setSaving(true);
         try {
-            // 1. 先验证并同步权限模式至服务端（若失败则不修改本地配置，避免状态半持久化分裂）
-            const permResult = await AssistantClient.updatePermissionMode(url, token, selectedMode);
-            if (!permResult.success) {
-                setSaving(false);
-                const failMessage = permResult.code === 'TASK_RUNNING'
-                    ? (permResult.message || t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式'))
-                    : t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接');
-                Alert.alert(t('settings.failure', '失败'), failMessage);
-                return;
-            }
-
-            // 2. 权限同步成功后，原子持久化凭据与权限状态
+            // 纯本地设置保存：原子持久化服务地址与访问令牌
             await setServerConfig(url, token);
-            setPermissionMode(selectedMode);
 
-            // 3. 强制重新发起长连接
+            // 重新发起长连接
             AssistantClient.getInstance().connect(true);
             setSaving(false);
             Alert.alert(t('settings.success', '成功'), t('assistant.saveSuccess', '配置已保存并开始连接'), [
@@ -264,6 +283,9 @@ export const AssistantConfigScreen = () => {
                         <Text style={styles.sectionTitleText}>
                             {t('assistant.permissionTitle', '助理执行权限')}
                         </Text>
+                        {switchingPerm && (
+                            <ActivityIndicator size="small" color={theme.colors.primary} style={styles.switchingIndicator} />
+                        )}
                     </View>
 
                     {/* 选项 1：安全工作区模式 */}
@@ -274,6 +296,7 @@ export const AssistantConfigScreen = () => {
                         ]}
                         onPress={() => handleSelectMode('workspace-write')}
                         activeOpacity={0.7}
+                        disabled={switchingPerm}
                     >
                         <View style={styles.modeRadio}>
                             <View
@@ -319,6 +342,7 @@ export const AssistantConfigScreen = () => {
                         ]}
                         onPress={() => handleSelectMode('danger-full-access')}
                         activeOpacity={0.7}
+                        disabled={switchingPerm}
                     >
                         <View style={styles.modeRadio}>
                             <View
@@ -569,6 +593,9 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: 'bold',
         color: theme.colors.text,
+        marginLeft: 8,
+    },
+    switchingIndicator: {
         marginLeft: 8,
     },
     modeOption: {

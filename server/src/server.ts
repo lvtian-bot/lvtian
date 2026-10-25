@@ -206,18 +206,6 @@ export class LvtianServer {
         // 修改当前 DSH 权限模式并触发统一会话交接
         if (pathname === '/api/permission' && req.method === 'POST') {
             try {
-                // 门禁检查：若当前已有任务正在执行，禁止切换权限模式
-                if (this.acpEngine.isRunning('main')) {
-                    res.writeHead(409, { 'Content-Type': 'application/json' });
-                    res.end(
-                        JSON.stringify({
-                            error: '当前有正在执行的任务，请先停止任务后再切换权限模式',
-                            code: 'TASK_RUNNING',
-                        })
-                    );
-                    return;
-                }
-
                 const body = await this.readJsonBody<{ permissionMode?: string }>(req, 1024);
                 const targetMode = body.permissionMode;
                 if (targetMode !== 'workspace-write' && targetMode !== 'danger-full-access') {
@@ -226,6 +214,19 @@ export class LvtianServer {
                         JSON.stringify({
                             error: '无效的 permissionMode，必须为 workspace-write 或 danger-full-access',
                             code: 'PARAM_INVALID',
+                        })
+                    );
+                    return;
+                }
+
+                // 门禁检查：仅当权限模式真正发生变动时，才检查并禁止在任务执行中途切换
+                const currentMode = getDshPermissionMode(this.config.dshProfileDir);
+                if (targetMode !== currentMode && this.acpEngine.isRunning('main')) {
+                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    res.end(
+                        JSON.stringify({
+                            error: '当前有正在执行的任务，请先停止任务后再切换权限模式',
+                            code: 'TASK_RUNNING',
                         })
                     );
                     return;

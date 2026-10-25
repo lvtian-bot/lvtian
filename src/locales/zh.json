@@ -346,6 +346,7 @@
     "permissionDangerAlertContent": "切换后助理将拥有当前服务器用户的所有执行权限，并为您即时生成当前对话的心智备忘录以接力新会话。是否继续？",
     "permissionSwitchSuccess": "权限已成功切换并完成会话交接",
     "permissionSwitchFailed": "切换权限模式失败，请检查服务连接",
+    "serverConfigRequiredFirst": "请先配置并连接服务，再调整服务端权限模式",
     "taskRunningCannotSwitch": "当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式",
     "urlRequired": "服务地址不能为空",
     "tokenRequired": "访问令牌（Token）不能为空",
