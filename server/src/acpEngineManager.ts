@@ -401,19 +401,30 @@ export class AcpEngineManager {
                 }
             }
 
-            // 3. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定
-            this.sessionManager.setHandoffPending(sessionId, true);
+            // 3. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定（容错落盘异常）
+            try {
+                this.sessionManager.setHandoffPending(sessionId, true);
+            } catch (err) {
+                console.warn(`[AcpEngine] 标记 handoffPending 失败 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+            }
 
             // 4. 清除旧 DSH 会话绑定与索引
             const saved = this.sessionManager.getDshSessionId(sessionId);
             if (saved) {
                 this.engineSessionIndex.delete(saved);
             }
-            this.sessionManager.setDshSessionId(sessionId, '');
-
-            // 5. 等待在途启动就绪并回收旧引擎连接，使下一次交互时能重新加载最新 DSH 启动配置
-            await this.reclaimConnection();
+            try {
+                this.sessionManager.setDshSessionId(sessionId, '');
+            } catch (err) {
+                console.warn(`[AcpEngine] 清除 dshSessionId 失败 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+            }
         } finally {
+            // 5. 核心安全底线：无论心智提炼或会话持久化是否抛错，必须保证旧引擎连接被可靠回收
+            try {
+                await this.reclaimConnection();
+            } catch (err) {
+                console.warn(`[AcpEngine] 交接回收引擎连接异常: ${err instanceof Error ? err.message : String(err)}`);
+            }
             for (const sid of affectedSessions) {
                 this.handoffInProgressSessions.delete(sid);
             }
