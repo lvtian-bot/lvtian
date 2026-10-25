@@ -421,4 +421,57 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
 
         sendRawSpy.mockRestore();
     });
+
+    test('重水化附件失败时若会话已被清空，不复活旧失败消息', async () => {
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-cleared',
+                    seq: 1,
+                    role: 'user',
+                    content: '已被清空的消息',
+                    timestamp: Date.now(),
+                    status: 'sending',
+                    attachments: [
+                        {
+                            type: 'image',
+                            name: 'gone.png',
+                            uri: 'file:///non-existent-image.png',
+                        },
+                    ],
+                },
+            ],
+            pendingSendQueue: [
+                {
+                    sessionId: 'main',
+                    messageId: 'm-cleared',
+                    content: '已被清空的消息',
+                    attachments: [
+                        {
+                            type: 'image',
+                            name: 'gone.png',
+                            uri: 'file:///non-existent-image.png',
+                        },
+                    ],
+                },
+            ],
+            isServerUpgrading: false,
+            taskState: 'idle',
+        });
+
+        // 启动异步补发同时清空会话
+        const flushPromise = client.flushPendingSendQueue();
+        useAssistantStore.getState().clearChat();
+        await flushPromise;
+
+        const state = useAssistantStore.getState();
+        expect(sendRawSpy).not.toHaveBeenCalled();
+        // 验证被清空后没有旧消息被复活写回
+        expect(state.messages.length).toBe(0);
+        expect(state.pendingSendQueue.length).toBe(0);
+
+        sendRawSpy.mockRestore();
+    });
 });

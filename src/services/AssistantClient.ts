@@ -361,11 +361,15 @@ export class AssistantClient {
                     })
                 );
             } catch {
-                // 原文件失效：中止发送残缺指令，将消息标记为明确错误并移出队列
-                const existing = store.messages.find((m) => m.id === nextItem.messageId);
-                store.addOrUpdateMessage({
+                // 原文件失效：若在此期间会话已被清空或重置，不再写入旧消息
+                const currentStore = useAssistantStore.getState();
+                if (!currentStore.pendingSendQueue.some((q) => q.messageId === nextItem.messageId)) {
+                    return;
+                }
+                const existing = currentStore.messages.find((m) => m.id === nextItem.messageId);
+                currentStore.addOrUpdateMessage({
                     id: nextItem.messageId,
-                    seq: existing?.seq ?? store.currentSeq,
+                    seq: existing?.seq ?? currentStore.currentSeq,
                     role: 'user',
                     content: nextItem.content,
                     timestamp: existing?.timestamp ?? Date.now(),
@@ -373,7 +377,7 @@ export class AssistantClient {
                     errorMessage: i18n.t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'),
                     attachments: nextItem.attachments,
                 });
-                store.removeFromPendingSendQueue(nextItem.messageId);
+                currentStore.removeFromPendingSendQueue(nextItem.messageId);
                 // 推进后续排队消息
                 this.flushPendingSendQueue();
                 return;
