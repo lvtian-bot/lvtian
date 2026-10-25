@@ -46,25 +46,65 @@ class FileSystemService {
                 }
             }
 
-            if (typeof oldRootDir.list === 'function') {
-                const items = oldRootDir.list();
-                for (const item of items) {
-                    const targetInstance = item instanceof Directory
-                        ? new Directory(this.rootDir, item.name)
-                        : new File(this.rootDir, item.name);
-                    if (!targetInstance.exists && typeof item.move === 'function') {
-                        item.move(targetInstance);
-                    }
-                }
-                if (typeof oldRootDir.delete === 'function') {
+            this.mergeDirectoryContents(oldRootDir, this.rootDir);
+
+            if (typeof oldRootDir.list === 'function' && typeof oldRootDir.delete === 'function') {
+                const remaining = oldRootDir.list();
+                if (remaining.length === 0) {
                     try {
                         oldRootDir.delete();
+                        console.log('[FileSystemService] Cleaned up legacy mdnote_docs directory');
                     } catch {}
+                } else {
+                    console.warn('[FileSystemService] Legacy mdnote_docs contains remaining entries, preserved directory');
                 }
-                console.log('[FileSystemService] Merged legacy mdnote_docs contents into lvtian_docs');
             }
         } catch (err) {
             console.error('[FileSystemService] Legacy storage migration failed:', err);
+        }
+    }
+
+    private mergeDirectoryContents(sourceDir: Directory, targetDir: Directory): void {
+        if (typeof sourceDir.list !== 'function') return;
+
+        const items = sourceDir.list();
+        for (const item of items) {
+            try {
+                if (item instanceof Directory) {
+                    const subTargetDir = new Directory(targetDir, item.name);
+                    if (!subTargetDir.exists) {
+                        if (typeof item.move === 'function') {
+                            item.move(subTargetDir);
+                            continue;
+                        }
+                    }
+                    this.mergeDirectoryContents(item, subTargetDir);
+                    if (typeof item.list === 'function' && item.list().length === 0 && typeof item.delete === 'function') {
+                        try {
+                            item.delete();
+                        } catch {}
+                    }
+                } else {
+                    const targetFile = new File(targetDir, item.name);
+                    if (!targetFile.exists) {
+                        if (typeof item.move === 'function') {
+                            item.move(targetFile);
+                        }
+                    } else {
+                        const extIndex = item.name.lastIndexOf('.');
+                        const base = extIndex > 0 ? item.name.substring(0, extIndex) : item.name;
+                        const ext = extIndex > 0 ? item.name.substring(extIndex) : '';
+                        const backupName = base + '_legacy_' + Date.now() + ext;
+                        const backupFile = new File(targetDir, backupName);
+                        if (typeof item.move === 'function') {
+                            item.move(backupFile);
+                            console.log('[FileSystemService] Conflicting legacy file preserved as ' + backupName);
+                        }
+                    }
+                }
+            } catch (itemErr) {
+                console.error('[FileSystemService] Failed to migrate item ' + item.name + ':', itemErr);
+            }
         }
     }
 
