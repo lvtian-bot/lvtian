@@ -1,5 +1,5 @@
 import React from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, PixelRatio, StyleSheet, Text, View } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 import { ChatBubbleText } from '../src/components/ChatBubbleText';
 import { ChatScreen, ToolCallsCard } from '../src/screens/ChatScreen';
@@ -57,21 +57,122 @@ describe('bubble rendering', () => {
         expect(getAssistantDisplayParts(msg)).toEqual(parts);
         expect(msg.toolCalls).toHaveLength(3);
     });
-    it('reserves inline space in the same font before overlaying the visible clock', async () => {
+    const bodyText = () => renderer!.root.findAllByType(Text).find((node) => node.props.selectable === true)!;
+    const clockText = () => renderer!.root.findByProps({ testID: 'inline-bubble-time' });
+    const layoutBubble = async (width: number, lineWidths: number[], clockWidth = 30, clockHeight = 12) => {
         await ReactTestRenderer.act(async () => {
-            renderer = ReactTestRenderer.create(<ChatBubbleText text="你好😀" time="12:05" textStyle={{ fontSize: 18, lineHeight: 27 }} />);
+            renderer!.root.findByType(View).props.onLayout({ nativeEvent: { layout: { width } } });
+            bodyText().props.onTextLayout({ nativeEvent: { lines: lineWidths.map((lineWidth, index) => ({
+                x: 0, y: index * 27, width: lineWidth, height: 27,
+            })) } });
+            clockText().props.onLayout({ nativeEvent: { layout: { width: clockWidth, height: clockHeight } } });
         });
-        const clock = renderer!.root.findByProps({ testID: 'inline-bubble-time' });
-        expect(clock.props.children).toBe('12:05');
-        const reservation = renderer!.root.findAllByType(Text).find((node) => node.props.children === '   12:05')!;
-        expect(StyleSheet.flatten(reservation.props.style)).toMatchObject({ color: 'transparent', fontSize: 10 });
-        expect(StyleSheet.flatten(clock.props.style)).toMatchObject({ fontSize: 10, right: 0, bottom: 0 });
+    };
+    it('keeps selectable commands, URLs and Unicode text exact, with a separate non-selectable clock', async () => {
+        for (const text of ['npm run test', 'https://example.com/a?b=c&d=e', '你好😀', 'first\nlast\n']) {
+            await ReactTestRenderer.act(async () => {
+                const element = <ChatBubbleText text={text} time="12:05" textStyle={{ fontSize: 18, lineHeight: 27 }} />;
+                if (renderer) renderer.update(element);
+                else renderer = ReactTestRenderer.create(element);
+            });
+            expect(bodyText().props.children).toBe(text);
+            expect(bodyText().findAllByType(Text)).toHaveLength(1);
+            expect(clockText().props.children).toBe('12:05');
+            expect(clockText().props.selectable).toBe(false);
+            expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+        }
+    });
+    it('grows a short bubble for a measured clock without inserting selectable padding', async () => {
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<ChatBubbleText text="short" time="12:05" textStyle={{ fontSize: 18 }} />);
+        });
+        await layoutBubble(80, [80]);
+        expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style)).toMatchObject({ width: 118, maxWidth: '100%' });
+        expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+        await layoutBubble(118, [80]);
+        expect(StyleSheet.flatten(clockText().props.style)).toMatchObject({ position: 'absolute', right: 0, top: 15 });
+        expect(bodyText().props.children).toBe('short');
+    });
+    it('rounds fractional short-bubble sizing upward to a physical pixel', async () => {
+        jest.spyOn(PixelRatio, 'get').mockReturnValue(1.5);
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<ChatBubbleText text="short" time="12:05" textStyle={{ fontSize: 18 }} />);
+        });
+        await layoutBubble(80.1, [80.1], 30.1);
+        const requested = StyleSheet.flatten(renderer!.root.findByType(View).props.style).width;
+        expect(requested).toBe(178 / 1.5);
+        await layoutBubble(Number(requested), [80.1], 30.1);
+        expect(StyleSheet.flatten(clockText().props.style).position).toBe('absolute');
+    });
+    it('shares a multiline trailing edge only when width and height allow, including resize and font scaling', async () => {
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<ChatBubbleText text="first\nlast" time="12:05" textStyle={{ fontSize: 18 }} />);
+        });
+        await layoutBubble(200, [200, 80]);
+        expect(StyleSheet.flatten(clockText().props.style)).toMatchObject({ position: 'absolute', top: 42 });
+        await layoutBubble(110, [110, 80]);
+        expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+        await layoutBubble(200, [200, 180]);
+        expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+        await layoutBubble(200, [200, 80], 40, 32);
+        expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+    });
+    it('falls back safely until new streamed text and clock values have been measured', async () => {
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<ChatBubbleText text="first\nlast" time="12:05" textStyle={{ fontSize: 18 }} />);
+        });
+        await layoutBubble(200, [200, 80]);
+        await ReactTestRenderer.act(async () => {
+            renderer!.update(<ChatBubbleText text="first\nlonger last" time="12:05" textStyle={{ fontSize: 18 }} />);
+        });
+        expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+        await layoutBubble(200, [200, 100]);
+        expect(StyleSheet.flatten(clockText().props.style).position).toBe('absolute');
+        const previousClock = clockText();
+        const previousBody = bodyText();
+        await ReactTestRenderer.act(async () => {
+            renderer!.update(<ChatBubbleText text="first\nlonger last" time="12:06" textStyle={{ fontSize: 18 }} />);
+        });
+        expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+        // A new clock mounts even if the time's glyph widths are unchanged,
+        // ensuring a native layout event without remounting selectable prose.
+        expect(clockText()).not.toBe(previousClock);
+        expect(bodyText()).toBe(previousBody);
+        await ReactTestRenderer.act(async () => {
+            clockText().props.onLayout({ nativeEvent: { layout: { width: 30, height: 12 } } });
+        });
+        expect(StyleSheet.flatten(clockText().props.style).position).toBe('absolute');
+        await ReactTestRenderer.act(async () => {
+            renderer!.update(<ChatBubbleText text="first\nlonger last" time="" textStyle={{ fontSize: 18 }} />);
+        });
+        expect(renderer!.root.findAllByType(Text)).toHaveLength(1);
     });
     it('keeps complex blocks in Markdown, not a plain text fallback', () => {
-        for (const source of ['```js\nx\n```', '| a | b |', '# heading', '- item', '1. item', '[link](https://example.com)', '**bold**']) {
+        for (const source of ['```js\nx\n```', '| a | b |', '# heading', '- item', '1. item', '[link](https://example.com)', '**bold**',
+            '    const x = 1;', '\tconst x = 1;', '  \tconst x = 1;', 'intro\n\n    code',
+            '&lt;', '&amp;', '&copy;', '&#60;', '&#x3c;', '&#X3C;']) {
             expect(isPlainChatText(source)).toBe(false);
         }
         expect(isPlainChatText('中文😀 https://example.com/very-long-path\nnext line')).toBe(true);
+    });
+    it('routes indented code and entities through the existing Markdown renderer in chat cells', async () => {
+        jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ serverUrl: 'http://localhost:8080', connectionState: 'connected', messages: [], pendingApprovals: [] });
+            renderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const renderItem = renderer!.root.findByType(FlatList).props.renderItem;
+        for (const content of ['    const x = 1;', '\tconst x = 1;', '&lt; &amp; &#60; &#x3c;']) {
+            await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: message({ content }), index: 0 })));
+            expect(renderer!.root.findAllByType(ChatBubbleText)).toHaveLength(0);
+            const rendered = JSON.stringify(renderer!.toJSON());
+            if (content.startsWith('&')) {
+                expect(rendered).toContain('< & < <');
+                expect(rendered).not.toContain('&lt;');
+            } else {
+                expect(rendered).toContain('const x = 1;');
+            }
+        }
     });
     it('renders grouped cards at a definite width with two-line summaries and independent detail state', async () => {
         await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(<ToolCallsCard toolCalls={[call('a'), call('b')]} />); });

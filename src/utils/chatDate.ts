@@ -32,5 +32,7 @@ export function formatChatTime(timestamp: number, locale?: string): string {
 
 /** Rich blocks retain Markdown rendering and get a separate, safe footer row. */
 export function isPlainChatText(text: string): boolean {
-    return !/[`*_[\]<>~|\\]|^\s*(?:#{1,6}\s|[-+]\s|\d+[.)]\s|[-=]{3,}\s*$)/m.test(text);
+    // Conservatively retain the Markdown renderer for indented code and
+    // named/numeric entities, even when no other formatting markers occur.
+    return !/[`*_[\]<>~|\\]|&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);|^(?: {4}| {0,3}\t)|^\s*(?:#{1,6}\s|[-+]\s|\d+[.)]\s|[-=]{3,}\s*$)/im.test(text);
 }
