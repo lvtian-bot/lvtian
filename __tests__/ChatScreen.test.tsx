@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { Alert, Text, TextInput, TouchableOpacity } from 'react-native';
+import { Text, TextInput, TouchableOpacity } from 'react-native';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
@@ -61,31 +61,37 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(allTexts).not.toContain('arrow-upward');
     });
 
-    it('点击加号弹出文件与图片选择菜单，且 options 支持 cancelable', async () => {
-        const alertSpy = jest.spyOn(Alert, 'alert');
+    it('点击加号展开轻量悬浮气泡菜单，渲染图片与文件选项；再次点击或选择后收起', async () => {
         await ReactTestRenderer.act(async () => {
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
 
         const root = currentRenderer!.root;
-        const buttons = root.findAllByType(TouchableOpacity);
-        const plusButton = buttons.find((btn) => btn.props.accessibilityLabel === '添加内容' || btn.props.accessibilityLabel === 'Add Content');
+        const plusButton = root.findAllByType(TouchableOpacity).find(
+            (btn) => btn.props.accessibilityLabel === '添加内容' || btn.props.accessibilityLabel === 'Add Content'
+        );
         expect(plusButton).toBeDefined();
 
+        // 默认未展开气泡
+        let texts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(texts.some((t) => typeof t === 'string' && /图片|Image/.test(t))).toBe(false);
+
+        // 点击加号展开气泡
         await ReactTestRenderer.act(async () => {
             plusButton!.props.onPress();
         });
 
-        expect(alertSpy).toHaveBeenCalledWith(
-            expect.stringMatching(/添加内容|Add Content/i),
-            undefined,
-            expect.arrayContaining([
-                expect.objectContaining({ text: expect.stringMatching(/图片|Image/i) }),
-                expect.objectContaining({ text: expect.stringMatching(/文件|File/i) }),
-            ]),
-            { cancelable: true },
-        );
-        alertSpy.mockRestore();
+        texts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(texts.some((t) => typeof t === 'string' && /图片|Image/.test(t))).toBe(true);
+        expect(texts.some((t) => typeof t === 'string' && /文件|File/.test(t))).toBe(true);
+
+        // 再次点击加号（此时呈关闭状态）后收起气泡
+        await ReactTestRenderer.act(async () => {
+            plusButton!.props.onPress();
+        });
+
+        texts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(texts.some((t) => typeof t === 'string' && /图片|Image/.test(t))).toBe(false);
     });
 
     it('输入文字后渲染发送按钮，清空后隐藏', async () => {
@@ -109,6 +115,59 @@ describe('ChatScreen 输入区与操作菜单', () => {
 
         allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts).not.toContain('arrow-upward');
+    });
+
+    it('当 AI 执行任务中且输入框为空时，渲染停止正方形且不渲染黄色悬浮条；输入内容切换为发送箭头', async () => {
+        const stopSpy = jest.spyOn(AssistantClient.getInstance(), 'stopExecution').mockReturnValue(true);
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({
+                taskState: 'processing',
+            });
+        });
+
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+
+        // 1. 验证黄色悬浮条不再出现
+        const allTexts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(allTexts.some((t) => typeof t === 'string' && /助理正在执行任务/.test(t))).toBe(false);
+
+        // 2. 验证右侧存在停止正方形按钮
+        const buttons = root.findAllByType(TouchableOpacity);
+        const stopButton = buttons.find((btn) => /停止执行|Stop/i.test(btn.props.accessibilityLabel));
+        expect(stopButton).toBeDefined();
+
+        // 3. 点击停止按钮触发 stopExecution
+        await ReactTestRenderer.act(async () => {
+            stopButton!.props.onPress();
+        });
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+
+        // 4. 输入文字后切换为发送按钮，停止按钮暂时隐藏
+        const textInput = root.findByType(TextInput);
+        await ReactTestRenderer.act(async () => {
+            textInput.props.onChangeText('新指令');
+        });
+
+        const updatedTexts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(updatedTexts).toContain('arrow-upward');
+
+        const updatedButtons = root.findAllByType(TouchableOpacity);
+        const updatedStopBtn = updatedButtons.find((btn) => /停止执行|Stop/i.test(btn.props.accessibilityLabel));
+        expect(updatedStopBtn).toBeUndefined();
+
+        // 5. 清空文字后，停止按钮重新恢复
+        await ReactTestRenderer.act(async () => {
+            textInput.props.onChangeText('');
+        });
+        const finalButtons = root.findAllByType(TouchableOpacity);
+        const finalStopBtn = finalButtons.find((btn) => /停止执行|Stop/i.test(btn.props.accessibilityLabel));
+        expect(finalStopBtn).toBeDefined();
+
+        stopSpy.mockRestore();
     });
 
     it('页面始终不挂载多余的 headerRight 菜单，顶部保持纯粹', async () => {

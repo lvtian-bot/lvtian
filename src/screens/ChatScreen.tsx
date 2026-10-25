@@ -366,12 +366,11 @@ export const ChatScreen = () => {
     } = useAssistantStore();
 
     const [inputContent, setInputContent] = useState('');
+    const [isAttachMenuVisible, setIsAttachMenuVisible] = useState(false);
     const [showScrollBottom, setShowScrollBottom] = useState(false);
     const INITIAL_WINDOW_SIZE = 30;
     const WINDOW_BATCH_SIZE = 30;
     const [renderedCount, setRenderedCount] = useState(INITIAL_WINDOW_SIZE);
-
-    const queuedCount = messages.filter((m) => m.role === 'user' && m.status === 'queued').length;
 
     const handleCancelQueued = useCallback((msg: AssistantMessage) => {
         Alert.alert(
@@ -525,27 +524,8 @@ export const ChatScreen = () => {
     }, [inputContent, t]);
 
     const handlePlusAction = useCallback(() => {
-        Alert.alert(
-            t('chat.addAttachment', '添加内容'),
-            undefined,
-            [
-                {
-                    text: t('chat.pickImage', '图片'),
-                    onPress: () => {
-                        pickImage();
-                    },
-                },
-                {
-                    text: t('chat.pickDocument', '文件'),
-                    onPress: () => {
-                        pickDocument();
-                    },
-                },
-                { text: t('common.cancel', '取消'), style: 'cancel' },
-            ],
-            { cancelable: true },
-        );
-    }, [pickDocument, pickImage, t]);
+        setIsAttachMenuVisible((prev) => !prev);
+    }, []);
 
     const handleRetryMessage = useCallback(async (item: AssistantMessage) => {
         let attachments = item.attachments;
@@ -705,6 +685,12 @@ export const ChatScreen = () => {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
+                onScrollBeginDrag={() => setIsAttachMenuVisible(false)}
+                onTouchStart={() => {
+                    if (isAttachMenuVisible) {
+                        setIsAttachMenuVisible(false);
+                    }
+                }}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
                 onEndReached={handleLoadEarlier}
@@ -928,32 +914,60 @@ export const ChatScreen = () => {
                 </View>
             ))}
 
-            {/* 停止执行悬浮条 */}
-            {(taskState === 'processing' || taskState === 'awaiting_approval') && (
-                <View style={styles.stopBar}>
-                    <Text style={styles.stopBarText}>
-                        {queuedCount > 0
-                            ? t('assistant.taskRunningWithQueue', '助理正在执行任务 · {{count}}条消息排队中', { count: queuedCount })
-                            : t('assistant.taskRunning', '助理正在执行任务...')}
-                    </Text>
-                    <TouchableOpacity style={styles.stopBtn} onPress={handleStop}>
-                        <Icon name="stop" size={16} color="#fff" />
-                        <Text style={styles.stopBtnText}>{t('assistant.stop', '停止执行')}</Text>
-                    </TouchableOpacity>
-                </View>
-            )}
-
             {/* 底部输入区 */}
             <View style={styles.inputArea}>
+                {/* 附件选择轻量悬浮气泡菜单 (Popover) */}
+                {isAttachMenuVisible && (
+                    <View style={styles.attachMenuPopover}>
+                        <TouchableOpacity
+                            style={styles.attachMenuItem}
+                            onPress={() => {
+                                setIsAttachMenuVisible(false);
+                                pickImage();
+                            }}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('chat.pickImage', '图片')}
+                        >
+                            <View style={[styles.attachMenuIconBg, styles.attachMenuPhotoBg]}>
+                                <Icon name="photo" size={18} color="#2563EB" />
+                            </View>
+                            <Text style={styles.attachMenuText}>{t('chat.pickImage', '图片')}</Text>
+                        </TouchableOpacity>
+
+                        <View style={styles.attachMenuDivider} />
+
+                        <TouchableOpacity
+                            style={styles.attachMenuItem}
+                            onPress={() => {
+                                setIsAttachMenuVisible(false);
+                                pickDocument();
+                            }}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('chat.pickDocument', '文件')}
+                        >
+                            <View style={[styles.attachMenuIconBg, styles.attachMenuDocBg]}>
+                                <Icon name="insert-drive-file" size={18} color="#D97706" />
+                            </View>
+                            <Text style={styles.attachMenuText}>{t('chat.pickDocument', '文件')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
                 <View style={styles.inputCapsule}>
                     <TouchableOpacity
-                        style={styles.plusBtn}
+                        style={[styles.plusBtn, isAttachMenuVisible && styles.plusBtnActive]}
                         onPress={handlePlusAction}
                         activeOpacity={0.7}
                         accessibilityRole="button"
                         accessibilityLabel={t('chat.addAttachment', '添加内容')}
                     >
-                        <Icon name="add" size={24} color="#4B5563" />
+                        <Icon
+                            name={isAttachMenuVisible ? 'close' : 'add'}
+                            size={24}
+                            color={isAttachMenuVisible ? theme.colors.primary : '#4B5563'}
+                        />
                     </TouchableOpacity>
                     <TextInput
                         ref={chatInputRef}
@@ -962,7 +976,13 @@ export const ChatScreen = () => {
                         placeholder={t('assistant.inputPlaceholder', '消息')}
                         placeholderTextColor="#9CA3AF"
                         value={inputContent}
-                        onChangeText={setInputContent}
+                        onFocus={() => {
+                            if (isAttachMenuVisible) setIsAttachMenuVisible(false);
+                        }}
+                        onChangeText={(text) => {
+                            setInputContent(text);
+                            if (isAttachMenuVisible) setIsAttachMenuVisible(false);
+                        }}
                         multiline
                         maxLength={2000}
                         onLayout={handleInputLayout}
@@ -972,8 +992,20 @@ export const ChatScreen = () => {
                             style={styles.sendBtnActive}
                             onPress={handleSend}
                             activeOpacity={0.8}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('common.send', '发送')}
                         >
                             <Icon name="arrow-upward" size={18} color="#fff" />
+                        </TouchableOpacity>
+                    ) : (taskState === 'processing' || taskState === 'awaiting_approval') ? (
+                        <TouchableOpacity
+                            style={styles.stopBtnActive}
+                            onPress={handleStop}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('assistant.stop', '停止执行')}
+                        >
+                            <View style={styles.stopSquare} />
                         </TouchableOpacity>
                     ) : null}
                 </View>
@@ -1142,6 +1174,7 @@ const styles = StyleSheet.create({
     },
     keyboardSticky: {
         backgroundColor: theme.colors.background,
+        zIndex: 20,
     },
     upgradingBanner: {
         flexDirection: 'row',
@@ -1432,40 +1465,65 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontWeight: 'bold',
     },
-    stopBar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: theme.colors.warnBg,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.warnBorder,
-    },
-    stopBarText: {
-        fontSize: 13,
-        color: theme.colors.warnText,
-    },
-    stopBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: theme.colors.dangerStrong,
-        borderRadius: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-    },
-    stopBtnText: {
-        color: '#fff',
-        fontSize: 12,
-        fontWeight: 'bold',
-        marginLeft: 4,
-    },
     inputArea: {
         paddingHorizontal: 14,
         paddingVertical: 8,
         backgroundColor: theme.colors.surface,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: '#E5E7EB',
+        position: 'relative',
+        zIndex: 25,
+    },
+    attachMenuPopover: {
+        position: 'absolute',
+        bottom: '100%',
+        left: 14,
+        marginBottom: 8,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 14,
+        paddingVertical: 4,
+        paddingHorizontal: 4,
+        minWidth: 140,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.12,
+        shadowRadius: 10,
+        elevation: 8,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: '#E5E7EB',
+        zIndex: 100,
+    },
+    attachMenuItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        borderRadius: 10,
+    },
+    attachMenuIconBg: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 10,
+    },
+    attachMenuPhotoBg: {
+        backgroundColor: '#EFF6FF',
+    },
+    attachMenuDocBg: {
+        backgroundColor: '#FEF3C7',
+    },
+    attachMenuText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#1F2937',
+    },
+    attachMenuDivider: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: '#F3F4F6',
+        marginHorizontal: 8,
+        marginVertical: 1,
     },
     inputCapsule: {
         flexDirection: 'row',
@@ -1483,6 +1541,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         marginRight: 4,
+    },
+    plusBtnActive: {
+        backgroundColor: '#E0E7FF',
     },
     attachmentImage: {
         width: 200,
@@ -1538,6 +1599,19 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 6,
+    },
+    stopBtnActive: {
+        width: 32,
+        height: 32,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 6,
+    },
+    stopSquare: {
+        width: 20,
+        height: 20,
+        backgroundColor: '#111827',
+        borderRadius: 5,
     },
     scrollBottomContainer: {
         position: 'absolute',
