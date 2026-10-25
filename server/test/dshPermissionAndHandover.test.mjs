@@ -39,39 +39,54 @@ function connectMockEngine(mockApp) {
     };
 }
 
-test('DshConfigManager: 默认权限、读写原子性与其它 Patch 保护', async () => {
+test('DshConfigManager: 官方规范 ID 读写、approval 联动、旧配置迁移与原子保护', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-dsh-config-test-'));
     try {
         // 1. 空目录默认返回 workspace-write
         assert.equal(getDshPermissionMode(tmpDir), DEFAULT_PERMISSION_MODE);
 
-        // 2. 模拟文件中已存在其它插件 patch
+        // 2. 模拟文件中已存在其它插件 patch 与旧版非标 sandboxPolicy 配置
         const patchFile = path.join(tmpDir, 'cordis.patch.yml');
         const initialPatches = [
             { id: 'custom-logger', config: { level: 'debug' } },
+            { id: 'sandboxPolicy', config: { mode: 'danger-full-access' } },
         ];
         fs.writeFileSync(patchFile, yaml.stringify(initialPatches), 'utf8');
 
-        // 3. 设置为 danger-full-access
-        setDshPermissionMode('danger-full-access', tmpDir);
+        // 验证兼容读取旧版非标 ID
         assert.equal(getDshPermissionMode(tmpDir), 'danger-full-access');
 
-        // 验证原有的 custom-logger 是否完好保留
-        const afterSet = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
-        assert.equal(afterSet.length, 2);
-        assert.equal(afterSet[0].id, 'custom-logger');
-        assert.equal(afterSet[1].id, 'sandboxPolicy');
-        assert.equal(afterSet[1].config.mode, 'danger-full-access');
+        // 3. 设置为 danger-full-access：平滑清理旧版 sandboxPolicy，规范写入 sandbox-policy 与 approval (never)
+        const changed = setDshPermissionMode('danger-full-access', tmpDir);
+        assert.equal(changed, true, '清理旧标识并规范写入应判定为发生变更');
+        assert.equal(getDshPermissionMode(tmpDir), 'danger-full-access');
 
-        // 4. 切回 workspace-write
-        setDshPermissionMode('workspace-write', tmpDir);
+        const afterSet = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
+        assert.equal(afterSet.length, 3, '应包含 custom-logger, sandbox-policy, approval');
+        assert.equal(afterSet[0].id, 'custom-logger');
+        assert.equal(afterSet[1].id, 'sandbox-policy');
+        assert.equal(afterSet[1].config.mode, 'danger-full-access');
+        assert.equal(afterSet[2].id, 'approval');
+        assert.equal(afterSet[2].config.policy, 'never');
+        assert.ok(!afterSet.some((item) => item.id === 'sandboxPolicy'), '旧版 sandboxPolicy 应被完全移除');
+
+        // 4. 幂等性测试：再次设置相同模式，返回 false 且文件内容保持不变
+        const changedSame = setDshPermissionMode('danger-full-access', tmpDir);
+        assert.equal(changedSame, false, '相同有效配置再次设置应判定为幂等未变更');
+
+        // 5. 切回 workspace-write：sandbox-policy 变为 workspace-write，approval 联动为 ask
+        const changedRevert = setDshPermissionMode('workspace-write', tmpDir);
+        assert.equal(changedRevert, true);
         assert.equal(getDshPermissionMode(tmpDir), 'workspace-write');
 
         const afterRevert = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
-        assert.equal(afterRevert.length, 2);
+        assert.equal(afterRevert.length, 3);
+        assert.equal(afterRevert[1].id, 'sandbox-policy');
         assert.equal(afterRevert[1].config.mode, 'workspace-write');
+        assert.equal(afterRevert[2].id, 'approval');
+        assert.equal(afterRevert[2].config.policy, 'ask');
 
-        // 5. 损坏或非法 YAML 保护：抛出异常并保留原始文件内容，禁止静默覆盖清空
+        // 6. 损坏或非法 YAML 保护：抛出异常并保留原始文件内容，禁止静默覆盖清空
         const corruptedContent = ':::invalid:yaml:content:::';
         fs.writeFileSync(patchFile, corruptedContent, 'utf8');
         assert.throws(
@@ -541,5 +556,83 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         await server.stop();
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('DSH 引擎真实端到端集成：验证 DshConfigManager 写入的规范补丁驱动 DSH 会话生成正确的 preset/mode/policy', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-dsh-e2e-'));
+    try {
+        const profileDir = path.join(tmpHome, '.dsh', 'profiles', 'acp');
+        fs.mkdirSync(profileDir, { recursive: true });
+
+        // 1. 设置为 danger-full-access
+        setDshPermissionMode('danger-full-access', profileDir);
+
+        // 2. 真实启动 DSH 子进程并握手建会话
+        const { spawn } = await import('node:child_process');
+        const { Readable, Writable } = await import('node:stream');
+        const dshBin = path.resolve('node_modules/@deepseek-ai/dsh/lib/bin.js');
+        if (!fs.existsSync(dshBin)) {
+            return; // 缺少真实依赖时平滑跳过
+        }
+
+        const child = spawn(
+            process.execPath,
+            [dshBin, '--profile', 'acp'],
+            {
+                env: {
+                    ...process.env,
+                    HOME: tmpHome,
+                    DSH_PROFILE_DIR: profileDir,
+                    DSH_WORKSPACE: tmpHome,
+                    DSH_PERMISSION_MODE: 'danger-full-access',
+                },
+                stdio: ['pipe', 'pipe', 'pipe'],
+            }
+        );
+
+        const app = acp.client({ name: 'test-e2e-client' });
+        const stdinWeb = Writable.toWeb(child.stdin);
+        const stdoutWeb = Readable.toWeb(child.stdout);
+        const stream = acp.ndJsonStream(stdinWeb, stdoutWeb);
+
+        let sessResult = null;
+        const run = app.connectWith(stream, async (context) => {
+            await context.request('initialize', {
+                protocolVersion: acp.PROTOCOL_VERSION,
+                clientInfo: { name: 'test-e2e', version: '1' }
+            });
+            sessResult = await context.request('session/new', { cwd: tmpHome, mcpServers: {} });
+        });
+
+        const start = Date.now();
+        while (!sessResult && Date.now() - start < 10000) {
+            await new Promise((r) => setTimeout(r, 100));
+        }
+
+        child.kill('SIGTERM');
+        await run.catch(() => {});
+
+        assert.ok(sessResult && sessResult.sessionId, 'DSH 应成功创建新会话');
+
+        // 3. 校验 DSH 会话日志中的权限事件
+        const sessDir = path.join(tmpHome, '.dsh', 'sessions');
+        assert.ok(fs.existsSync(sessDir), 'DSH 会话目录应已创建');
+        const files = fs.readdirSync(sessDir, { recursive: true }).filter((f) => f.endsWith('.jsonl.zstd'));
+        assert.ok(files.length > 0, '应生成 zstd 压缩的 session 日志文件');
+
+        const { execSync } = await import('node:child_process');
+        const logContent = execSync(`zstd -dc ${path.join(sessDir, files[0])}`).toString('utf8');
+        const lines = logContent.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+
+        const presetEvent = lines.find((l) => l.type === 'permission/preset');
+        const modeEvent = lines.find((l) => l.type === 'sandbox/mode');
+        const approvalEvent = lines.find((l) => l.type === 'approval/policy');
+
+        assert.equal(presetEvent?.data?.preset, 'danger-full-access', '预设应为 danger-full-access');
+        assert.equal(modeEvent?.data?.mode, 'danger-full-access', '沙箱模式应为 danger-full-access');
+        assert.equal(approvalEvent?.data?.policy, 'never', '审批策略应为 never 免审批');
+    } finally {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
     }
 });
