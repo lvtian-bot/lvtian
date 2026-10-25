@@ -99,7 +99,15 @@ class SyncService {
                 return { status: 'error', conflictType: null };
             }
 
-            // 情况 B: 哈希匹配 (已同步)
+            // 检查本地物理文件是否存在
+            const localExists = await fsService.exists(filePath);
+            if (!localExists) {
+                // 本地不存在，云端存在 -> 必须从云端重新拉取 (cloudNewer)
+                console.log(`[SyncDebug] ${filePath}: Local file missing on disk -> cloudNewer`);
+                return { status: 'conflict', conflictType: 'cloudNewer', localHash: null, syncedHash, cloudHash };
+            }
+
+            // 情况 B: 哈希匹配 (且本地物理文件存在) (已同步)
             if (localHash === cloudHash) {
                 // 自愈：如果 syncedHash 不匹配，更新它
                 if (syncedHash !== cloudHash) {
@@ -240,7 +248,20 @@ class SyncService {
                 continue;
             }
 
-            // 情况 B: 哈希匹配 (已同步)
+            // 检查本地物理文件是否存在
+            const localExists = await fsService.exists(path);
+
+            // 情况 B: 云端存在，但本地物理文件缺失 -> 兜底强制从云端下载拉回！
+            if (!localExists) {
+                tasks.push(async () => {
+                    console.log(`[BatchSync] ${path}: Local file missing on disk -> Downloading from cloud`);
+                    await this.performDownload(path, options);
+                    results.synced++;
+                });
+                continue;
+            }
+
+            // 情况 C: 本地存在且哈希匹配 (已真正同步)
             if (localHash === cloudHash) {
                 console.log(`[BatchSync] ${path}: Synced (skipped)`);
                 // 自愈 Metadata
@@ -250,9 +271,9 @@ class SyncService {
                 continue;
             }
 
-            // 情况 C: 冲突/更新
+            // 情况 D: 冲突/更新
 
-            // C1: Cloud Newer
+            // D1: Cloud Newer
             if (localHash === syncedHash && syncedHash !== cloudHash) {
                 tasks.push(async () => {
                     console.log(`[BatchSync] ${path}: Cloud update detected -> Downloading`);
@@ -262,7 +283,7 @@ class SyncService {
                 continue;
             }
 
-            // C2: Local Newer
+            // D2: Local Newer
             if (cloudHash === syncedHash && localHash !== syncedHash) {
                 tasks.push(async () => {
                     console.log(`[BatchSync] ${path}: Local update detected -> Uploading`);
@@ -272,19 +293,12 @@ class SyncService {
                 continue;
             }
 
-            // C3: 复杂情况 / 冲突
+            // D3: 复杂情况 / 冲突 (本地存在未受控文件，云端也存在同名文件)
             if (!localMetadata) {
                 tasks.push(async () => {
-                    const exists = await fsService.exists(path);
-                    if (exists) {
-                        console.log(`[BatchSync] ${path}: Conflict (Unmanaged Local + Cloud Exists)`);
-                        results.conflicts++;
-                        results.conflictedFiles.push(path);
-                    } else {
-                        console.log(`[BatchSync] ${path}: New cloud file -> Downloading`);
-                        await this.performDownload(path, options);
-                        results.synced++;
-                    }
+                    console.log(`[BatchSync] ${path}: Conflict (Unmanaged Local + Cloud Exists)`);
+                    results.conflicts++;
+                    results.conflictedFiles.push(path);
                 });
                 continue;
             }

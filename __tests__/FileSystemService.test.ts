@@ -1,16 +1,20 @@
-import { File } from 'expo-file-system';
+import { File, Directory } from 'expo-file-system';
 import { fsService } from '../src/services/FileSystemService';
 
 jest.mock('expo-file-system', () => ({
   Paths: { document: 'file:///documents' },
-  Directory: class {
-    uri = 'file:///documents/lvtian_docs';
-    exists = true;
-  },
+  Directory: jest.fn().mockImplementation((..._args) => ({
+    uri: 'file:///documents/lvtian_docs',
+    exists: true,
+    move: jest.fn(),
+    list: jest.fn().mockReturnValue([]),
+    delete: jest.fn(),
+  })),
   File: jest.fn(),
 }));
 
 const mockFile = jest.mocked(File);
+const mockDirectory = jest.mocked(Directory);
 
 describe('本地文件异步写入', () => {
   afterEach(() => jest.restoreAllMocks());
@@ -36,5 +40,82 @@ describe('本地文件异步写入', () => {
     const log = jest.spyOn(console, 'error').mockImplementation(() => {});
     await expect(fsService.writeFile('note.md', '正文')).rejects.toBe(failure);
     expect(log).toHaveBeenCalledWith('Error writing file:', failure);
+  });
+
+  it('旧沙盒目录存在时能正确触发自动迁移', () => {
+    const oldMove = jest.fn();
+    const oldList = jest.fn().mockReturnValue([]);
+    const oldDelete = jest.fn();
+
+    // 模拟旧目录存在
+    mockDirectory.mockImplementation((parent: any, name?: any) => {
+      if (name === 'mdnote_docs') {
+        return {
+          uri: 'file:///documents/mdnote_docs',
+          exists: true,
+          move: oldMove,
+          list: oldList,
+          delete: oldDelete,
+        } as any;
+      }
+      return {
+        uri: 'file:///documents/lvtian_docs',
+        exists: false,
+        create: jest.fn(),
+      } as any;
+    });
+
+    (fsService as any).rootDir = { uri: 'file:///documents/lvtian_docs', exists: false };
+    (fsService as any).migrateLegacyStorage();
+
+    expect(oldMove).toHaveBeenCalled();
+  });
+
+  it('两端目录均存在且冲突时，递归合并并保留冲突备份，迁空后删除旧目录', () => {
+    const subFileMove = jest.fn();
+    const mockLegacySubFile = { name: 'sub.md', exists: true, move: subFileMove };
+    const subDirDelete = jest.fn();
+    const mockLegacySubDir = Object.assign(
+      Object.create((Directory as any).prototype || {}),
+      {
+        name: 'archive',
+        exists: true,
+        list: jest.fn().mockReturnValueOnce([mockLegacySubFile]).mockReturnValue([]),
+        delete: subDirDelete,
+      }
+    );
+    // 模拟继承 instanceof Directory
+    Object.setPrototypeOf(mockLegacySubDir, Directory.prototype);
+
+    const oldRootDirDelete = jest.fn();
+    const mockOldRootDir = {
+      name: 'mdnote_docs',
+      exists: true,
+      list: jest.fn().mockReturnValueOnce([mockLegacySubDir]).mockReturnValue([]),
+      delete: oldRootDirDelete,
+    };
+
+    mockDirectory.mockImplementation((parent: any, name?: any) => {
+      if (name === 'mdnote_docs') return mockOldRootDir as any;
+      if (name === 'archive') {
+        return {
+          name: 'archive',
+          exists: true, // 目标 archive 目录已存在，触发递归合并
+          list: jest.fn().mockReturnValue([]),
+        } as any;
+      }
+      return { exists: true, list: jest.fn().mockReturnValue([]) } as any;
+    });
+
+    mockFile.mockImplementation(() => ({
+      exists: false,
+    }) as any);
+
+    (fsService as any).rootDir = { uri: 'file:///documents/lvtian_docs', exists: true };
+    (fsService as any).migrateLegacyStorage();
+
+    expect(subFileMove).toHaveBeenCalled();
+    expect(subDirDelete).toHaveBeenCalled();
+    expect(oldRootDirDelete).toHaveBeenCalled();
   });
 });
