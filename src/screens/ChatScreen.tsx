@@ -6,7 +6,6 @@ import {
     StyleSheet,
     TextInput,
     TouchableOpacity,
-    Pressable,
     FlatList,
     ActivityIndicator,
     Alert,
@@ -687,6 +686,11 @@ export const ChatScreen = () => {
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
                 onScrollBeginDrag={() => setIsAttachMenuVisible(false)}
+                onTouchStart={() => {
+                    if (isAttachMenuVisible) {
+                        setIsAttachMenuVisible(false);
+                    }
+                }}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
                 onEndReached={handleLoadEarlier}
@@ -875,14 +879,6 @@ export const ChatScreen = () => {
                 </Animated.View>
             )}
 
-            {/* 点击附件气泡外部任意区域自动收起菜单的透明遮罩 */}
-            {isAttachMenuVisible && (
-                <Pressable
-                    style={styles.attachMenuBackdrop}
-                    onPress={() => setIsAttachMenuVisible(false)}
-                />
-            )}
-
             <KeyboardStickyView
                 style={styles.keyboardSticky}
                 offset={{ opened: tabBarHeight }}
@@ -980,6 +976,9 @@ export const ChatScreen = () => {
                         placeholder={t('assistant.inputPlaceholder', '消息')}
                         placeholderTextColor="#9CA3AF"
                         value={inputContent}
+                        onFocus={() => {
+                            if (isAttachMenuVisible) setIsAttachMenuVisible(false);
+                        }}
                         onChangeText={(text) => {
                             setInputContent(text);
                             if (isAttachMenuVisible) setIsAttachMenuVisible(false);
@@ -994,7 +993,7 @@ export const ChatScreen = () => {
                             onPress={handleSend}
                             activeOpacity={0.8}
                             accessibilityRole="button"
-                            accessibilityLabel={t('assistant.send', '发送')}
+                            accessibilityLabel={t('common.send', '发送')}
                         >
                             <Icon name="arrow-upward" size={18} color="#fff" />
                         </TouchableOpacity>
@@ -1176,15 +1175,6 @@ const styles = StyleSheet.create({
     keyboardSticky: {
         backgroundColor: theme.colors.background,
         zIndex: 20,
-    },
-    attachMenuBackdrop: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'transparent',
-        zIndex: 15,
     },
     upgradingBanner: {
         flexDirection: 'row',
