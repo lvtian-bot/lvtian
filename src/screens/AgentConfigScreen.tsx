@@ -253,19 +253,23 @@ export const AgentConfigScreen = () => {
             <View style={styles.card}>
                 <View style={styles.sectionTitleRow}>
                     <Icon name="psychology" size={20} color={theme.colors.primary} />
-                    <Text style={styles.sectionTitleText}>大模型中枢与执行能力</Text>
+                    <Text style={styles.sectionTitleText}>
+                        {t('settings.agentHubTitle', '大模型中枢与执行能力')}
+                    </Text>
                 </View>
                 <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>执行中枢</Text>
-                    <Text style={styles.infoValue}>DeepSeek Harness (ACP 协议)</Text>
+                    <Text style={styles.infoLabel}>{t('settings.agentHubEngine', '执行中枢')}</Text>
+                    <Text style={styles.infoValue}>{t('settings.agentHubEngineDesc', 'DeepSeek Harness (ACP 协议)')}</Text>
                 </View>
                 <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>长期记忆</Text>
-                    <Text style={styles.infoValue}>SOUL.md / MEMORY.md 持续沉淀</Text>
+                    <Text style={styles.infoLabel}>{t('settings.agentHubMemory', '长期记忆')}</Text>
+                    <Text style={styles.infoValue}>{t('settings.agentHubMemoryDesc', 'SOUL.md / MEMORY.md 持续沉淀')}</Text>
                 </View>
                 <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-                    <Text style={styles.infoLabel}>模型选择</Text>
-                    <Text style={styles.infoValueMuted}>由服务端统一调度 (后续版本支持端侧切换)</Text>
+                    <Text style={styles.infoLabel}>{t('settings.agentHubModel', '模型选择')}</Text>
+                    <Text style={styles.infoValueMuted}>
+                        {t('settings.agentHubModelDesc', '由服务端统一调度 (后续版本支持端侧切换)')}
+                    </Text>
                 </View>
             </View>
         </ScrollView>

@@ -67,7 +67,7 @@ export const AppSettingsScreen = () => {
                     </Text>
                     <View style={styles.previewBubble}>
                         <Text style={[styles.previewHeading, { fontSize: metrics.chatHeading2 }]}>
-                            预览示例文档
+                            {t('settings.previewHeading', '预览示例文档')}
                         </Text>
                         <Text
                             style={[
@@ -78,7 +78,10 @@ export const AppSettingsScreen = () => {
                                 },
                             ]}
                         >
-                            绿天 AI 代理已为您连接。调整字体大小将实时应用于 AI 聊天对话、闪念时间线及 Markdown 笔记预览中。
+                            {t(
+                                'settings.previewBody',
+                                '绿天 AI 代理已为您连接。调整字体大小将实时应用于 AI 聊天对话、闪念时间线及 Markdown 笔记预览中。'
+                            )}
                         </Text>
                     </View>
                 </View>
