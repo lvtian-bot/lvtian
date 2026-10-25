@@ -263,4 +263,67 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue.length).toBe(1);
         expect(state.pendingSendQueue[0].messageId).toBe('m-busy-1');
     });
+
+    test('收到不可恢复的终态失败回执时，移出队列并自动推进下一条排队消息', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-fail-1',
+                    seq: 0,
+                    role: 'user',
+                    content: '将失败的消息',
+                    timestamp: 1000,
+                    status: 'sending',
+                },
+                {
+                    id: 'm-pending-2',
+                    seq: 0,
+                    role: 'user',
+                    content: '排在后面的消息',
+                    timestamp: 1001,
+                    status: 'sending',
+                },
+            ],
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-fail-1', content: '将失败的消息' },
+                { sessionId: 'main', messageId: 'm-pending-2', content: '排在后面的消息' },
+            ],
+        });
+
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
+
+        // 收到服务端终态错误回执（如存储写满/内部异常）
+        handleServerMessage({
+            type: 'message_ack',
+            messageId: 'm-fail-1',
+            seq: 0,
+            status: 'error',
+            error: 'disk_full',
+        });
+
+        const state = useAssistantStore.getState();
+        // 1. 失败消息标红
+        const failedMsg = state.messages.find((m) => m.id === 'm-fail-1');
+        expect(failedMsg?.status).toBe('error');
+        expect(failedMsg?.errorMessage).toBe('disk_full');
+
+        // 2. 失败消息被移出待发队列，释放队首
+        expect(state.pendingSendQueue.length).toBe(1);
+        expect(state.pendingSendQueue[0].messageId).toBe('m-pending-2');
+
+        // 3. 自动触发推进队列中的下一条消息
+        expect(sendRawSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                type: 'chat',
+                messageId: 'm-pending-2',
+                content: '排在后面的消息',
+            })
+        );
+
+        sendRawSpy.mockRestore();
+    });
 });

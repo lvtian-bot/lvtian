@@ -519,9 +519,11 @@ export class AssistantClient {
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
                 });
                 store.setCurrentSeq(msg.seq);
-                // 成功送达服务端，确保移出本地待发队列
-                if (!isError) {
-                    store.removeFromPendingSendQueue(msg.messageId);
+                // 收到服务端终态回执（成功或明确失败）：均移出本地待发队列释放队首
+                store.removeFromPendingSendQueue(msg.messageId);
+                // 若为终态失败回执，后续不会产生任务执行与状态回调，主动推进队列中的下一条积压消息
+                if (isError) {
+                    this.flushPendingSendQueue();
                 }
                 break;
             }
