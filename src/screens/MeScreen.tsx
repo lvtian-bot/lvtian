@@ -6,8 +6,8 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
 
+import { fsService } from '../services/FileSystemService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
@@ -89,35 +89,7 @@ export const MeScreen = () => {
         setAvatarBroken(false);
     }, [userAvatar]);
 
-    const resolveAvatarUri = (value?: string | null): string | undefined => {
-        if (!value) return undefined;
-        if (value.includes('://')) return value;
-        return `${FileSystem.documentDirectory ?? ''}${value}`;
-    };
-
-    const avatarUri = resolveAvatarUri(userAvatar);
-
-    // 将相册图片存入 App 私有沙盒，避免系统清缓存失效
-    const persistAvatarAsync = async (sourceUri: string): Promise<string> => {
-        const filename = `avatar-${Date.now()}.jpg`;
-        await FileSystem.copyAsync({
-            from: sourceUri,
-            to: `${FileSystem.documentDirectory ?? ''}${filename}`,
-        });
-        return filename;
-    };
-
-    const deleteAvatarFileAsync = async (value?: string | null): Promise<void> => {
-        const uri = resolveAvatarUri(value);
-        const docDir = FileSystem.documentDirectory ?? '';
-        if (uri && docDir && uri.startsWith(docDir)) {
-            try {
-                await FileSystem.deleteAsync(uri, { idempotent: true });
-            } catch {
-                // ignore cleanup error
-            }
-        }
-    };
+    const avatarUri = fsService.resolveAvatarUri(userAvatar);
 
     const pickAvatarAsync = async (): Promise<void> => {
         try {
@@ -130,14 +102,14 @@ export const MeScreen = () => {
 
             if (!result.canceled && result.assets && result.assets.length > 0) {
                 const previous = userAvatar;
-                const filename = await persistAvatarAsync(result.assets[0].uri);
+                const filename = await fsService.persistAvatar(result.assets[0].uri);
                 setUserAvatar(filename);
                 if (previous && previous !== filename) {
-                    await deleteAvatarFileAsync(previous);
+                    await fsService.deleteAvatar(previous);
                 }
             }
         } catch (error) {
-            Alert.alert('头像选择失败', String(error));
+            Alert.alert(t('me.avatar.pickFailed', '头像选择失败'), String(error));
         }
     };
 
@@ -145,21 +117,21 @@ export const MeScreen = () => {
         try {
             const current = userAvatar;
             setUserAvatar(undefined);
-            await deleteAvatarFileAsync(current);
+            await fsService.deleteAvatar(current);
         } catch (error) {
-            Alert.alert('清除头像失败', String(error));
+            Alert.alert(t('me.avatar.clearFailed', '清除头像失败'), String(error));
         }
     };
 
     const handleAvatarPress = async () => {
         if (userAvatar) {
             Alert.alert(
-                '绿天助理形象',
+                t('me.avatar.title', '绿天助理形象'),
                 undefined,
                 [
                     { text: t('common.cancel', '取消'), style: 'cancel' },
-                    { text: '从相册更换', onPress: () => { pickAvatarAsync(); } },
-                    { text: '恢复默认形象', style: 'destructive', onPress: () => { clearAvatarAsync(); } },
+                    { text: t('me.avatar.change', '从相册更换'), onPress: () => { pickAvatarAsync(); } },
+                    { text: t('me.avatar.clear', '恢复默认形象'), style: 'destructive', onPress: () => { clearAvatarAsync(); } },
                 ]
             );
         } else {

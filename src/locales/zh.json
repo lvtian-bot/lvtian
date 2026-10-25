@@ -9,6 +9,15 @@
     "settings": "设置",
     "me": "我"
   },
+  "me": {
+    "avatar": {
+      "title": "绿天助理形象",
+      "change": "从相册更换",
+      "clear": "恢复默认形象",
+      "pickFailed": "头像选择失败",
+      "clearFailed": "清除头像失败"
+    }
+  },
   "chat": {
     "placeholderTitle": "绿天个人助理",
     "placeholderDesc": "服务待连接。接通独立服务端后，您可在此持续与助理交流、安排事项并跟进任务进展。",
