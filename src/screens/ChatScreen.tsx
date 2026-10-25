@@ -316,17 +316,20 @@ export const ChatScreen = () => {
     const extraContentPadding = useSharedValue(0);
     const composerHeight = useSharedValue(60);
 
-    // 监听应用切回前台（热启动）：彻底阻止软键盘误触自动弹出
+    // 监听应用切回前台（热启动）：彻底阻止软键盘误触自动弹出，并立即触发长连接极速唤醒
     useEffect(() => {
         const subscription = AppState.addEventListener('change', (nextAppState) => {
             if (nextAppState === 'active') {
                 chatInputRef.current?.blur();
+                AssistantClient.getInstance().handleAppForeground();
             }
         });
         return () => {
             subscription.remove();
         };
     }, []);
+
+
     const handleComposerLayout = useCallback((event: LayoutChangeEvent) => {
         composerHeight.value = event.nativeEvent.layout.height;
     }, [composerHeight]);

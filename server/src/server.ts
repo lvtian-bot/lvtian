@@ -409,6 +409,9 @@ export class LvtianServer {
     }
 
     private handleClientMessage(ws: AuthenticatedSocket, msg: ClientMessage): void {
+        // 收到客户端任何上行报文均标记连接存活，避免被心跳检测误杀
+        ws.isAlive = true;
+
         // 未认证拦截
         if (!ws.isAuthenticated && msg.type !== 'auth') {
             this.send(ws, {
