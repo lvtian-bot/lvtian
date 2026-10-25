@@ -52,9 +52,11 @@ export function getDshPermissionMode(customDir?: string): DshPermissionMode {
 }
 
 /**
- * 将沙箱权限模式原子写入 DSH profile 的 cordis.patch.yml 配置文件中
+ * 将沙箱权限模式原子写入 DSH profile 的 cordis.patch.yml 配置文件中。
+ * 返回 boolean：true 表示配置发生变更并已写入，false 表示现有有效配置已与目标模式一致（无需重新写入与交接）。
+ * 若现有配置文件损坏或不可读，立即抛出异常以保护既有配置，绝不进行隐式回退或误判为幂等未变更。
  */
-export function setDshPermissionMode(mode: DshPermissionMode, customDir?: string): void {
+export function setDshPermissionMode(mode: DshPermissionMode, customDir?: string): boolean {
     const filePath = resolveDshProfilePatchPath(customDir);
     const parentDir = path.dirname(filePath);
 
@@ -86,11 +88,17 @@ export function setDshPermissionMode(mode: DshPermissionMode, customDir?: string
 
     if (patchIdx >= 0) {
         const existing = parsed[patchIdx] as { id: string; config?: Record<string, unknown> };
+        if (existing.config?.mode === mode) {
+            return false;
+        }
         existing.config = {
             ...(existing.config || {}),
             mode,
         };
     } else {
+        if (!fs.existsSync(filePath) && mode === DEFAULT_PERMISSION_MODE) {
+            return false;
+        }
         parsed.push({
             id: 'sandboxPolicy',
             config: {
@@ -105,6 +113,7 @@ export function setDshPermissionMode(mode: DshPermissionMode, customDir?: string
     try {
         fs.writeFileSync(tmpFile, newYaml, { encoding: 'utf8', mode: 0o644 });
         fs.renameSync(tmpFile, filePath);
+        return true;
     } catch (err) {
         try {
             if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);

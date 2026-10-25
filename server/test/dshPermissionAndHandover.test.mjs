@@ -429,6 +429,21 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         const updatedData = await getUpdated.json();
         assert.equal(updatedData.permissionMode, 'danger-full-access');
 
+        // 8. 配置文件损坏时 POST 请求应返回 500，绝不走 changed: false 假阳性误判
+        const patchFile = path.join(dshProfileDir, 'cordis.patch.yml');
+        fs.writeFileSync(patchFile, ':::corrupted:yaml:::', 'utf8');
+        const postCorruptRes = await fetch(`${baseUrl}/api/permission`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ permissionMode: 'workspace-write' }),
+        });
+        assert.equal(postCorruptRes.status, 500);
+        const corruptData = await postCorruptRes.json();
+        assert.ok(corruptData.error.includes('读取或解析现有 DSH 配置文件失败'));
+
         await server.stop();
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
