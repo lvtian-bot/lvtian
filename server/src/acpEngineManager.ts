@@ -8,6 +8,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
 import { ToolCallState, ApprovalRequest } from './protocol.js';
+import type { ContextConsolidator } from './contextConsolidator.js';
 
 /**
  * 引擎模块用户可见消息的错误码：客户端按码本地化渲染（i18n），码值是持久化与流式的稳定契约。
@@ -57,6 +58,8 @@ export interface AcpEngineManagerOptions {
     minCapacityRatio?: number;
     /** 引擎连接工厂，默认 spawn dsh --profile acp；测试注入进程内模拟连接 */
     connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+    /** 上下文提炼整合器（用于主动交接、权限切换时即时提炼心智备忘录） */
+    contextConsolidator?: ContextConsolidator;
 }
 
 /** 会话任务运行时状态：一次 prompt 执行期间的聚合上下文 */
@@ -294,6 +297,7 @@ export class AcpEngineManager {
     private idleTimeoutMs: number;
     private minCapacityRatio: number;
     private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+    private contextConsolidator: ContextConsolidator | null = null;
 
     private connection: EngineConnection | null = null;
     private engineStarting: Promise<void> | null = null;
@@ -338,6 +342,47 @@ export class AcpEngineManager {
             ?? (Number.isFinite(envRatio) && envRatio > 0 ? envRatio : 0.2);
 
         this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
+        this.contextConsolidator = options?.contextConsolidator ?? null;
+    }
+
+    public setContextConsolidator(cc: ContextConsolidator): void {
+        this.contextConsolidator = cc;
+    }
+
+    /**
+     * 统一会话交接流水线 (Handover Pipeline)：
+     * 用于主动切换权限、任务重置或交接换新时，即时提炼对话心智备忘录，注销旧 DSH 会话并回收引擎连接，
+     * 下一轮交互到达时将自动以新会话启动并全量注入前文备忘录与上下文。
+     */
+    public async triggerHandover(sessionId: string, reason: string): Promise<void> {
+        console.log(`[AcpEngine] 会话 ${sessionId} 触发会话交接 (原因: ${reason})`);
+
+        // 1. 若当前会话正在运行，先停止任务
+        if (this.isRunning(sessionId)) {
+            this.stop(sessionId);
+        }
+
+        // 2. 即时执行心智提炼，生成《心智接力备忘录》
+        if (this.contextConsolidator) {
+            try {
+                await this.contextConsolidator.consolidateNow(sessionId);
+            } catch (err) {
+                console.warn(`[AcpEngine] 交接即时提炼异常 (已容错): ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }
+
+        // 3. 标记待交接状态，确保新会话启动时无条件注入心智备忘录与原文锚定
+        this.sessionManager.setHandoffPending(sessionId, true);
+
+        // 4. 清除旧 DSH 会话绑定与索引
+        const saved = this.sessionManager.getDshSessionId(sessionId);
+        if (saved) {
+            this.engineSessionIndex.delete(saved);
+        }
+        this.sessionManager.setDshSessionId(sessionId, '');
+
+        // 5. 回收旧引擎连接，使下一次交互时能重新加载最新 DSH 启动配置
+        this.reclaimConnection();
     }
 
     public isRunning(sessionId: string): boolean {

@@ -22,10 +22,13 @@ import { AssistantClient } from '../services/AssistantClient';
 export const AssistantConfigScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation();
-    const { serverUrl, serverToken, setServerConfig } = useAssistantStore();
+    const { serverUrl, serverToken, setServerConfig, permissionMode, setPermissionMode } = useAssistantStore();
 
     const [url, setUrl] = useState(serverUrl);
     const [token, setToken] = useState(serverToken);
+    const [selectedMode, setSelectedMode] = useState<'workspace-write' | 'danger-full-access'>(
+        permissionMode || 'workspace-write'
+    );
     const [showToken, setShowToken] = useState(false);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -34,7 +37,18 @@ export const AssistantConfigScreen = () => {
     useEffect(() => {
         setUrl(serverUrl);
         setToken(serverToken);
-    }, [serverUrl, serverToken]);
+        if (permissionMode) {
+            setSelectedMode(permissionMode);
+        }
+        if (serverUrl && serverToken) {
+            AssistantClient.fetchPermissionMode(serverUrl, serverToken).then((remoteMode) => {
+                if (remoteMode) {
+                    setSelectedMode(remoteMode);
+                    setPermissionMode(remoteMode);
+                }
+            });
+        }
+    }, [serverUrl, serverToken, permissionMode, setPermissionMode]);
 
     const handlePasteFromClipboard = async () => {
         try {
@@ -68,10 +82,37 @@ export const AssistantConfigScreen = () => {
 
         const res = await AssistantClient.testConnection(url, token);
         setTesting(false);
+        if (res.permissionMode) {
+            setSelectedMode(res.permissionMode);
+            setPermissionMode(res.permissionMode);
+        }
         setTestResult({
             success: res.success,
             message: res.message + (res.version ? ` (v${res.version})` : ''),
         });
+    };
+
+    const handleSelectMode = (mode: 'workspace-write' | 'danger-full-access') => {
+        if (mode === selectedMode) return;
+        if (mode === 'danger-full-access') {
+            Alert.alert(
+                t('assistant.permissionDangerAlertTitle', '确认切换至完全权限？'),
+                t(
+                    'assistant.permissionDangerAlertContent',
+                    '切换后助理将拥有当前服务器用户的所有执行权限，并为您即时生成当前对话的心智备忘录以接力新会话。是否继续？'
+                ),
+                [
+                    { text: t('common.cancel', '取消'), style: 'cancel' },
+                    {
+                        text: t('common.confirm', '确认切换'),
+                        style: 'destructive',
+                        onPress: () => setSelectedMode('danger-full-access'),
+                    },
+                ]
+            );
+        } else {
+            setSelectedMode('workspace-write');
+        }
     };
 
     const handleSave = async () => {
@@ -87,6 +128,13 @@ export const AssistantConfigScreen = () => {
         setSaving(true);
         try {
             await setServerConfig(url, token);
+            // 同步权限模式至服务端并完成必要会话交接
+            try {
+                await AssistantClient.updatePermissionMode(url, token, selectedMode);
+                setPermissionMode(selectedMode);
+            } catch (permErr) {
+                console.warn('[AssistantConfig] 同步权限模式失败 (非致命):', permErr);
+            }
             // 强制重新发起长连接
             AssistantClient.getInstance().connect(true);
             setSaving(false);
@@ -178,6 +226,98 @@ export const AssistantConfigScreen = () => {
                     <Text style={styles.hint}>
                         {t('assistant.tokenHint', '令牌将加密保存在手机安全存储（SecureStore）中')}
                     </Text>
+                </View>
+
+                {/* 助理执行权限设置 */}
+                <View style={styles.permissionCard}>
+                    <View style={styles.sectionTitleRow}>
+                        <Icon name="security" size={20} color={theme.colors.primary} />
+                        <Text style={styles.sectionTitleText}>
+                            {t('assistant.permissionTitle', '助理执行权限')}
+                        </Text>
+                    </View>
+
+                    {/* 选项 1：安全工作区模式 */}
+                    <TouchableOpacity
+                        style={[
+                            styles.modeOption,
+                            selectedMode === 'workspace-write' && styles.modeOptionSelected,
+                        ]}
+                        onPress={() => handleSelectMode('workspace-write')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.modeRadio}>
+                            <View
+                                style={[
+                                    styles.radioOuter,
+                                    selectedMode === 'workspace-write' && styles.radioOuterActive,
+                                ]}
+                            >
+                                {selectedMode === 'workspace-write' && <View style={styles.radioInner} />}
+                            </View>
+                        </View>
+                        <View style={styles.modeTextWrap}>
+                            <View style={styles.modeHeaderRow}>
+                                <Text
+                                    style={[
+                                        styles.modeTitle,
+                                        selectedMode === 'workspace-write' && styles.modeTitleActive,
+                                    ]}
+                                >
+                                    {t('assistant.permissionWorkspace', '安全工作区模式')}
+                                </Text>
+                                <View style={styles.recommendedBadge}>
+                                    <Text style={styles.recommendedBadgeText}>
+                                        {t('common.recommended', '推荐')}
+                                    </Text>
+                                </View>
+                            </View>
+                            <Text style={styles.modeDesc}>
+                                {t(
+                                    'assistant.permissionWorkspaceDesc',
+                                    '助理仅在专属工作区目录内读写，敏感操作需手动审批。适合日常文档笔记与安全优先场景。'
+                                )}
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
+
+                    {/* 选项 2：完全权限模式 */}
+                    <TouchableOpacity
+                        style={[
+                            styles.modeOption,
+                            selectedMode === 'danger-full-access' && styles.modeOptionSelected,
+                            styles.modeOptionMarginTop,
+                        ]}
+                        onPress={() => handleSelectMode('danger-full-access')}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.modeRadio}>
+                            <View
+                                style={[
+                                    styles.radioOuter,
+                                    selectedMode === 'danger-full-access' && styles.radioOuterActive,
+                                ]}
+                            >
+                                {selectedMode === 'danger-full-access' && <View style={styles.radioInner} />}
+                            </View>
+                        </View>
+                        <View style={styles.modeTextWrap}>
+                            <Text
+                                style={[
+                                    styles.modeTitle,
+                                    selectedMode === 'danger-full-access' && styles.modeTitleActive,
+                                ]}
+                            >
+                                {t('assistant.permissionDanger', '完全权限模式')}
+                            </Text>
+                            <Text style={styles.modeDesc}>
+                                {t(
+                                    'assistant.permissionDangerDesc',
+                                    '助理具备服务器完整执行能力，跨目录与系统命令免审批。切换时将自动提炼对话备忘录无缝接力。适合系统运维与开发场景。'
+                                )}
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
                 </View>
 
                 {/* 测试结果提示 */}
@@ -383,5 +523,94 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 15,
         fontWeight: '600',
+    },
+    permissionCard: {
+        backgroundColor: theme.colors.surface,
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+        elevation: 1,
+    },
+    sectionTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 14,
+    },
+    sectionTitleText: {
+        fontSize: 15,
+        fontWeight: 'bold',
+        color: theme.colors.text,
+        marginLeft: 8,
+    },
+    modeOption: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        padding: 12,
+        borderRadius: 10,
+        borderWidth: 1.5,
+        borderColor: '#e0e0e0',
+        backgroundColor: theme.colors.background,
+    },
+    modeOptionMarginTop: {
+        marginTop: 10,
+    },
+    modeOptionSelected: {
+        borderColor: theme.colors.primary,
+        backgroundColor: '#f1f8e9',
+    },
+    modeRadio: {
+        marginTop: 2,
+        marginRight: 10,
+    },
+    radioOuter: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        borderWidth: 2,
+        borderColor: theme.colors.textSecondary,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    radioOuterActive: {
+        borderColor: theme.colors.primary,
+    },
+    radioInner: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: theme.colors.primary,
+    },
+    modeTextWrap: {
+        flex: 1,
+    },
+    modeHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    modeTitle: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: theme.colors.text,
+    },
+    modeTitleActive: {
+        color: theme.colors.primary,
+    },
+    recommendedBadge: {
+        backgroundColor: '#c8e6c9',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        marginLeft: 8,
+    },
+    recommendedBadgeText: {
+        fontSize: 11,
+        color: '#2e7d32',
+        fontWeight: 'bold',
+    },
+    modeDesc: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        marginTop: 4,
+        lineHeight: 18,
     },
 });

@@ -50,7 +50,7 @@ export class AssistantClient {
     public static async testConnection(
         serverUrl: string,
         token: string
-    ): Promise<{ success: boolean; message: string; version?: string }> {
+    ): Promise<{ success: boolean; message: string; version?: string; permissionMode?: 'workspace-write' | 'danger-full-access' }> {
         const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
         // 自动将 ws/wss 协议头转换为 fetch 支持的 http/https 协议头
         const httpUrl = cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
@@ -95,10 +95,15 @@ export class AssistantClient {
                 return { success: false, message: `${i18n.t('assistant.authFailed', '鉴权验证失败')} (${infoRes.status})` };
             }
 
+            const infoData = (await infoRes.json().catch(() => ({}))) as {
+                permissionMode?: 'workspace-write' | 'danger-full-access';
+            };
+
             return {
                 success: true,
                 message: i18n.t('assistant.testSuccess', '连接成功'),
                 version: healthData.version,
+                permissionMode: infoData.permissionMode,
             };
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -106,6 +111,62 @@ export class AssistantClient {
                 return { success: false, message: i18n.t('assistant.connectionTimeout', '连接超时，请检查服务是否启动或网络可达性') };
             }
             return { success: false, message: `${i18n.t('assistant.connectionFailed', '网络连接失败')}: ${msg}` };
+        }
+    }
+
+    /**
+     * 查询服务端当前 DSH 权限模式
+     */
+    public static async fetchPermissionMode(
+        serverUrl: string,
+        token: string
+    ): Promise<'workspace-write' | 'danger-full-access' | null> {
+        const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
+        const httpUrl = cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+        if (!httpUrl || !token) return null;
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const res = await fetch(`${httpUrl}/api/permission`, {
+                headers: { Authorization: `Bearer ${token.trim()}` },
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (!res.ok) return null;
+            const data = (await res.json()) as { permissionMode?: 'workspace-write' | 'danger-full-access' };
+            return data.permissionMode ?? 'workspace-write';
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * 修改服务端 DSH 权限模式并触发统一会话交接
+     */
+    public static async updatePermissionMode(
+        serverUrl: string,
+        token: string,
+        mode: 'workspace-write' | 'danger-full-access'
+    ): Promise<boolean> {
+        const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
+        const httpUrl = cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+        if (!httpUrl || !token) return false;
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const res = await fetch(`${httpUrl}/api/permission`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token.trim()}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ permissionMode: mode }),
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            return res.ok;
+        } catch {
+            return false;
         }
     }
 
