@@ -574,6 +574,10 @@ export const ChatScreen = () => {
                 return;
             }
         }
+        // 关键修复：重发前先从本地状态中移除该条失败消息，避免重发后列表中残留重复的失败气泡与红感叹号
+        useAssistantStore.getState().removeMessage(item.id);
+        const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+        flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
         AssistantClient.getInstance().sendMessage(item.content, attachments);
     }, [t]);
 
