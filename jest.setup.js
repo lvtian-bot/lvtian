@@ -8,6 +8,8 @@ jest.mock('react-native-reanimated', () => {
     default: { createAnimatedComponent },
     createAnimatedComponent,
     useSharedValue: (value) => ({ value }),
+    useAnimatedStyle: (fn) => fn(),
+    interpolate: (_value, _input, output) => output[0] ?? 0,
     withTiming: (value) => value,
   };
 });
