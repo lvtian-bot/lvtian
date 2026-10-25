@@ -8,15 +8,17 @@ export interface ContextConsolidatorOptions {
     apiKey?: string;
     /** 模型接口 Base URL，默认根据提供方匹配 https://api.deepseek.com 或 https://api.openai.com */
     baseUrl?: string;
-    /** 模型名称，默认根据提供方匹配 deepseek-chat 或 gpt-4o-mini */
+    /** 模型名称，默认根据提供方匹配 deepseek-flash 或 gpt-4o-mini；可用 DEEPSEEK_MODEL 覆盖 */
     model?: string;
     /** 外置提示词模板文件绝对路径，默认指向 server/prompts/context_consolidation.md */
     promptPath?: string;
-    /** 判定空闲超时门禁（毫秒），默认 3 小时 (10800000ms) */
+    /** 判定空闲超时门禁（毫秒），默认 3 小时 (10800000ms)，即「满 3h 才轮换」的生效点 */
     idleTimeoutMs?: number;
+    /** 提炼提前量（毫秒）：在轮换门禁前多久开始预生成提要，默认 5 分钟 (300000ms) */
+    consolidationLeadMs?: number;
     /** 判定容量门禁（上下文窗口占比），默认 0.2 (20%) */
     minCapacityRatio?: number;
-    /** 提炼输入对话文本的最大字符预算，默认 50,000 字符，预留上下文与输出容量 */
+    /** 单次提炼调用的输入字符上限，默认 500,000 字符；正常会话整段一次发完，仅极端超长时才有必要分段 */
     maxDialogueChars?: number;
     /** 测试注入自定义 fetch 实现 */
     fetchFn?: typeof fetch;
@@ -37,7 +39,7 @@ export function resolveProviderConfig(
             Boolean(options.model?.toLowerCase().startsWith('gpt')) ||
             Boolean(options.baseUrl && options.baseUrl.includes('openai.com'));
         const defaultBaseUrl = isOpenAiHint ? 'https://api.openai.com' : 'https://api.deepseek.com';
-        const defaultModel = isOpenAiHint ? 'gpt-4o-mini' : 'deepseek-chat';
+        const defaultModel = isOpenAiHint ? 'gpt-4o-mini' : 'deepseek-flash';
         return {
             apiKey: options.apiKey,
             baseUrl: options.baseUrl ?? defaultBaseUrl,
@@ -50,7 +52,7 @@ export function resolveProviderConfig(
         return {
             apiKey: process.env.DEEPSEEK_API_KEY,
             baseUrl: options.baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com',
-            model: options.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
+            model: options.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-flash',
         };
     }
 
@@ -142,23 +144,33 @@ export class ContextConsolidator {
         return this.cachedPrompt;
     }
 
-    /** 检查会话是否达到双重门禁（时间 3h AND 容量 20%，执行中或等待审批的任务排除） */
+    /** 检查会话是否到达「预生成」时点（轮换门禁前 5 分钟 AND 容量 20%，执行中或等待审批的任务排除） */
     public isEligible(sessionId: string): boolean {
         const session = this.sessionManager.getOrCreateSession(sessionId);
         if (session.taskState === 'processing' || session.taskState === 'awaiting_approval') {
             return false;
         }
-        const idleMs = this.options.idleTimeoutMs ?? (
+        const gateMs = this.options.idleTimeoutMs ?? (
             process.env.LVTIAN_SESSION_IDLE_MS
                 ? parseInt(process.env.LVTIAN_SESSION_IDLE_MS, 10)
                 : 3 * 60 * 60 * 1000
+        );
+        const leadMs = this.options.consolidationLeadMs ?? (
+            process.env.LVTIAN_CONSOLIDATION_LEAD_MS
+                ? parseInt(process.env.LVTIAN_CONSOLIDATION_LEAD_MS, 10)
+                : 5 * 60 * 1000
         );
         const ratio = this.options.minCapacityRatio ?? (
             process.env.LVTIAN_SESSION_CAPACITY_RATIO
                 ? parseFloat(process.env.LVTIAN_SESSION_CAPACITY_RATIO)
                 : 0.2
         );
-        return this.sessionManager.isRotationEligible(sessionId, idleMs, ratio);
+        // 预生成时点 = 轮换门禁 - 提前量；真正换会话仍由 3h 门禁在用户发问时判定。
+        // 提前量最多占门禁的一半，防止把门禁配得很短时（测试或临时调参）所有会话一上来就命中
+        const effectiveLeadMs = Math.min(leadMs, Math.floor(gateMs / 2));
+        const consolidationStartMs = Math.max(0, gateMs - effectiveLeadMs);
+        return this.sessionManager.isIdle(sessionId, consolidationStartMs)
+            && this.sessionManager.isCapacityOver(sessionId, ratio);
     }
 
     /**
@@ -196,11 +208,7 @@ export class ContextConsolidator {
                 return null;
             }
 
-            const dialogue = this.sessionManager.getRecentDialogue(
-                sessionId,
-                30,
-                this.options.maxDialogueChars ?? 50_000
-            );
+            const dialogue = this.sessionManager.getSessionSpanDialogue(sessionId);
             if (!dialogue || dialogue.trim().length === 0) {
                 return null;
             }
@@ -220,39 +228,78 @@ export class ContextConsolidator {
             const endpoint = normalizeChatCompletionsUrl(providerConfig.baseUrl);
 
             const fetchFn = this.options.fetchFn ?? globalThis.fetch;
-            const res = await fetchFn(endpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${providerConfig.apiKey}`,
-                },
-                body: JSON.stringify({
-                    model: providerConfig.model,
-                    messages: [
-                        { role: 'system', content: promptTemplate },
-                        {
-                            role: 'user',
-                            content: `以下是近期主人与助手的真实交流记录：\n\n${dialogue}\n\n请严格按要求提炼一份300~500字的心智接力备忘录。`,
-                        },
-                    ],
-                    temperature: 0.3,
-                    max_tokens: 1000,
-                }),
-                signal: AbortSignal.timeout(30000),
-            });
-
-            if (!res.ok) {
-                const text = await res.text().catch(() => '');
-                console.warn(`[ContextConsolidator] 提炼请求失败 (${res.status}): ${text.slice(0, 200)}`);
-                return null;
-            }
-
-            const data = (await res.json()) as {
-                choices?: Array<{ message?: { content?: string } }>;
+            const callModel = async (userContent: string): Promise<string | null> => {
+                const res = await fetchFn(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${providerConfig.apiKey}`,
+                    },
+                    body: JSON.stringify({
+                        model: providerConfig.model,
+                        messages: [
+                            { role: 'system', content: promptTemplate },
+                            { role: 'user', content: userContent },
+                        ],
+                        temperature: 0.3,
+                        max_tokens: 1000,
+                    }),
+                    signal: AbortSignal.timeout(30000),
+                });
+                if (!res.ok) {
+                    const text = await res.text().catch(() => '');
+                    console.warn(`[ContextConsolidator] 提炼请求失败 (${res.status}): ${text.slice(0, 200)}`);
+                    return null;
+                }
+                const data = (await res.json()) as {
+                    choices?: Array<{ message?: { content?: string } }>;
+                };
+                const content = data.choices?.[0]?.message?.content?.trim();
+                if (!content) {
+                    console.warn('[ContextConsolidator] 模型未返回有效提要内容');
+                    return null;
+                }
+                return content;
             };
-            const extracted = data.choices?.[0]?.message?.content?.trim();
+
+            const sessionChanged = (): boolean => {
+                const currentSession = this.sessionManager.getOrCreateSession(sessionId);
+                return currentSession.taskState === 'processing'
+                    || currentSession.taskState === 'awaiting_approval'
+                    || this.sessionManager.getLastActiveAt(sessionId) !== startLastActiveAt
+                    || currentSession.currentSeq !== startSeq
+                    || currentSession.dshSessionId !== startDshSessionId;
+            };
+
+            const chunkChars = this.options.maxDialogueChars ?? 500_000;
+            const chunks = splitDialogueByChars(dialogue, chunkChars);
+            let extracted: string | null;
+
+            if (chunks.length === 1) {
+                extracted = await callModel(
+                    `以下是本次会话的完整交流记录：\n\n${dialogue}\n\n请严格按要求提炼一份300~500字的心智接力备忘录。`
+                );
+            } else {
+                console.log(`[ContextConsolidator] 会话 ${sessionId} 文本 ${dialogue.length} 字符，超过单次上限，分 ${chunks.length} 段提炼`);
+                const partials: string[] = [];
+                for (let i = 0; i < chunks.length; i++) {
+                    if (sessionChanged()) {
+                        console.log(`[ContextConsolidator] 会话 ${sessionId} 分段提炼途中产生新交互或发生轮换，放弃本次提炼`);
+                        return null;
+                    }
+                    const partial = await callModel(
+                        `以下是同一段长会话的第 ${i + 1}/${chunks.length} 部分。请只提炼这一部分中值得交接的事实、已定结论、未竟事项和主人的要求，不要臆测其他部分：\n\n${chunks[i]}\n\n输出 200~400 字的局部备忘。`
+                    );
+                    if (!partial) {
+                        return null;
+                    }
+                    partials.push(partial);
+                }
+                extracted = await callModel(
+                    `以下是同一段长会话各部分提炼出的局部备忘，请合并为一份完整的 300~500 字心智接力备忘录：保留所有仍然有效的结论与未竟事项，去掉重复，不要新增原文没有的内容。\n\n${partials.join('\n\n---\n\n')}`
+                );
+            }
             if (!extracted) {
-                console.warn('[ContextConsolidator] 模型未返回有效提要内容');
                 return null;
             }
 
@@ -280,4 +327,38 @@ export class ContextConsolidator {
             this.inFlight.delete(sessionId);
         }
     }
+}
+
+/** 按字符预算切分对话文本，优先在消息边界（空行）处断开；单条超长消息退化为硬切 */
+function splitDialogueByChars(text: string, maxChars: number): string[] {
+    const budget = Math.max(1, maxChars);
+    if (text.length <= budget) {
+        return [text];
+    }
+    const chunks: string[] = [];
+    let current = '';
+    for (const block of text.split('\n\n')) {
+        const candidate = current ? `${current}\n\n${block}` : block;
+        if (candidate.length <= budget) {
+            current = candidate;
+            continue;
+        }
+        if (current) {
+            chunks.push(current);
+            current = '';
+        }
+        if (block.length <= budget) {
+            current = block;
+        } else {
+            for (let i = 0; i < block.length; i += budget) {
+                const piece = block.slice(i, i + budget);
+                if (piece.length === budget) chunks.push(piece);
+                else current = piece;
+            }
+        }
+    }
+    if (current) {
+        chunks.push(current);
+    }
+    return chunks.length > 0 ? chunks : [text];
 }
