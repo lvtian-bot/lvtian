@@ -208,7 +208,7 @@ export class ContextConsolidator {
                 return null;
             }
 
-            const dialogue = this.sessionManager.getSessionSpanDialogue(sessionId);
+            const dialogue = this.sessionManager.getHistoryDialogue(sessionId);
             if (!dialogue || dialogue.trim().length === 0) {
                 return null;
             }
@@ -271,7 +271,10 @@ export class ContextConsolidator {
                     || currentSession.dshSessionId !== startDshSessionId;
             };
 
-            const chunkChars = this.options.maxDialogueChars ?? 500_000;
+            // 单次输入预算随提炼提供方的有效窗口收缩：OpenAI 兜底模型窗口 128k，
+            // 中文按约 1 字符/token 保守估算并留 40% 给模板与输出，避免请求被窗口拒绝
+            const providerBudget = providerConfig.baseUrl.includes('openai.com') ? 76_800 : 500_000;
+            const chunkChars = this.options.maxDialogueChars ?? providerBudget;
             const chunks = splitDialogueByChars(dialogue, chunkChars);
             let extracted: string | null;
 

@@ -21,6 +21,8 @@ export interface SessionData {
     contextWindowSize?: number;
     /** 当前 DSH 实例建立时的 seq 起点，用于无 usage_update 时准确估算新会话增量 */
     activeSessionStartSeq?: number;
+    /** 轮换已开始但接力上下文尚未成功交付（用于失败重试时保留摘要，不被提前唤醒逻辑丢弃） */
+    handoffPending?: boolean;
 }
 
 /**
@@ -63,7 +65,8 @@ type SessionLogEvent =
     | { t: 'dsh'; at: number; dshSessionId: string }
     | { t: 'seq'; at: number; seq: number }
     | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
-    | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number };
+    | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number }
+    | { t: 'handoff'; at: number; handoffPending: boolean };
 
 const ACTIVE_LOG = 'events.jsonl';
 const SEGMENT_PREFIX = 'seg.';
@@ -145,6 +148,7 @@ export class SessionManager {
             contextTokens: undefined,
             contextWindowSize: undefined,
             activeSessionStartSeq: 0,
+            handoffPending: false,
         };
     }
 
@@ -404,6 +408,10 @@ export class SessionManager {
                 session.contextTokens = ev.contextTokens;
                 if (ev.contextWindowSize !== undefined) session.contextWindowSize = ev.contextWindowSize;
                 if (ev.activeSessionStartSeq !== undefined) session.activeSessionStartSeq = ev.activeSessionStartSeq;
+                session.updatedAt = ev.at;
+                break;
+            case 'handoff':
+                session.handoffPending = ev.handoffPending;
                 session.updatedAt = ev.at;
                 break;
         }
@@ -927,17 +935,30 @@ export class SessionManager {
         }
     }
 
-    /**
-     * 取当前 DSH 会话周期内的全部对话（自上次轮换起），供后台提炼。
-     * 提要是对整段会话的压缩，只取最近 N 条会让早期共识直接丢失；
-     * 输入过长时由调用方分段提炼再合并，而不是在这里截断尾部。
-     */
-    public getSessionSpanDialogue(sessionId: string): string {
+    /** 标记/清除「轮换已开始但接力上下文尚未交付」的状态（随事件日志持久化） */
+    public setHandoffPending(sessionId: string, pending: boolean, at = Date.now()): void {
         const session = this.getOrCreateSession(sessionId);
-        const startSeq = session.activeSessionStartSeq ?? 0;
+        if (session.handoffPending === pending) {
+            return;
+        }
+        session.handoffPending = pending;
+        session.updatedAt = at;
+        this.appendEvent(sessionId, { t: 'handoff', at, handoffPending: pending });
+    }
+
+    public isHandoffPending(sessionId: string): boolean {
+        return this.getOrCreateSession(sessionId).handoffPending === true;
+    }
+
+    /**
+     * 取服务端保存的全部对话历史，供后台提炼。
+     * 提要是对会话的压缩，只取最近 N 条（或只取当前 DSH 周期）会让早期共识直接丢失；
+     * 输入过长时由调用方分段提炼再合并，而不是在这里截断。
+     */
+    public getHistoryDialogue(sessionId: string): string {
+        const session = this.getOrCreateSession(sessionId);
         const lines: string[] = [];
         for (const m of session.messages) {
-            if ((m.seq ?? 0) < startSeq) continue;
             if (m.role !== 'user' && m.role !== 'assistant') continue;
             if (!m.content || !m.content.trim()) continue;
             if (m.status === 'error') continue;

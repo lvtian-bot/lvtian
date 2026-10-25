@@ -708,6 +708,37 @@ test('提炼覆盖整段会话：最早的结论不会因为消息条数被丢�
     }
 });
 
+test('提炼读取服务端全部历史：轮换前的对话不会被排除', async () => {
+    const tmpDir = createTempDir('lvtian-history-dialogue-');
+    try {
+        const sm = new SessionManager(tmpDir);
+        sm.addMessage('main', { id: 'u-old', role: 'user', content: '很早以前定下的暗号是青竹', timestamp: 1, status: 'sent' });
+        sm.addMessage('main', { id: 'a-old', role: 'assistant', content: '记住了', timestamp: 2, status: 'done' });
+        // 模拟发生了一次轮换：之后的提炼若按 activeSessionStartSeq 截断，就会漏掉上面的历史
+        sm.resetSessionUsage('main', 99);
+        sm.addMessage('main', { id: 'u-new', role: 'user', content: '轮换后的新话题', timestamp: 3, status: 'sent' });
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
+        sm.setUsage('main', 40000, 128000);
+
+        let captured = '';
+        const consolidator = new ContextConsolidator(sm, {
+            apiKey: 'sk-test',
+            fetchFn: async (_url, init) => {
+                captured = JSON.parse(init.body).messages[1].content;
+                return new Response(JSON.stringify({
+                    choices: [{ message: { content: '完整历史提要' } }],
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            },
+        });
+
+        await consolidator.consolidate('main');
+        assert.ok(captured.includes('暗号是青竹'), '轮换前的历史必须进入提炼输入');
+        assert.ok(captured.includes('轮换后的新话题'));
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
 test('超长会话分段提炼再合并：不截断、不丢中间内容', async () => {
     const tmpDir = createTempDir('lvtian-span-chunk-');
     try {
@@ -790,6 +821,7 @@ test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支�
         const sm = new SessionManager(tmpDir);
         let shouldFailPrompt = true;
 
+        const prompts = [];
         const mockEngine = acp.agent({ name: 'mock-failing-engine' })
             .onRequest(acp.methods.agent.initialize, () => ({
                 protocolVersion: acp.PROTOCOL_VERSION,
@@ -798,6 +830,7 @@ test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支�
             .onRequest(acp.methods.agent.authenticate, () => ({}))
             .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'engine-new-1' }))
             .onRequest(acp.methods.agent.session.prompt, async (c) => {
+                prompts.push(c.params.prompt?.[0]?.text ?? '');
                 if (shouldFailPrompt) {
                     throw new Error('Connection reset by peer');
                 }
@@ -834,8 +867,13 @@ test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支�
             onStatusChange: () => {},
         });
 
-        // 成功交接后提要被正常消费清理
+        // 重试时摘要必须重新注入，不能因为用量已重置而被当成「提前回来」丢弃
+        assert.strictEqual(prompts.length, 2);
+        assert.ok(prompts[1].includes('上次静默期归档'), '重试 prompt 应包含提要标题');
+        assert.ok(prompts[1].includes(memo), '重试 prompt 应包含提要正文');
+        // 成功交接后提要被正常消费清理，交接标记也清除
         assert.strictEqual(sm.hasPendingBackground('main'), false);
+        assert.strictEqual(sm.isHandoffPending('main'), false);
 
         await engine.stopAll();
     } finally {
@@ -1036,6 +1074,47 @@ test('工作区记忆文件每轮重读：MEMORY.md 修改后下一轮 prompt �
         assert.ok(!tracker.prompts[1].text.includes('当前暗号：青竹'), '不应继续使用旧副本');
 
         await engine.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+
+test('提炼字符预算随提供方窗口收缩：OpenAI 兜底模型分段、DeepSeek 一次发完', async () => {
+    const tmpDir = createTempDir('lvtian-chunk-budget-');
+    try {
+        const sm = new SessionManager(tmpDir);
+        sm.addMessage('main', {
+            id: 'u-1',
+            role: 'user',
+            content: '长文-' + 'x'.repeat(80_000),
+            timestamp: 1,
+            status: 'sent',
+        });
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
+        sm.setUsage('main', 40000, 128000);
+
+        let calls = 0;
+        const makeConsolidator = (options) => new ContextConsolidator(sm, {
+            apiKey: 'sk-test',
+            fetchFn: async () => {
+                calls += 1;
+                return new Response(JSON.stringify({
+                    choices: [{ message: { content: `备忘 ${calls}` } }],
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            },
+            ...options,
+        });
+
+        // OpenAI 128k 窗口 → 单次 76,800 字符，8 万字符触发分段
+        await makeConsolidator({ model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com' }).consolidate('main');
+        assert.ok(calls >= 3, `OpenAI 兜底模型应分段提炼，实际调用 ${calls} 次`);
+
+        sm.clearPendingBackground('main');
+        calls = 0;
+        // DeepSeek 100 万窗口 → 单次 50 万字符，8 万字符一次发完
+        await makeConsolidator({}).consolidate('main');
+        assert.strictEqual(calls, 1, 'DeepSeek 窗口下一次发完');
     } finally {
         cleanupTempDir(tmpDir);
     }

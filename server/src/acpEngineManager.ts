@@ -517,11 +517,12 @@ export class AcpEngineManager {
 
             // 检查基于人脑记忆模型的底层会话轮换门禁：只有「满 3h AND 容量 20%」才换会话
             // 提前量（默认 5 分钟）只用于后台预生成提要，提要存在本身不能触发轮换
+            const handoffPending = this.sessionManager.isHandoffPending(sessionId);
             pendingBackground = this.sessionManager.getPendingBackground(sessionId);
             const idleAtArrivalMs = arrivalAt - this.sessionManager.getLastActiveAt(sessionId);
             const gateMet = idleAtArrivalMs >= this.idleTimeoutMs
                 && this.sessionManager.isCapacityOver(sessionId, this.minCapacityRatio);
-            if (pendingBackground && !gateMet) {
+            if (pendingBackground && !gateMet && !handoffPending) {
                 // 预生成后主人提前回来：丢弃提要，保持温热会话不切断
                 this.sessionManager.clearPendingBackground(sessionId);
                 pendingBackground = null;
@@ -529,18 +530,20 @@ export class AcpEngineManager {
                     `[AcpEngine] 会话 ${sessionId} 提前唤醒（空闲 ${Math.round(idleAtArrivalMs / 60000)} 分钟），已丢弃预生成提要`
                 );
             }
-            shouldRotate = gateMet;
+            // 已开始但尚未交付成功的轮换不再重复换会话，只把上次没送出去的接力上下文补上
+            shouldRotate = gateMet && !handoffPending;
 
             if (shouldRotate) {
                 if (!pendingBackground) {
                     console.log(`[AcpEngine] 会话 ${sessionId} 命中轮换门禁但无预生成提要，仅注入原文锚定`);
                 }
-                // 抛弃旧 DSH 会话绑定，重置为新会话建立
+                // 抛弃旧 DSH 会话绑定，重置为新会话建立；标记交接未完成，失败重试时摘要不被丢弃
                 const saved = this.sessionManager.getDshSessionId(sessionId);
                 if (saved) {
                     this.engineSessionIndex.delete(saved);
                 }
                 this.sessionManager.setDshSessionId(sessionId, '');
+                this.sessionManager.setHandoffPending(sessionId, true);
             }
 
             const resolved = await this.resolveEngineSession(sessionId);
@@ -551,8 +554,9 @@ export class AcpEngineManager {
                 console.log(
                     `[AcpEngine] 会话 ${sessionId} 的底层会话已被替换（原 ${resolved.savedId ?? '未知'}），按断档注入接力上下文`
                 );
+                this.sessionManager.setHandoffPending(sessionId, true);
             }
-            const needsRelay = shouldRotate || resolved.replaced;
+            const needsRelay = shouldRotate || resolved.replaced || handoffPending;
 
             // 建会话窗口内收到手动停止：不再发送 prompt，直接终态化退出
             if (this.stoppedSessions.has(sessionId)) {
@@ -608,9 +612,12 @@ export class AcpEngineManager {
                 }
             );
 
-            // 成功交接后清理待用提要
-            if (shouldRotate && pendingBackground) {
+            // 成功交接后清理待用提要（首次轮换、失败重试、断档接管都算交付成功），并清除交接标记
+            if (needsRelay && pendingBackground) {
                 this.sessionManager.clearPendingBackground(sessionId);
+            }
+            if (needsRelay) {
+                this.sessionManager.setHandoffPending(sessionId, false);
             }
 
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
