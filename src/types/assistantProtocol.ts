@@ -141,6 +141,12 @@ export type ServerMessage =
           sessionId: string;
           messageId: string;
       }
+    | {
+          type: 'cancel_failed';
+          sessionId: string;
+          messageId: string;
+          reason: 'already_started' | 'not_found';
+      }
     | { type: 'pong' };
 
 export interface ServerFileItem {

@@ -320,6 +320,7 @@ export const useAssistantStore = create<AssistantState>()(
                     currentSeq: durableSeq,
                     clearedSeq: state.clearedSeq ?? 0,
                     pendingSendQueue: sanitizedPendingSendQueue,
+                    pendingCancelQueue: state.pendingCancelQueue ?? [],
                     permissionMode: state.permissionMode ?? 'workspace-write',
                 };
             },

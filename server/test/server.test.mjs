@@ -1160,6 +1160,45 @@ test('撤销排队消息：cancel_queued 将排队中消息彻底删除并广播
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('撤销排队消息：目标非排队态时返回 cancel_failed 回执且不删除消息', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 2, chunkDelayMs: 60 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 1. 对不存在的消息发送撤销
+    ws.send(JSON.stringify({ type: 'cancel_queued', sessionId: 'main', messageId: 'not-exist' }));
+    const failedNotFound = await waitForMsg(
+        received,
+        (m) => m.type === 'cancel_failed' && m.messageId === 'not-exist',
+        'not_found cancel_failed'
+    );
+    assert.equal(failedNotFound.reason, 'not_found');
+
+    // 2. 发送正在执行的消息
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u-running', content: '正在执行的任务' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u-running' && m.status === 'sent', 'u-running sent');
+
+    // 尝试对已处于执行中的消息撤销排队
+    ws.send(JSON.stringify({ type: 'cancel_queued', sessionId: 'main', messageId: 'u-running' }));
+    const failedStarted = await waitForMsg(
+        received,
+        (m) => m.type === 'cancel_failed' && m.messageId === 'u-running',
+        'already_started cancel_failed'
+    );
+    assert.equal(failedStarted.reason, 'already_started');
+
+    // 等待任务执行结束
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '任务完成');
+
+    // 验证消息依然保留在会话中
+    const session = sessionManager.getOrCreateSession('main');
+    assert.ok(session.messages.some((m) => m.id === 'u-running'), '正在执行的消息未被误删除');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 test('手动终止 stop：同时终止运行中任务与排队中的消息', async () => {
     const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 4, chunkDelayMs: 80 });
     const received = [];

@@ -502,6 +502,13 @@ export class LvtianServer {
                         sessionId,
                         messageId: msg.messageId,
                     });
+                } else {
+                    this.send(ws, {
+                        type: 'cancel_failed',
+                        sessionId,
+                        messageId: msg.messageId,
+                        reason: target ? 'already_started' : 'not_found',
+                    });
                 }
                 break;
             }

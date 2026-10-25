@@ -1,6 +1,6 @@
 import { AssistantClient } from '../src/services/AssistantClient';
 import { useAssistantStore } from '../src/store/useAssistantStore';
-import { ServerMessage } from '../src/types/assistantProtocol';
+import { AssistantMessage, ServerMessage } from '../src/types/assistantProtocol';
 
 describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () => {
     let client: AssistantClient;
@@ -679,5 +679,47 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.messages.find((m) => m.id === 'm-broadcast-del')).toBeUndefined();
         expect(state.pendingCancelQueue.includes('m-broadcast-del')).toBe(false);
         expect(state.pendingSendQueue.some((q) => q.messageId === 'm-broadcast-del')).toBe(false);
+    });
+
+    test('收到 cancel_failed 回执时清理 pendingCancelQueue 并安全恢复暂存的消息', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        const testMsg: AssistantMessage = {
+            id: 'm-race-cancel',
+            seq: 20,
+            role: 'user',
+            content: '竞态开始执行的消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        };
+
+        useAssistantStore.setState({
+            messages: [testMsg],
+            pendingCancelQueue: [],
+        });
+
+        // 模拟用户触发撤销（带备份消息暂存）
+        client.cancelQueued(testMsg.id, testMsg);
+
+        // 本地立即从 messages 移除
+        expect(useAssistantStore.getState().messages.find((m) => m.id === testMsg.id)).toBeUndefined();
+
+        // 服务端返回 cancel_failed（例如原因已开始执行 already_started）
+        handleServerMessage({
+            type: 'cancel_failed',
+            sessionId: 'main',
+            messageId: testMsg.id,
+            reason: 'already_started',
+        });
+
+        const afterState = useAssistantStore.getState();
+        // 1. 待撤销队列必须被清理，不无限补发
+        expect(afterState.pendingCancelQueue.includes(testMsg.id)).toBe(false);
+        // 2. 消息必须被恢复回 messages 列表，避免被凭空丢弃
+        const restored = afterState.messages.find((m) => m.id === testMsg.id);
+        expect(restored).toBeDefined();
+        expect(restored?.content).toBe('竞态开始执行的消息');
     });
 });

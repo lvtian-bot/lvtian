@@ -18,6 +18,7 @@ export class AssistantClient {
     private isExplicitlyClosed = false;
     private activeUrl: string | null = null;
     private activeToken: string | null = null;
+    private cancellingMessages: Map<string, AssistantMessage> = new Map();
 
     public static getInstance(): AssistantClient {
         if (!AssistantClient.instance) {
@@ -516,9 +517,14 @@ export class AssistantClient {
      * 取消排队中的消息
      * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录；
      * 若处于离线状态，将撤销请求纳入 pendingCancelQueue，待网络恢复重连对账后自动静默补发。
+     * 支持传入 backupMessage 暂存，在服务端因任务已启动而拒绝撤销时自动安全恢复消息。
      */
-    public cancelQueued(messageId: string): boolean {
+    public cancelQueued(messageId: string, backupMessage?: AssistantMessage): boolean {
         const store = useAssistantStore.getState();
+        const current = backupMessage || store.messages.find((m) => m.id === messageId);
+        if (current) {
+            this.cancellingMessages.set(messageId, current);
+        }
         store.removeMessage(messageId);
         const sent = this.sendRaw({
             type: 'cancel_queued',
@@ -802,9 +808,20 @@ export class AssistantClient {
             }
 
             case 'message_deleted': {
+                this.cancellingMessages.delete(msg.messageId);
                 store.removeMessage(msg.messageId);
                 store.removeFromPendingCancelQueue(msg.messageId);
                 store.removeFromPendingSendQueue(msg.messageId);
+                break;
+            }
+
+            case 'cancel_failed': {
+                store.removeFromPendingCancelQueue(msg.messageId);
+                const backup = this.cancellingMessages.get(msg.messageId);
+                if (backup && !store.messages.some((m) => m.id === msg.messageId)) {
+                    store.addOrUpdateMessage(backup);
+                }
+                this.cancellingMessages.delete(msg.messageId);
                 break;
             }
 
