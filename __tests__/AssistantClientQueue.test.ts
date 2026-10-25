@@ -474,4 +474,91 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
 
         sendRawSpy.mockRestore();
     });
+
+    test('cancelQueued 立即从本地消息列表与待发队列中物理移除该排队消息', () => {
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: (msg: unknown) => boolean }, 'sendRaw').mockReturnValue(true);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-queued',
+                    seq: 1,
+                    role: 'user',
+                    content: '排队中的指令',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingSendQueue: [
+                {
+                    sessionId: 'main',
+                    messageId: 'm-queued',
+                    content: '排队中的指令',
+                },
+            ],
+        });
+
+        const success = client.cancelQueued('m-queued');
+        expect(success).toBe(true);
+        expect(sendRawSpy).toHaveBeenCalledWith({
+            type: 'cancel_queued',
+            sessionId: 'main',
+            messageId: 'm-queued',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-queued')).toBeUndefined();
+        expect(state.pendingSendQueue.find((q) => q.messageId === 'm-queued')).toBeUndefined();
+
+        sendRawSpy.mockRestore();
+    });
+
+    test('收到服务端 message_deleted 广播时移除对应消息', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-to-delete',
+                    seq: 2,
+                    role: 'user',
+                    content: '待删除的消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+        });
+
+        handleServerMessage({
+            type: 'message_deleted',
+            sessionId: 'main',
+            messageId: 'm-to-delete',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-to-delete')).toBeUndefined();
+    });
+
+    test('收到服务端 task_status processing 时更新 taskState 为 processing', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            taskState: 'idle',
+        });
+
+        handleServerMessage({
+            type: 'task_status',
+            seq: 10,
+            sessionId: 'main',
+            state: 'processing',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.taskState).toBe('processing');
+        expect(state.currentSeq).toBe(10);
+    });
 });

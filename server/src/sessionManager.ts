@@ -66,7 +66,8 @@ type SessionLogEvent =
     | { t: 'seq'; at: number; seq: number }
     | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
     | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number }
-    | { t: 'handoff'; at: number; handoffPending: boolean };
+    | { t: 'handoff'; at: number; handoffPending: boolean }
+    | { t: 'del_msg'; at: number; id: string };
 
 const ACTIVE_LOG = 'events.jsonl';
 const SEGMENT_PREFIX = 'seg.';
@@ -414,6 +415,10 @@ export class SessionManager {
                 session.handoffPending = ev.handoffPending;
                 session.updatedAt = ev.at;
                 break;
+            case 'del_msg':
+                session.messages = session.messages.filter((m) => m.id !== ev.id);
+                session.updatedAt = ev.at;
+                break;
         }
     }
 
@@ -657,6 +662,23 @@ export class SessionManager {
             this.appendEvent(sessionId, { t: 'msg', at: Date.now(), seq: msg.seq, m: msg });
         }
         return msg;
+    }
+
+    public deleteMessage(sessionId: string, messageId: string): boolean {
+        this.assertValidSessionId(sessionId);
+        const session = this.getOrCreateSession(sessionId);
+        const idx = session.messages.findIndex((m) => m.id === messageId);
+        if (idx === -1) {
+            return false;
+        }
+        session.messages.splice(idx, 1);
+        session.updatedAt = Date.now();
+        this.appendEvent(sessionId, {
+            t: 'del_msg',
+            at: Date.now(),
+            id: messageId,
+        });
+        return true;
     }
 
     public appendDelta(

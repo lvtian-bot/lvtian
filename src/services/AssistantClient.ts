@@ -514,10 +514,11 @@ export class AssistantClient {
 
     /**
      * 取消排队中的消息
-     * 注意：不作本地乐观状态修改，等待服务端校验并下发 message_ack 确认后再收敛状态，
-     * 避免撤销与服务端刚好开始执行发生状态错乱。
+     * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录
      */
     public cancelQueued(messageId: string): boolean {
+        const store = useAssistantStore.getState();
+        store.removeMessage(messageId);
         return this.sendRaw({
             type: 'cancel_queued',
             sessionId: 'main',
@@ -763,6 +764,11 @@ export class AssistantClient {
                         this.flushPendingSendQueue();
                     }
                 }
+                break;
+            }
+
+            case 'message_deleted': {
+                store.removeMessage(msg.messageId);
                 break;
             }
 

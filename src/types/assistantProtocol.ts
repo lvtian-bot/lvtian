@@ -135,6 +135,11 @@ export type ServerMessage =
           error?: string;
           stopReason?: string;
       }
+    | {
+          type: 'message_deleted';
+          sessionId: string;
+          messageId: string;
+      }
     | { type: 'pong' };
 
 export interface ServerFileItem {

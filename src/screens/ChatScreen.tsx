@@ -1621,15 +1621,17 @@ const styles = StyleSheet.create({
     stopBtnActive: {
         width: 32,
         height: 32,
+        borderRadius: 16,
+        backgroundColor: theme.colors.primary,
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 6,
     },
     stopSquare: {
-        width: 20,
-        height: 20,
-        backgroundColor: '#111827',
-        borderRadius: 5,
+        width: 12,
+        height: 12,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 2,
     },
     scrollBottomContainer: {
         position: 'absolute',

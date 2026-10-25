@@ -863,7 +863,7 @@ test('审批卡下发与应答：approval_request 转发、允许后任务恢复
 
     ws.send(JSON.stringify({ type: 'approval_response', approvalId: approval.approvalId, approved: true }));
 
-    const resumed = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing', '应答后恢复执行中');
+    const resumed = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing' && m.seq > approval.seq, '应答后恢复执行中');
     assert.ok(resumed.seq > approval.seq, '恢复执行中的 seq 应推进');
 
     await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
@@ -890,7 +890,7 @@ test('审批拒绝后任务不终止：状态恢复执行中并由引擎正常�
     const approval = await waitForMsg(received, (m) => m.type === 'approval_request', 'approval_request');
     ws.send(JSON.stringify({ type: 'approval_response', approvalId: approval.approvalId, approved: false }));
 
-    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing', '拒绝后恢复执行中');
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing' && m.seq > approval.seq, '拒绝后恢复执行中');
     await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
 
     const allDeltas = received.filter((m) => m.type === 'event_chunk' && m.delta).map((m) => m.delta).join('');
@@ -1120,7 +1120,7 @@ test('并发发送消息自动排队，前序任务完成后按序流水推进',
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('撤销排队消息：cancel_queued 将排队中消息标记为取消且不执行', async () => {
+test('撤销排队消息：cancel_queued 将排队中消息彻底删除并广播 message_deleted 且不执行', async () => {
     const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 3, chunkDelayMs: 80 });
     const received = [];
     const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
@@ -1136,13 +1136,13 @@ test('撤销排队消息：cancel_queued 将排队中消息标记为取消且不
     // 发送撤销排队报文
     ws.send(JSON.stringify({ type: 'cancel_queued', sessionId: 'main', messageId: 'u2' }));
 
-    // 验证收到取消回执
-    const cancelAck = await waitForMsg(
+    // 验证收到删除广播回执
+    const deleteMsg = await waitForMsg(
         received,
-        (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'error' && m.error === 'task_cancelled',
-        'u2 取消回执'
+        (m) => m.type === 'message_deleted' && m.messageId === 'u2',
+        'u2 删除广播回执'
     );
-    assert.ok(cancelAck);
+    assert.ok(deleteMsg);
 
     // 等待第一条任务自然结束
     await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '首个任务完成');
@@ -1153,8 +1153,7 @@ test('撤销排队消息：cancel_queued 将排队中消息标记为取消且不
 
     const session = sessionManager.getOrCreateSession('main');
     const u2 = session.messages.find((m) => m.id === 'u2');
-    assert.equal(u2.status, 'error');
-    assert.equal(u2.errorMessage, 'task_cancelled');
+    assert.equal(u2, undefined, '排队消息应被物理删除，不在会话记录中');
 
     ws.close();
     await server.stop();

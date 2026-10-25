@@ -495,18 +495,11 @@ export class LvtianServer {
                 const session = this.sessionManager.getOrCreateSession(sessionId);
                 const target = session.messages.find((m) => m.id === msg.messageId);
                 if (target && target.status === 'queued') {
-                    this.sessionManager.updateMessage(sessionId, msg.messageId, (m) => {
-                        m.status = 'error';
-                        m.errorMessage = 'task_cancelled';
-                    });
+                    this.sessionManager.deleteMessage(sessionId, msg.messageId);
                     this.broadcastSession(sessionId, {
-                        type: 'message_ack',
+                        type: 'message_deleted',
+                        sessionId,
                         messageId: msg.messageId,
-                        seq: session.currentSeq,
-                        role: 'user',
-                        content: target.content,
-                        status: 'error',
-                        error: 'task_cancelled',
                     });
                 }
                 break;
@@ -725,6 +718,15 @@ export class LvtianServer {
             messageId: assistantMessageId,
             delta: '',
             status: 'thinking',
+        });
+
+        // 设置会话状态为 processing 并向所有连接广播，确保移动端稳定维持执行态
+        const statusSeq = this.sessionManager.setTaskState(sessionId, 'processing');
+        this.broadcastSession(sessionId, {
+            type: 'task_status',
+            seq: statusSeq,
+            sessionId,
+            state: 'processing',
         });
 
         // 4. 调用 ACP 引擎管理器驱动底层任务 (捕获异步异常，避免 unhandled rejection 导致主进程崩溃)
