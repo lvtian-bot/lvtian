@@ -6,6 +6,7 @@ import {
     StyleSheet,
     TextInput,
     TouchableOpacity,
+    Pressable,
     FlatList,
     ActivityIndicator,
     Alert,
@@ -366,6 +367,7 @@ export const ChatScreen = () => {
     } = useAssistantStore();
 
     const [inputContent, setInputContent] = useState('');
+    const [isAttachMenuVisible, setIsAttachMenuVisible] = useState(false);
     const [showScrollBottom, setShowScrollBottom] = useState(false);
     const INITIAL_WINDOW_SIZE = 30;
     const WINDOW_BATCH_SIZE = 30;
@@ -523,27 +525,8 @@ export const ChatScreen = () => {
     }, [inputContent, t]);
 
     const handlePlusAction = useCallback(() => {
-        Alert.alert(
-            t('chat.addAttachment', '添加内容'),
-            undefined,
-            [
-                {
-                    text: t('chat.pickImage', '图片'),
-                    onPress: () => {
-                        pickImage();
-                    },
-                },
-                {
-                    text: t('chat.pickDocument', '文件'),
-                    onPress: () => {
-                        pickDocument();
-                    },
-                },
-                { text: t('common.cancel', '取消'), style: 'cancel' },
-            ],
-            { cancelable: true },
-        );
-    }, [pickDocument, pickImage, t]);
+        setIsAttachMenuVisible((prev) => !prev);
+    }, []);
 
     const handleRetryMessage = useCallback(async (item: AssistantMessage) => {
         let attachments = item.attachments;
@@ -703,6 +686,7 @@ export const ChatScreen = () => {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
+                onScrollBeginDrag={() => setIsAttachMenuVisible(false)}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
                 onEndReached={handleLoadEarlier}
@@ -891,6 +875,14 @@ export const ChatScreen = () => {
                 </Animated.View>
             )}
 
+            {/* 点击附件气泡外部任意区域自动收起菜单的透明遮罩 */}
+            {isAttachMenuVisible && (
+                <Pressable
+                    style={styles.attachMenuBackdrop}
+                    onPress={() => setIsAttachMenuVisible(false)}
+                />
+            )}
+
             <KeyboardStickyView
                 style={styles.keyboardSticky}
                 offset={{ opened: tabBarHeight }}
@@ -928,15 +920,58 @@ export const ChatScreen = () => {
 
             {/* 底部输入区 */}
             <View style={styles.inputArea}>
+                {/* 附件选择轻量悬浮气泡菜单 (Popover) */}
+                {isAttachMenuVisible && (
+                    <View style={styles.attachMenuPopover}>
+                        <TouchableOpacity
+                            style={styles.attachMenuItem}
+                            onPress={() => {
+                                setIsAttachMenuVisible(false);
+                                pickImage();
+                            }}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('chat.pickImage', '图片')}
+                        >
+                            <View style={[styles.attachMenuIconBg, styles.attachMenuPhotoBg]}>
+                                <Icon name="photo" size={18} color="#2563EB" />
+                            </View>
+                            <Text style={styles.attachMenuText}>{t('chat.pickImage', '图片')}</Text>
+                        </TouchableOpacity>
+
+                        <View style={styles.attachMenuDivider} />
+
+                        <TouchableOpacity
+                            style={styles.attachMenuItem}
+                            onPress={() => {
+                                setIsAttachMenuVisible(false);
+                                pickDocument();
+                            }}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('chat.pickDocument', '文件')}
+                        >
+                            <View style={[styles.attachMenuIconBg, styles.attachMenuDocBg]}>
+                                <Icon name="insert-drive-file" size={18} color="#D97706" />
+                            </View>
+                            <Text style={styles.attachMenuText}>{t('chat.pickDocument', '文件')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
                 <View style={styles.inputCapsule}>
                     <TouchableOpacity
-                        style={styles.plusBtn}
+                        style={[styles.plusBtn, isAttachMenuVisible && styles.plusBtnActive]}
                         onPress={handlePlusAction}
                         activeOpacity={0.7}
                         accessibilityRole="button"
                         accessibilityLabel={t('chat.addAttachment', '添加内容')}
                     >
-                        <Icon name="add" size={24} color="#4B5563" />
+                        <Icon
+                            name={isAttachMenuVisible ? 'close' : 'add'}
+                            size={24}
+                            color={isAttachMenuVisible ? theme.colors.primary : '#4B5563'}
+                        />
                     </TouchableOpacity>
                     <TextInput
                         ref={chatInputRef}
@@ -945,7 +980,10 @@ export const ChatScreen = () => {
                         placeholder={t('assistant.inputPlaceholder', '消息')}
                         placeholderTextColor="#9CA3AF"
                         value={inputContent}
-                        onChangeText={setInputContent}
+                        onChangeText={(text) => {
+                            setInputContent(text);
+                            if (isAttachMenuVisible) setIsAttachMenuVisible(false);
+                        }}
                         multiline
                         maxLength={2000}
                         onLayout={handleInputLayout}
@@ -1137,6 +1175,16 @@ const styles = StyleSheet.create({
     },
     keyboardSticky: {
         backgroundColor: theme.colors.background,
+        zIndex: 20,
+    },
+    attachMenuBackdrop: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'transparent',
+        zIndex: 15,
     },
     upgradingBanner: {
         flexDirection: 'row',
@@ -1433,6 +1481,59 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.surface,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: '#E5E7EB',
+        position: 'relative',
+        zIndex: 25,
+    },
+    attachMenuPopover: {
+        position: 'absolute',
+        bottom: '100%',
+        left: 14,
+        marginBottom: 8,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 14,
+        paddingVertical: 4,
+        paddingHorizontal: 4,
+        minWidth: 140,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.12,
+        shadowRadius: 10,
+        elevation: 8,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: '#E5E7EB',
+        zIndex: 100,
+    },
+    attachMenuItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        borderRadius: 10,
+    },
+    attachMenuIconBg: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 10,
+    },
+    attachMenuPhotoBg: {
+        backgroundColor: '#EFF6FF',
+    },
+    attachMenuDocBg: {
+        backgroundColor: '#FEF3C7',
+    },
+    attachMenuText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#1F2937',
+    },
+    attachMenuDivider: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: '#F3F4F6',
+        marginHorizontal: 8,
+        marginVertical: 1,
     },
     inputCapsule: {
         flexDirection: 'row',
@@ -1450,6 +1551,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         marginRight: 4,
+    },
+    plusBtnActive: {
+        backgroundColor: '#E0E7FF',
     },
     attachmentImage: {
         width: 200,

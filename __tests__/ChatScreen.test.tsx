@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { Alert, Text, TextInput, TouchableOpacity } from 'react-native';
+import { Text, TextInput, TouchableOpacity } from 'react-native';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
@@ -61,31 +61,37 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(allTexts).not.toContain('arrow-upward');
     });
 
-    it('点击加号弹出文件与图片选择菜单，且 options 支持 cancelable', async () => {
-        const alertSpy = jest.spyOn(Alert, 'alert');
+    it('点击加号展开轻量悬浮气泡菜单，渲染图片与文件选项；再次点击或选择后收起', async () => {
         await ReactTestRenderer.act(async () => {
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
 
         const root = currentRenderer!.root;
-        const buttons = root.findAllByType(TouchableOpacity);
-        const plusButton = buttons.find((btn) => btn.props.accessibilityLabel === '添加内容' || btn.props.accessibilityLabel === 'Add Content');
+        const plusButton = root.findAllByType(TouchableOpacity).find(
+            (btn) => btn.props.accessibilityLabel === '添加内容' || btn.props.accessibilityLabel === 'Add Content'
+        );
         expect(plusButton).toBeDefined();
 
+        // 默认未展开气泡
+        let texts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(texts.some((t) => typeof t === 'string' && /图片|Image/.test(t))).toBe(false);
+
+        // 点击加号展开气泡
         await ReactTestRenderer.act(async () => {
             plusButton!.props.onPress();
         });
 
-        expect(alertSpy).toHaveBeenCalledWith(
-            expect.stringMatching(/添加内容|Add Content/i),
-            undefined,
-            expect.arrayContaining([
-                expect.objectContaining({ text: expect.stringMatching(/图片|Image/i) }),
-                expect.objectContaining({ text: expect.stringMatching(/文件|File/i) }),
-            ]),
-            { cancelable: true },
-        );
-        alertSpy.mockRestore();
+        texts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(texts.some((t) => typeof t === 'string' && /图片|Image/.test(t))).toBe(true);
+        expect(texts.some((t) => typeof t === 'string' && /文件|File/.test(t))).toBe(true);
+
+        // 再次点击加号（此时呈关闭状态）后收起气泡
+        await ReactTestRenderer.act(async () => {
+            plusButton!.props.onPress();
+        });
+
+        texts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(texts.some((t) => typeof t === 'string' && /图片|Image/.test(t))).toBe(false);
     });
 
     it('输入文字后渲染发送按钮，清空后隐藏', async () => {
