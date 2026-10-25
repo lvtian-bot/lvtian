@@ -24,6 +24,8 @@ export interface ChatAttachment {
     name: string;
     mimeType?: string;
     size?: number;
+    /** 本地文件路径（用于冷启动后离线重试时重新读取） */
+    uri?: string;
     /** base64 编码数据（用于图片或二进制文件） */
     data?: string;
     /** 纯文本内容（UTF-8） */

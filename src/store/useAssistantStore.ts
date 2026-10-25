@@ -210,13 +210,14 @@ export const useAssistantStore = create<AssistantState>()(
                         if (!m.attachments || m.attachments.length === 0) {
                             return m;
                         }
-                        // 移除 base64 data 与超长 raw content，仅保留元数据（type, name, mimeType, size），
-                        // 避免将庞大的 Base64 塞入 AsyncStorage 导致突破 2MB 单条限制并引起冷启动水合崩溃
+                        // 移除 base64 data 与超长 raw content，保留轻量元数据与本地文件路径 uri，
+                        // 既能在冷启动重启后按 uri 重新读取附件以支持重试，又避免将庞大 Base64 塞入 AsyncStorage 突破 2MB 限制
                         const sanitizedAttachments = m.attachments.map((att) => ({
                             type: att.type,
                             name: att.name,
                             mimeType: att.mimeType,
                             size: att.size,
+                            uri: att.uri,
                         }));
                         return {
                             ...m,

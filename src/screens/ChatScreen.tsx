@@ -446,6 +446,7 @@ export const ChatScreen = () => {
                         name,
                         mimeType,
                         size: asset.fileSize,
+                        uri: asset.uri,
                         data: base64Data,
                     },
                 ]);
@@ -488,6 +489,7 @@ export const ChatScreen = () => {
                         name,
                         mimeType,
                         size: readResult.size || asset.size,
+                        uri: asset.uri,
                         content: readResult.content,
                         data: readResult.data,
                     },
@@ -520,6 +522,31 @@ export const ChatScreen = () => {
             { cancelable: true },
         );
     }, [pickDocument, pickImage, t]);
+
+    const handleRetryMessage = useCallback(async (item: AssistantMessage) => {
+        let attachments = item.attachments;
+        if (attachments && attachments.length > 0) {
+            attachments = await Promise.all(
+                attachments.map(async (att) => {
+                    if (att.data || att.content || !att.uri) {
+                        return att;
+                    }
+                    try {
+                        const res = await fsService.readAttachment(att.uri, 750 * 1024, att.mimeType, att.name);
+                        return {
+                            ...att,
+                            content: res.content,
+                            data: res.data,
+                        };
+                    } catch (e) {
+                        console.warn('[ChatScreen] 重发时恢复附件数据失败:', e);
+                        return att;
+                    }
+                }),
+            );
+        }
+        AssistantClient.getInstance().sendMessage(item.content, attachments);
+    }, []);
 
     const handleSend = () => {
         const text = inputContent.trim();
@@ -772,12 +799,9 @@ export const ChatScreen = () => {
                                     )}
                                     {isUser && item.status === 'error' && (
                                         <TouchableOpacity
-                                            onPress={() =>
-                                                AssistantClient.getInstance().sendMessage(
-                                                    item.content,
-                                                    item.attachments,
-                                                )
-                                            }
+                                            onPress={() => {
+                                                handleRetryMessage(item);
+                                            }}
                                         >
                                             <Icon
                                                 name="error-outline"

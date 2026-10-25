@@ -629,10 +629,12 @@ export class AcpEngineManager {
                                 if (!fs.existsSync(attDir)) {
                                     fs.mkdirSync(attDir, { recursive: true });
                                 }
-                                const safeName = path.basename(att.name);
+                                const rawName = path.basename(att.name);
+                                const uniquePrefix = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                                const safeName = `${uniquePrefix}_${rawName}`;
                                 const targetFile = path.join(attDir, safeName);
                                 fs.writeFileSync(targetFile, Buffer.from(att.data, 'base64'));
-                                attachmentContext += `\n[主人附带了文件已保存至工作区: attachments/${safeName}]`;
+                                attachmentContext += `\n[主人附带了文件已保存至工作区: attachments/${safeName}] (原名: ${rawName})`;
                             } catch {
                                 attachmentContext += `\n[主人附带了文件: ${att.name}]`;
                             }
