@@ -11,19 +11,25 @@ describe('FontSize & Settings', () => {
 
     test('getFontSizeMetrics returns correct values for small, standard and large', () => {
         const smallMetrics = getFontSizeMetrics('small');
-        expect(smallMetrics.chatBody).toBe(15);
-        expect(smallMetrics.flashBody).toBe(16);
-        expect(smallMetrics.scale).toBe(1.0);
+        expect(smallMetrics.chatBody).toBe(14);
+        expect(smallMetrics.chatInput).toBe(14);
+        expect(smallMetrics.flashBody).toBe(14);
+        expect(smallMetrics.editorFontSize).toBe(14);
+        expect(smallMetrics.scale).toBe(0.88);
 
         const standardMetrics = getFontSizeMetrics('standard');
-        expect(standardMetrics.chatBody).toBe(17);
-        expect(standardMetrics.flashBody).toBe(18);
-        expect(standardMetrics.scale).toBe(1.13);
+        expect(standardMetrics.chatBody).toBe(16);
+        expect(standardMetrics.chatInput).toBe(16);
+        expect(standardMetrics.flashBody).toBe(16);
+        expect(standardMetrics.editorFontSize).toBe(16);
+        expect(standardMetrics.scale).toBe(1.0);
 
         const largeMetrics = getFontSizeMetrics('large');
-        expect(largeMetrics.chatBody).toBe(19);
-        expect(largeMetrics.flashBody).toBe(20);
-        expect(largeMetrics.scale).toBe(1.27);
+        expect(largeMetrics.chatBody).toBe(18);
+        expect(largeMetrics.chatInput).toBe(18);
+        expect(largeMetrics.flashBody).toBe(18);
+        expect(largeMetrics.editorFontSize).toBe(18);
+        expect(largeMetrics.scale).toBe(1.13);
     });
 
     test('getFontSizeMetrics defaults to standard for undefined or invalid inputs', () => {
