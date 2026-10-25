@@ -591,8 +591,25 @@ export class LvtianServer {
             return;
         }
 
-        // 如果当前已有任务在执行或队列中已有等待处理的消息，将该消息存入排队队列（status: 'queued'），并向客户端确认排队
         const session = this.sessionManager.getOrCreateSession(sessionId);
+
+        // 幂等去重保护：如果会话中已存在相同 ID 的消息，直接回执当前已有状态，避免网络重传重复追加排队项引发死循环
+        const existing = session.messages.find((m) => m.id === userMessageId);
+        if (existing) {
+            this.send(ws, {
+                type: 'message_ack',
+                messageId: userMessageId,
+                seq: existing.seq,
+                role: 'user',
+                content: existing.content,
+                attachments: existing.attachments,
+                status: existing.status === 'queued' ? 'queued' : existing.status === 'error' ? 'error' : 'sent',
+                error: existing.errorMessage,
+            });
+            return;
+        }
+
+        // 如果当前已有任务在执行或队列中已有等待处理的消息，将该消息存入排队队列（status: 'queued'），并向客户端确认排队
         const hasQueued = session.messages.some((m) => m.role === 'user' && m.status === 'queued');
         if (this.acpEngine.isRunning(sessionId) || hasQueued) {
             let userMsg;

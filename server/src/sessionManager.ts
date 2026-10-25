@@ -623,9 +623,18 @@ export class SessionManager {
             seq: session.currentSeq,
         };
         session.messages.push(fullMsg);
-        const saved = this.appendEvent(sessionId, { t: 'msg', at: Date.now(), seq: fullMsg.seq, m: fullMsg });
-        if (!saved) {
-            throw new Error(`持久化会话消息失败 (存储满或权限受限): ${sessionId}`);
+        try {
+            const saved = this.appendEvent(sessionId, { t: 'msg', at: Date.now(), seq: fullMsg.seq, m: fullMsg });
+            if (!saved) {
+                throw new Error(`持久化会话消息失败 (存储满或权限受限): ${sessionId}`);
+            }
+        } catch (err) {
+            const idx = session.messages.lastIndexOf(fullMsg);
+            if (idx !== -1) {
+                session.messages.splice(idx, 1);
+            }
+            session.currentSeq -= 1;
+            throw err;
         }
         return fullMsg;
     }

@@ -1276,3 +1276,70 @@ test('排队保序：队列中有未处理消息时，新到达消息保持 queu
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('SessionManager: addMessage 落盘失败时回滚内存队列与序号', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-rollback-'));
+    const sm = new SessionManager(tmpDir);
+
+    const session = sm.getOrCreateSession('test-session');
+    const initialSeq = session.currentSeq;
+
+    // 篡改 appendEvent 模拟磁盘写入失败
+    sm.appendEvent = () => false;
+
+    assert.throws(
+        () => {
+            sm.addMessage('test-session', {
+                id: 'fail-msg',
+                role: 'user',
+                content: '写入失败的消息',
+                timestamp: Date.now(),
+                status: 'queued',
+            });
+        },
+        /持久化会话消息失败/
+    );
+
+    // 验证内存中该失败消息已被回滚移出，序号未递增
+    assert.equal(session.messages.length, 0);
+    assert.equal(session.currentSeq, initialSeq);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('排队幂等去重：相同 messageId 重复到达时不重复追加排队项', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 2, chunkDelayMs: 60 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 1. 发送 u1 启动任务
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '正在执行' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u1', 'u1 ack');
+
+    // 2. 发送排队消息 u2
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '排队指令' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'queued', 'u2 排队首发');
+
+    // 3. 模拟弱网重发相同 messageId: u2
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '排队指令' }));
+    await delay(100);
+
+    const session = sessionManager.getOrCreateSession('main');
+    const u2Matches = session.messages.filter((m) => m.id === 'u2');
+    assert.equal(u2Matches.length, 1, '相同 messageId 绝不能在会话中重复插入两条记录');
+
+    // 4. 等待第一条和第二条均顺利执行完成，验证不会因重复项引发死循环
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '首个任务完成');
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'sent', 'u2 开始执行');
+    await waitForMsg(
+        received,
+        (m, idx) => m.type === 'task_status' && m.state === 'completed' && idx > received.findIndex((x) => x.messageId === 'u2' && x.status === 'sent'),
+        'u2 完成'
+    );
+
+    assert.equal(session.messages.filter((m) => m.status === 'queued').length, 0);
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
