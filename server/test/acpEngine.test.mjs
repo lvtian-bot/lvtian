@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
-import { AcpEngineManager } from '../dist/acpEngineManager.js';
+import { AcpEngineManager, formatToolDetails } from '../dist/acpEngineManager.js';
 import { MemoryManager } from '../dist/memoryManager.js';
 import { SessionManager } from '../dist/sessionManager.js';
 
@@ -707,4 +707,36 @@ test('审批超时且引擎无响应：停止回收兜底释放会话占用', as
     const events2 = [];
     await manager.execute('main', 'asst-2', '回收后的新任务', collectCallbacks(events2));
     assert.strictEqual(lastStatus(events2), 'done', '回收后应能重建引擎并继续执行');
+});
+
+test('formatToolDetails: 精准提取命令、文件路径与结构化参数', () => {
+    // 1. bash 工具提取命令行
+    const bashRes = formatToolDetails('shell', 'bash', { command: 'git status -s' });
+    assert.strictEqual(bashRes.name, 'bash');
+    assert.strictEqual(bashRes.summary, '$ git status -s');
+    assert.deepStrictEqual(bashRes.input, { command: 'git status -s' });
+
+    // 2. 带 $ 前缀的命令不重复加 $
+    const bashWithDollar = formatToolDetails('bash', 'bash', { command: '$ git pull' });
+    assert.strictEqual(bashWithDollar.summary, '$ git pull');
+
+    // 3. 读写文件提取路径
+    const readRes = formatToolDetails('fs', 'read_file', { path: 'docs/技术架构.md' });
+    assert.strictEqual(readRes.name, 'read_file');
+    assert.strictEqual(readRes.summary, '读取 docs/技术架构.md');
+
+    const writeRes = formatToolDetails('fs', 'write_file', { file_path: 'src/test.ts' });
+    assert.strictEqual(writeRes.summary, '写入 src/test.ts');
+
+    // 4. 搜索查询与 URL 访问
+    const searchRes = formatToolDetails('search', 'web_search', { query: 'React Native 0.88' });
+    assert.strictEqual(searchRes.summary, '搜索 "React Native 0.88"');
+
+    const urlRes = formatToolDetails('web', 'web_fetch', { url: 'https://example.com' });
+    assert.strictEqual(urlRes.summary, '访问 https://example.com');
+
+    // 5. 兜底提取
+    const customRes = formatToolDetails('custom', 'custom_tool', { key: 'value' });
+    assert.strictEqual(customRes.name, 'custom_tool');
+    assert.strictEqual(customRes.summary, 'custom_tool: value');
 });

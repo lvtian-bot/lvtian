@@ -145,6 +145,124 @@ function resolveDshInvocation(): { command: string; argsPrefix: string[] } {
  * ACP 常驻引擎管理器：通过 dsh --profile acp 子进程以 JSON-RPC 长连接驱动 AI 助理，
  * 取代 headless 每轮拉起子进程的模式。单连接承载全部会话，引擎崩溃后随下次请求懒重启。
  */
+/**
+ * 智能提取 DSH / ACP 工具调用的语义化名称与明细摘要，彻底解决只有 "bash" 无命令明细的问题
+ */
+export function formatToolDetails(
+    kind?: string,
+    title?: string,
+    rawInput?: unknown
+): { name: string; summary: string; input?: Record<string, unknown> } {
+    const rawName = (title || kind || '系统工具').trim();
+    let inputObj: Record<string, unknown> | undefined = undefined;
+
+    if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+        inputObj = rawInput as Record<string, unknown>;
+    }
+
+    // 1. 尝试提取终端执行命令 (Bash / Shell / Terminal)
+    const isShell =
+        /^(bash|sh|shell|terminal|exec|execute|cmd|run_code)$/i.test(rawName) ||
+        (kind && /^(shell|terminal|bash)$/i.test(kind));
+
+    if (isShell) {
+        let cmd = '';
+        if (inputObj) {
+            const val = inputObj.command || inputObj.cmd || inputObj.script;
+            if (typeof val === 'string') {
+                cmd = val.trim();
+            }
+        } else if (typeof rawInput === 'string') {
+            cmd = rawInput.trim();
+        }
+        if (cmd) {
+            return {
+                name: rawName || 'bash',
+                summary: cmd.startsWith('$') ? cmd : `$ ${cmd}`,
+                input: inputObj,
+            };
+        }
+    }
+
+    // 2. 尝试提取文件路径 (File operations: Read, Write, Edit, Search)
+    if (inputObj) {
+        const filePath =
+            inputObj.path ||
+            inputObj.file_path ||
+            inputObj.filePath ||
+            inputObj.target ||
+            inputObj.file;
+        if (typeof filePath === 'string' && filePath.trim()) {
+            const cleanPath = filePath.trim();
+            let actionPrefix = rawName;
+            if (/read/i.test(rawName)) actionPrefix = '读取';
+            else if (/write/i.test(rawName)) actionPrefix = '写入';
+            else if (/edit/i.test(rawName)) actionPrefix = '编辑';
+            else if (/search|find/i.test(rawName)) actionPrefix = '搜索';
+            return {
+                name: rawName,
+                summary: `${actionPrefix} ${cleanPath}`,
+                input: inputObj,
+            };
+        }
+
+        // 3. 网络查询或搜索
+        const query = inputObj.query || inputObj.pattern;
+        if (typeof query === 'string' && query.trim()) {
+            return {
+                name: rawName,
+                summary: `搜索 "${query.trim()}"`,
+                input: inputObj,
+            };
+        }
+
+        const url = inputObj.url || inputObj.href;
+        if (typeof url === 'string' && url.trim()) {
+            return {
+                name: rawName,
+                summary: `访问 ${url.trim()}`,
+                input: inputObj,
+            };
+        }
+    }
+
+    // 4. 通用兜底：若 title 是人类可读的描述性文字（包含空格或中文等），优先作为 summary
+    const isDescriptiveTitle =
+        Boolean(title) &&
+        title !== 'other' &&
+        title !== 'tool' &&
+        title !== kind &&
+        /[\s\u4e00-\u9fa5]/.test(title!);
+
+    if (isDescriptiveTitle) {
+        return {
+            name: rawName,
+            summary: title!.slice(0, 200),
+            input: inputObj,
+        };
+    }
+
+    if (inputObj) {
+        const firstKey = Object.keys(inputObj)[0];
+        if (firstKey) {
+            const val = String(inputObj[firstKey] ?? '').trim();
+            if (val) {
+                return {
+                    name: rawName,
+                    summary: `${rawName}: ${val.slice(0, 100)}`,
+                    input: inputObj,
+                };
+            }
+        }
+    }
+
+    return {
+        name: rawName,
+        summary: title || rawName,
+        input: inputObj,
+    };
+}
+
 export class AcpEngineManager {
     private workspace: string;
     private memoryManager: MemoryManager;
@@ -733,16 +851,24 @@ export class AcpEngineManager {
                 runtime.callbacks.onStatusChange('thinking');
                 break;
             case 'tool_call': {
-                const t = update as { toolCallId?: string; title?: string; kind?: string; status?: string };
+                const t = update as {
+                    toolCallId?: string;
+                    title?: string;
+                    kind?: string;
+                    status?: string;
+                    rawInput?: unknown;
+                };
                 runtime.toolSeq++;
                 // 初始通知可能直接携带终态（completed/failed）：按终态广播且不入进行中集合，
                 // 否则出生即失败的工具会被收尾兜底改写为成功
                 const terminal = t.status === 'completed' ? 'done' : t.status === 'failed' ? 'failed' : null;
+                const { name, summary, input } = formatToolDetails(t.kind, t.title, t.rawInput);
                 const toolCall: ToolCallState = {
                     id: t.toolCallId ?? `tool-${engineSessionId}-${runtime.toolSeq}`,
-                    name: t.kind ?? t.title ?? '系统工具',
+                    name,
                     status: terminal ?? 'running',
-                    summary: (t.title ?? t.kind ?? '').slice(0, 100),
+                    summary,
+                    input,
                 };
                 runtime.callbacks.onToolCall({ ...toolCall });
                 if (!terminal) {
@@ -752,7 +878,11 @@ export class AcpEngineManager {
                 break;
             }
             case 'tool_call_update': {
-                const t = update as { toolCallId?: string; status?: string };
+                const t = update as {
+                    toolCallId?: string;
+                    status?: string;
+                    content?: Array<{ type?: string; content?: unknown; text?: string }>;
+                };
                 const tool = t.toolCallId ? runtime.outstandingTools.get(t.toolCallId) : undefined;
                 // 未知工具或已终结工具的迟到更新：忽略，防止覆盖已收尾的终态
                 if (!tool) {
@@ -761,6 +891,21 @@ export class AcpEngineManager {
                 if (t.status === 'completed' || t.status === 'failed') {
                     // 终态（完成/失败）即从进行中集合移除，防止后续文本或收尾事件把失败结果覆盖为成功
                     tool.status = t.status === 'completed' ? 'done' : 'failed';
+                    if (Array.isArray(t.content) && t.content.length > 0) {
+                        const outTexts = t.content
+                            .map((c) => {
+                                if (typeof c.text === 'string') return c.text;
+                                if (c.content && typeof (c.content as any).text === 'string') {
+                                    return (c.content as any).text;
+                                }
+                                return '';
+                            })
+                            .filter(Boolean)
+                            .join('\n');
+                        if (outTexts) {
+                            tool.output = outTexts.slice(0, 1000);
+                        }
+                    }
                     runtime.outstandingTools.delete(tool.id);
                     runtime.callbacks.onToolCall({ ...tool });
                 } else {

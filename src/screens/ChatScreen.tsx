@@ -36,7 +36,7 @@ import { theme } from '../utils/theme';
 import { getChatListEndOffset } from '../utils/chatScrollMetrics';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
-import { AssistantMessage } from '../types/assistantProtocol';
+import { AssistantMessage, ToolCallState } from '../types/assistantProtocol';
 import { RootStackParamList } from '../types/navigation';
 import i18n from '../i18n';
 
@@ -96,6 +96,178 @@ const ChatScrollView = forwardRef<
     );
 });
 ChatScrollView.displayName = 'ChatScrollView';
+
+/** Markdown 全量选择复制规则（正文、行内代码与代码块均开启 selectable） */
+const markdownRules = {
+    text: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => (
+        <Text key={node.key} style={[inheritedStyles, styles.text]} selectable={true}>
+            {node.content}
+        </Text>
+    ),
+    textgroup: (node: any, children: any, _parent: any, styles: any) => (
+        <Text key={node.key} style={styles.textgroup} selectable={true}>
+            {children}
+        </Text>
+    ),
+    code_inline: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => (
+        <Text key={node.key} style={[inheritedStyles, styles.code_inline]} selectable={true}>
+            {node.content}
+        </Text>
+    ),
+    code_block: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => {
+        let content = node.content;
+        if (typeof content === 'string' && content.endsWith('\n')) {
+            content = content.slice(0, -1);
+        }
+        return (
+            <Text key={node.key} style={[inheritedStyles, styles.code_block]} selectable={true}>
+                {content}
+            </Text>
+        );
+    },
+    fence: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => {
+        let content = node.content;
+        if (typeof content === 'string' && content.endsWith('\n')) {
+            content = content.slice(0, -1);
+        }
+        return (
+            <Text key={node.key} style={[inheritedStyles, styles.fence]} selectable={true}>
+                {content}
+            </Text>
+        );
+    },
+};
+
+interface ToolCallsCardProps {
+    toolCalls: ToolCallState[];
+    isProcessing?: boolean;
+}
+
+export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProcessing }) => {
+    const { t } = useTranslation();
+    const isSingle = toolCalls.length === 1;
+    // 多工具调用默认折叠，单工具调用默认展开
+    const [expanded, setExpanded] = useState(isSingle);
+
+    const hasRunning =
+        toolCalls.some((tc) => tc.status === 'running') ||
+        Boolean(isProcessing && toolCalls[toolCalls.length - 1]?.status === 'running');
+    const hasFailed = toolCalls.some((tc) => tc.status === 'failed');
+
+    const runningTool = [...toolCalls].reverse().find((tc) => tc.status === 'running');
+    const latestTool = toolCalls[toolCalls.length - 1];
+
+    let headerTitle = '';
+    if (isSingle) {
+        headerTitle = latestTool.summary || latestTool.name;
+    } else if (hasRunning) {
+        const activeName = runningTool?.summary || runningTool?.name || t('assistant.executingTool', '系统操作');
+        headerTitle = `${t('assistant.runningAction', '正在执行')}: ${activeName}`;
+    } else if (hasFailed) {
+        headerTitle = `${t('assistant.completedWithErrors', '已执行')} ${toolCalls.length} ${t('assistant.actionsCount', '项操作 (含失败)')}`;
+    } else {
+        headerTitle = `${t('assistant.completedActions', '已完成')} ${toolCalls.length} ${t('assistant.actionsCount', '项操作')}`;
+    }
+
+    return (
+        <View style={styles.toolCardContainer}>
+            <TouchableOpacity
+                style={styles.toolCardHeader}
+                activeOpacity={0.7}
+                onPress={() => setExpanded((prev) => !prev)}
+            >
+                <View style={styles.toolCardHeaderLeft}>
+                    {hasRunning ? (
+                        <ActivityIndicator
+                            size="small"
+                            color={theme.colors.primaryDark}
+                            style={styles.toolStatusIcon}
+                        />
+                    ) : hasFailed ? (
+                        <Icon
+                            name="error"
+                            size={16}
+                            color={theme.colors.dangerText}
+                            style={styles.toolStatusIcon}
+                        />
+                    ) : (
+                        <Icon
+                            name="check-circle"
+                            size={16}
+                            color={theme.colors.successText}
+                            style={styles.toolStatusIcon}
+                        />
+                    )}
+                    <Text style={styles.toolCardHeaderTitle} numberOfLines={1}>
+                        {headerTitle}
+                    </Text>
+                </View>
+                <Icon
+                    name={expanded ? 'expand-less' : 'expand-more'}
+                    size={20}
+                    color="#6B7280"
+                />
+            </TouchableOpacity>
+
+            {expanded && (
+                <View style={styles.toolCardBody}>
+                    {toolCalls.map((tool, idx) => {
+                        const isCmd = Boolean(tool.summary?.startsWith('$'));
+                        return (
+                            <View key={tool.id || idx} style={styles.toolItemRow}>
+                                <View style={styles.toolItemHeader}>
+                                    <View style={styles.toolItemStatusRow}>
+                                        {tool.status === 'running' ? (
+                                            <ActivityIndicator
+                                                size="small"
+                                                color={theme.colors.primaryDark}
+                                                style={styles.toolMiniIcon}
+                                            />
+                                        ) : tool.status === 'done' ? (
+                                            <Icon
+                                                name="check-circle"
+                                                size={13}
+                                                color={theme.colors.successText}
+                                                style={styles.toolMiniIcon}
+                                            />
+                                        ) : (
+                                            <Icon
+                                                name="error"
+                                                size={13}
+                                                color={theme.colors.dangerText}
+                                                style={styles.toolMiniIcon}
+                                            />
+                                        )}
+                                        <Text style={styles.toolItemName}>
+                                            {tool.name}
+                                        </Text>
+                                    </View>
+                                </View>
+                                {tool.summary ? (
+                                    <View style={[styles.toolCommandBox, isCmd ? styles.terminalBox : null]}>
+                                        <Text
+                                            style={[styles.toolCommandText, isCmd ? styles.terminalText : null]}
+                                            selectable={true}
+                                        >
+                                            {tool.summary}
+                                        </Text>
+                                    </View>
+                                ) : null}
+                                {tool.output ? (
+                                    <View style={styles.toolOutputBox}>
+                                        <Text style={styles.toolOutputText} selectable={true} numberOfLines={8}>
+                                            {tool.output.trim()}
+                                        </Text>
+                                    </View>
+                                ) : null}
+                            </View>
+                        );
+                    })}
+                </View>
+            )}
+        </View>
+    );
+};
 
 export const ChatScreen = () => {
     const { t } = useTranslation();
@@ -342,6 +514,7 @@ export const ChatScreen = () => {
                 renderScrollComponent={renderChatScrollComponent}
                 renderItem={({ item }) => {
                     const isUser = item.role === 'user';
+                    const hasTools = Boolean(item.toolCalls && item.toolCalls.length > 0);
                     return (
                         <View
                             style={[
@@ -352,41 +525,26 @@ export const ChatScreen = () => {
                             <View
                                 style={[
                                     styles.bubble,
-                                    isUser ? styles.userBubble : styles.assistantBubble,
+                                    isUser
+                                        ? styles.userBubble
+                                        : [
+                                              styles.assistantBubble,
+                                              hasTools ? styles.assistantBubbleWithTools : null,
+                                          ],
                                 ]}
                             >
                                 {isUser ? (
-                                    <Text style={styles.userText}>{item.content}</Text>
+                                    <Text style={styles.userText} selectable={true}>
+                                        {item.content}
+                                    </Text>
                                 ) : (
-                                    <View>
-                                        {/* 工具活动状态 */}
-                                        {item.toolCalls && item.toolCalls.length > 0 && (
-                                            <View style={styles.toolsContainer}>
-                                                {item.toolCalls.map((tool) => (
-                                                    <View key={tool.id} style={styles.toolTag}>
-                                                        <Icon
-                                                            name={
-                                                                tool.status === 'running'
-                                                                    ? 'sync'
-                                                                    : tool.status === 'done'
-                                                                    ? 'check-circle'
-                                                                    : 'error'
-                                                            }
-                                                            size={14}
-                                                            color={
-                                                                tool.status === 'running'
-                                                                    ? theme.colors.primaryDark
-                                                                    : tool.status === 'done'
-                                                                    ? theme.colors.successText
-                                                                    : theme.colors.dangerText
-                                                            }
-                                                        />
-                                                        <Text style={styles.toolText}>
-                                                            {tool.summary || tool.name}
-                                                        </Text>
-                                                    </View>
-                                                ))}
-                                            </View>
+                                    <View style={styles.assistantContentContainer}>
+                                        {/* 工具活动状态：DSH 规范可折叠卡片 */}
+                                        {hasTools && (
+                                            <ToolCallsCard
+                                                toolCalls={item.toolCalls!}
+                                                isProcessing={item.status === 'processing'}
+                                            />
                                         )}
 
                                         {/* 思考中打字机动画 */}
@@ -402,9 +560,9 @@ export const ChatScreen = () => {
                                             </View>
                                         )}
 
-                                        {/* Markdown 内容 */}
+                                        {/* Markdown 内容（支持划词选词复制） */}
                                         {!!item.content && (
-                                            <Markdown style={markdownStyles}>
+                                            <Markdown style={markdownStyles} rules={markdownRules}>
                                                 {item.content}
                                             </Markdown>
                                         )}
@@ -789,29 +947,108 @@ const styles = StyleSheet.create({
     assistantBubble: {
         backgroundColor: '#F0F2F5',
         maxWidth: '92%',
+        minWidth: 48,
+    },
+    assistantBubbleWithTools: {
+        width: '92%',
+    },
+    assistantContentContainer: {
+        width: '100%',
     },
     userText: {
         color: '#111827',
         fontSize: 15,
-        lineHeight: 22,
+        lineHeight: 23,
     },
-    toolsContainer: {
+    toolCardContainer: {
+        width: '100%',
+        backgroundColor: '#E5E7EB',
+        borderRadius: 10,
         marginBottom: 8,
+        overflow: 'hidden',
     },
-    toolTag: {
+    toolCardHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#E5E7EB',
-        borderRadius: 8,
+        justifyContent: 'space-between',
         paddingHorizontal: 10,
-        paddingVertical: 5,
-        marginBottom: 4,
-        alignSelf: 'flex-start',
+        paddingVertical: 8,
     },
-    toolText: {
+    toolCardHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
+        marginRight: 6,
+    },
+    toolStatusIcon: {
+        marginRight: 8,
+    },
+    toolCardHeaderTitle: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#374151',
+        flex: 1,
+    },
+    toolCardBody: {
+        paddingHorizontal: 8,
+        paddingBottom: 8,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#D1D5DB',
+    },
+    toolItemRow: {
+        marginTop: 6,
+    },
+    toolItemHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 3,
+    },
+    toolItemStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    toolMiniIcon: {
+        marginRight: 4,
+    },
+    toolItemName: {
+        fontSize: 11,
+        color: '#6B7280',
+        fontWeight: '600',
+        textTransform: 'uppercase',
+    },
+    toolCommandBox: {
+        backgroundColor: '#F3F4F6',
+        borderRadius: 6,
+        paddingHorizontal: 8,
+        paddingVertical: 6,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    terminalBox: {
+        backgroundColor: '#1E293B',
+        borderColor: '#0F172A',
+    },
+    toolCommandText: {
         fontSize: 12,
+        color: '#1F2937',
+        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+        lineHeight: 18,
+    },
+    terminalText: {
+        color: '#34D399',
+    },
+    toolOutputBox: {
+        backgroundColor: 'rgba(0, 0, 0, 0.04)',
+        borderRadius: 4,
+        padding: 6,
+        marginTop: 4,
+    },
+    toolOutputText: {
+        fontSize: 11,
         color: '#4B5563',
-        marginLeft: 6,
+        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+        lineHeight: 16,
     },
     thinkingRow: {
         flexDirection: 'row',
