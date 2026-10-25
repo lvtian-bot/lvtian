@@ -9,6 +9,7 @@ import {
     ActivityIndicator,
     Alert,
     Platform,
+    AppState,
     type LayoutChangeEvent,
     type ScrollViewProps,
     type NativeSyntheticEvent,
@@ -26,6 +27,7 @@ import {
     type KeyboardChatScrollViewProps,
 } from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
@@ -143,6 +145,40 @@ interface ToolCallsCardProps {
     isProcessing?: boolean;
 }
 
+export function formatToolSummaryLocalized(
+    tool: { summary?: string; name?: string },
+    t: TFunction
+): string {
+    const summary = tool.summary;
+    if (!summary) return tool.name || '';
+    if (summary.startsWith('$')) {
+        return summary;
+    }
+    const match = summary.match(/^([a-zA-Z_]+):\s*(.*)$/);
+    if (match) {
+        const [, action, rest] = match;
+        const lowerAction = action.toLowerCase();
+        let localizedAction: string | null = null;
+        if (lowerAction === 'read') {
+            localizedAction = t('assistant.toolActionRead', { defaultValue: '读取' });
+        } else if (lowerAction === 'write') {
+            localizedAction = t('assistant.toolActionWrite', { defaultValue: '写入' });
+        } else if (lowerAction === 'edit') {
+            localizedAction = t('assistant.toolActionEdit', { defaultValue: '编辑' });
+        } else if (lowerAction === 'search' || lowerAction === 'find') {
+            localizedAction = t('assistant.toolActionSearch', { defaultValue: '搜索' });
+        } else if (lowerAction === 'fetch') {
+            localizedAction = t('assistant.toolActionFetch', { defaultValue: '访问' });
+        } else if (lowerAction === 'file') {
+            localizedAction = t('assistant.toolActionFile', { defaultValue: '文件' });
+        }
+        if (localizedAction) {
+            return rest ? `${localizedAction} ${rest}` : localizedAction;
+        }
+    }
+    return summary;
+}
+
 export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProcessing }) => {
     const { t } = useTranslation();
     const isSingle = toolCalls.length === 1;
@@ -159,9 +195,11 @@ export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProce
 
     let headerTitle = '';
     if (isSingle) {
-        headerTitle = latestTool.summary || latestTool.name;
+        headerTitle = formatToolSummaryLocalized(latestTool, t);
     } else if (hasRunning) {
-        const activeName = runningTool?.summary || runningTool?.name || t('assistant.executingTool', '系统操作');
+        const activeName = runningTool
+            ? formatToolSummaryLocalized(runningTool, t)
+            : t('assistant.executingTool', '系统操作');
         headerTitle = `${t('assistant.runningAction', '正在执行')}: ${activeName}`;
     } else if (hasFailed) {
         headerTitle = `${t('assistant.completedWithErrors', '已执行')} ${toolCalls.length} ${t('assistant.actionsCount', '项操作 (含失败)')}`;
@@ -213,6 +251,7 @@ export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProce
                 <View style={styles.toolCardBody}>
                     {toolCalls.map((tool, idx) => {
                         const isCmd = Boolean(tool.summary?.startsWith('$'));
+                        const displaySummary = formatToolSummaryLocalized(tool, t);
                         return (
                             <View key={tool.id || idx} style={styles.toolItemRow}>
                                 <View style={styles.toolItemHeader}>
@@ -249,7 +288,7 @@ export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls, isProce
                                             style={[styles.toolCommandText, isCmd ? styles.terminalText : null]}
                                             selectable={true}
                                         >
-                                            {tool.summary}
+                                            {displaySummary}
                                         </Text>
                                     </View>
                                 ) : null}
@@ -274,6 +313,7 @@ export const ChatScreen = () => {
     const navigation = useNavigation<NavigationProp>();
     const tabBarHeight = useContext(TabBarHeightContext);
     const flatListRef = useRef<FlatList<AssistantMessage>>(null);
+    const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
     const listMetricsRef = useRef<ChatListMetrics>({
         contentHeight: 0,
         viewportHeight: 0,
@@ -281,6 +321,18 @@ export const ChatScreen = () => {
     });
     const extraContentPadding = useSharedValue(0);
     const composerHeight = useSharedValue(60);
+
+    // 监听应用切回前台（热启动）：彻底阻止软键盘误触自动弹出
+    useEffect(() => {
+        const subscription = AppState.addEventListener('change', (nextAppState) => {
+            if (nextAppState === 'active') {
+                chatInputRef.current?.blur();
+            }
+        });
+        return () => {
+            subscription.remove();
+        };
+    }, []);
     const handleComposerLayout = useCallback((event: LayoutChangeEvent) => {
         composerHeight.value = event.nativeEvent.layout.height;
     }, [composerHeight]);
@@ -693,6 +745,8 @@ export const ChatScreen = () => {
                         <Icon name="add" size={24} color="#374151" />
                     </TouchableOpacity>
                     <TextInput
+                        ref={chatInputRef}
+                        autoFocus={false}
                         style={styles.chatInput}
                         placeholder={t('assistant.inputPlaceholder', '消息')}
                         placeholderTextColor="#9CA3AF"

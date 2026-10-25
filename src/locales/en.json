@@ -384,6 +384,12 @@
     "runningAction": "Running",
     "completedActions": "Completed",
     "completedWithErrors": "Executed",
-    "actionsCount": "actions"
+    "actionsCount": "actions",
+    "toolActionRead": "Read",
+    "toolActionWrite": "Write",
+    "toolActionEdit": "Edit",
+    "toolActionSearch": "Search",
+    "toolActionFetch": "Fetch",
+    "toolActionFile": "File"
   }
 }

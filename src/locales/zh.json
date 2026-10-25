@@ -384,6 +384,12 @@
     "runningAction": "正在执行",
     "completedActions": "已完成",
     "completedWithErrors": "已执行",
-    "actionsCount": "项操作"
+    "actionsCount": "项操作",
+    "toolActionRead": "读取",
+    "toolActionWrite": "写入",
+    "toolActionEdit": "编辑",
+    "toolActionSearch": "搜索",
+    "toolActionFetch": "访问",
+    "toolActionFile": "文件"
   }
 }

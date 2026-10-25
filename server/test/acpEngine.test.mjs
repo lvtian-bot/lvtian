@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
-import { AcpEngineManager, formatToolDetails } from '../dist/acpEngineManager.js';
+import { AcpEngineManager, formatToolDetails, extractToolOutput } from '../dist/acpEngineManager.js';
 import { MemoryManager } from '../dist/memoryManager.js';
 import { SessionManager } from '../dist/sessionManager.js';
 
@@ -723,20 +723,43 @@ test('formatToolDetails: 精准提取命令、文件路径与结构化参数', (
     // 3. 读写文件提取路径
     const readRes = formatToolDetails('fs', 'read_file', { path: 'docs/技术架构.md' });
     assert.strictEqual(readRes.name, 'read_file');
-    assert.strictEqual(readRes.summary, '读取 docs/技术架构.md');
+    assert.strictEqual(readRes.summary, 'read: docs/技术架构.md');
 
     const writeRes = formatToolDetails('fs', 'write_file', { file_path: 'src/test.ts' });
-    assert.strictEqual(writeRes.summary, '写入 src/test.ts');
+    assert.strictEqual(writeRes.summary, 'write: src/test.ts');
 
     // 4. 搜索查询与 URL 访问
     const searchRes = formatToolDetails('search', 'web_search', { query: 'React Native 0.88' });
-    assert.strictEqual(searchRes.summary, '搜索 "React Native 0.88"');
+    assert.strictEqual(searchRes.summary, 'search: "React Native 0.88"');
 
     const urlRes = formatToolDetails('web', 'web_fetch', { url: 'https://example.com' });
-    assert.strictEqual(urlRes.summary, '访问 https://example.com');
+    assert.strictEqual(urlRes.summary, 'fetch: https://example.com');
 
     // 5. 兜底提取
     const customRes = formatToolDetails('custom', 'custom_tool', { key: 'value' });
     assert.strictEqual(customRes.name, 'custom_tool');
     assert.strictEqual(customRes.summary, 'custom_tool: value');
+});
+
+test('extractToolOutput: 独立提取工具输出并在各阶段无条件保留', () => {
+    // 1. 数组结构提取
+    const single = extractToolOutput([{ text: 'output line 1' }]);
+    assert.strictEqual(single, 'output line 1');
+
+    // 2. 嵌套 content 结构
+    const nested = extractToolOutput([{ content: { text: 'nested text' } }]);
+    assert.strictEqual(nested, 'nested text');
+
+    // 3. 多段组合与超长截断（1000字符）
+    const multi = extractToolOutput([{ text: 'line 1' }, { text: 'line 2' }]);
+    assert.strictEqual(multi, 'line 1\nline 2');
+
+    const longText = 'a'.repeat(1500);
+    const truncated = extractToolOutput([{ text: longText }]);
+    assert.strictEqual(truncated.length, 1000);
+
+    // 4. 空值与非数组返回 undefined
+    assert.strictEqual(extractToolOutput(undefined), undefined);
+    assert.strictEqual(extractToolOutput([]), undefined);
+    assert.strictEqual(extractToolOutput('not-an-array'), undefined);
 });

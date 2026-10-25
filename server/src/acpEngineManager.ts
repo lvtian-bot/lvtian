@@ -194,14 +194,14 @@ export function formatToolDetails(
             inputObj.file;
         if (typeof filePath === 'string' && filePath.trim()) {
             const cleanPath = filePath.trim();
-            let actionPrefix = rawName;
-            if (/read/i.test(rawName)) actionPrefix = '读取';
-            else if (/write/i.test(rawName)) actionPrefix = '写入';
-            else if (/edit/i.test(rawName)) actionPrefix = '编辑';
-            else if (/search|find/i.test(rawName)) actionPrefix = '搜索';
+            let actionPrefix = 'file';
+            if (/read/i.test(rawName)) actionPrefix = 'read';
+            else if (/write/i.test(rawName)) actionPrefix = 'write';
+            else if (/edit/i.test(rawName)) actionPrefix = 'edit';
+            else if (/search|find/i.test(rawName)) actionPrefix = 'search';
             return {
                 name: rawName,
-                summary: `${actionPrefix} ${cleanPath}`,
+                summary: `${actionPrefix}: ${cleanPath}`,
                 input: inputObj,
             };
         }
@@ -211,7 +211,7 @@ export function formatToolDetails(
         if (typeof query === 'string' && query.trim()) {
             return {
                 name: rawName,
-                summary: `搜索 "${query.trim()}"`,
+                summary: `search: "${query.trim()}"`,
                 input: inputObj,
             };
         }
@@ -220,7 +220,7 @@ export function formatToolDetails(
         if (typeof url === 'string' && url.trim()) {
             return {
                 name: rawName,
-                summary: `访问 ${url.trim()}`,
+                summary: `fetch: ${url.trim()}`,
                 input: inputObj,
             };
         }
@@ -261,6 +261,27 @@ export function formatToolDetails(
         summary: title || rawName,
         input: inputObj,
     };
+}
+
+export function extractToolOutput(content?: unknown): string | undefined {
+    if (!Array.isArray(content) || content.length === 0) {
+        return undefined;
+    }
+    const outTexts = content
+        .map((c) => {
+            if (!c || typeof c !== 'object') return '';
+            if (typeof (c as { text?: unknown }).text === 'string') {
+                return (c as { text: string }).text;
+            }
+            const inner = (c as { content?: unknown }).content;
+            if (inner && typeof inner === 'object' && typeof (inner as { text?: unknown }).text === 'string') {
+                return (inner as { text: string }).text;
+            }
+            return '';
+        })
+        .filter(Boolean)
+        .join('\n');
+    return outTexts ? outTexts.slice(0, 1000) : undefined;
 }
 
 export class AcpEngineManager {
@@ -857,18 +878,21 @@ export class AcpEngineManager {
                     kind?: string;
                     status?: string;
                     rawInput?: unknown;
+                    content?: unknown;
                 };
                 runtime.toolSeq++;
                 // 初始通知可能直接携带终态（completed/failed）：按终态广播且不入进行中集合，
                 // 否则出生即失败的工具会被收尾兜底改写为成功
                 const terminal = t.status === 'completed' ? 'done' : t.status === 'failed' ? 'failed' : null;
                 const { name, summary, input } = formatToolDetails(t.kind, t.title, t.rawInput);
+                const initialOutput = extractToolOutput(t.content);
                 const toolCall: ToolCallState = {
                     id: t.toolCallId ?? `tool-${engineSessionId}-${runtime.toolSeq}`,
                     name,
                     status: terminal ?? 'running',
                     summary,
                     input,
+                    ...(initialOutput ? { output: initialOutput } : {}),
                 };
                 runtime.callbacks.onToolCall({ ...toolCall });
                 if (!terminal) {
@@ -881,31 +905,20 @@ export class AcpEngineManager {
                 const t = update as {
                     toolCallId?: string;
                     status?: string;
-                    content?: Array<{ type?: string; content?: unknown; text?: string }>;
+                    content?: unknown;
                 };
                 const tool = t.toolCallId ? runtime.outstandingTools.get(t.toolCallId) : undefined;
                 // 未知工具或已终结工具的迟到更新：忽略，防止覆盖已收尾的终态
                 if (!tool) {
                     break;
                 }
+                const newOutput = extractToolOutput(t.content);
+                if (newOutput) {
+                    tool.output = newOutput;
+                }
                 if (t.status === 'completed' || t.status === 'failed') {
                     // 终态（完成/失败）即从进行中集合移除，防止后续文本或收尾事件把失败结果覆盖为成功
                     tool.status = t.status === 'completed' ? 'done' : 'failed';
-                    if (Array.isArray(t.content) && t.content.length > 0) {
-                        const outTexts = t.content
-                            .map((c) => {
-                                if (typeof c.text === 'string') return c.text;
-                                if (c.content && typeof (c.content as any).text === 'string') {
-                                    return (c.content as any).text;
-                                }
-                                return '';
-                            })
-                            .filter(Boolean)
-                            .join('\n');
-                        if (outTexts) {
-                            tool.output = outTexts.slice(0, 1000);
-                        }
-                    }
                     runtime.outstandingTools.delete(tool.id);
                     runtime.callbacks.onToolCall({ ...tool });
                 } else {

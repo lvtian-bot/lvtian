@@ -1,4 +1,4 @@
-const { withAppBuildGradle, withAndroidManifest, withGradleProperties } = require('@expo/config-plugins');
+const { withAppBuildGradle, withAndroidManifest, withGradleProperties, AndroidConfig } = require('@expo/config-plugins');
 const pkg = require('./package.json');
 
 // =====================================================================
@@ -6,7 +6,7 @@ const pkg = require('./package.json');
 // =====================================================================
 
 /**
- * Plugin 1: Disable Android Predictive Back Gesture
+ * Plugin 1: Disable Android Predictive Back Gesture & prevent auto-popup of software keyboard
  */
 const withDisablePredictiveBack = (config) => {
     return withAndroidManifest(config, async (modConfig) => {
@@ -14,6 +14,14 @@ const withDisablePredictiveBack = (config) => {
         if (app) {
             // Add or update attribute
             app.$['android:enableOnBackInvokedCallback'] = 'false';
+        }
+        try {
+            const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(modConfig.modResults);
+            if (mainActivity && mainActivity.$) {
+                mainActivity.$['android:windowSoftInputMode'] = 'adjustResize|stateAlwaysHidden';
+            }
+        } catch (_e) {
+            // ignore if MainActivity is not present yet
         }
         return modConfig;
     });
