@@ -482,6 +482,8 @@ export class AcpEngineManager {
             return;
         }
         this.activeSessions.set(sessionId, assistantMessageId);
+        // 门禁判定以「消息到达时刻」为准：建引擎可能耗时数秒，不能让它把 2h59:59 的消息拖成 3h 后
+        const arrivalAt = Date.now();
         this.scheduleTaskWatchdog(sessionId, assistantMessageId);
 
         let pendingBackground: string | null = null;
@@ -508,25 +510,56 @@ export class AcpEngineManager {
 
             const context = this.connection.context;
 
-            // 检查基于人脑记忆模型的底层会话轮换门禁
+            // 每轮开跑前重读工作区记忆文件：用户随时可能改 SOUL/MEMORY/USER，不能沿用引擎启动时的旧副本
+            if (this.rebuildSystemPrompt()) {
+                console.log('[AcpEngine] 检测到工作区记忆文件变更，本轮已重新加载最新上下文');
+            }
+
+            // 检查基于人脑记忆模型的底层会话轮换门禁：只有「满 3h AND 容量 20%」才换会话
+            // 提前量（默认 5 分钟）只用于后台预生成提要，提要存在本身不能触发轮换
+            const handoffPending = this.sessionManager.isHandoffPending(sessionId);
             pendingBackground = this.sessionManager.getPendingBackground(sessionId);
-            const isEligible = this.sessionManager.isRotationEligible(
-                sessionId,
-                this.idleTimeoutMs,
-                this.minCapacityRatio
-            );
-            shouldRotate = pendingBackground !== null || isEligible;
+            const idleAtArrivalMs = arrivalAt - this.sessionManager.getLastActiveAt(sessionId);
+            const gateMet = idleAtArrivalMs >= this.idleTimeoutMs
+                && this.sessionManager.isCapacityOver(sessionId, this.minCapacityRatio);
+            // 预生成后主人提前回来：先不丢提要——等解析完底层会话，确认原会话还能复用再丢；
+            // 若恰好引擎重启且旧会话被替换，这份提要就是断档接管唯一的早期上下文
+            const earlyReturn = pendingBackground !== null && !gateMet && !handoffPending;
+            // 已开始但尚未交付成功的轮换不再重复换会话，只把上次没送出去的接力上下文补上
+            shouldRotate = gateMet && !handoffPending;
 
             if (shouldRotate) {
-                // 抛弃旧 DSH 会话绑定，重置为新会话建立
+                if (!pendingBackground) {
+                    console.log(`[AcpEngine] 会话 ${sessionId} 命中轮换门禁但无预生成提要，仅注入原文锚定`);
+                }
+                // 抛弃旧 DSH 会话绑定，重置为新会话建立；标记交接未完成，失败重试时摘要不被丢弃
                 const saved = this.sessionManager.getDshSessionId(sessionId);
                 if (saved) {
                     this.engineSessionIndex.delete(saved);
                 }
                 this.sessionManager.setDshSessionId(sessionId, '');
+                this.sessionManager.setHandoffPending(sessionId, true);
             }
 
-            const engineSessionId = await this.resolveEngineSession(sessionId);
+            const resolved = await this.resolveEngineSession(sessionId);
+            const engineSessionId = resolved.id;
+            if (resolved.replaced) {
+                // 底层 resume 拿回的是另一个会话（例如旧日志损坏被替换）：按「断档」处理，
+                // 补注提要与最近原文，避免新会话在毫不知情的情况下丢掉全部上下文
+                console.log(
+                    `[AcpEngine] 会话 ${sessionId} 的底层会话已被替换（原 ${resolved.savedId ?? '未知'}），按断档注入接力上下文`
+                );
+                this.sessionManager.setHandoffPending(sessionId, true);
+            }
+            if (earlyReturn && !resolved.replaced) {
+                // 确认旧会话仍可复用：丢弃预生成提要，保持温热会话不切断
+                this.sessionManager.clearPendingBackground(sessionId);
+                pendingBackground = null;
+                console.log(
+                    `[AcpEngine] 会话 ${sessionId} 提前唤醒（空闲 ${Math.round(idleAtArrivalMs / 60000)} 分钟），已丢弃预生成提要`
+                );
+            }
+            const needsRelay = shouldRotate || resolved.replaced || handoffPending;
 
             // 建会话窗口内收到手动停止：不再发送 prompt，直接终态化退出
             if (this.stoppedSessions.has(sessionId)) {
@@ -545,9 +578,9 @@ export class AcpEngineManager {
             };
             this.runtimes.set(sessionId, runtime);
 
-            // 构建 Prompt：轮换时注入预制背景提要与关键原文锚定，温热心流期沿用常规 Prompt
+            // 构建 Prompt：轮换或底层会话断档时注入预制背景提要与关键原文锚定，温热心流期沿用常规 Prompt
             let fullPrompt: string;
-            if (shouldRotate) {
+            if (needsRelay) {
                 // 重置新 DSH 会话的用量起点（提要在首轮 prompt 成功交接后清理，若请求异常失败则保留提要供下次重试注入）
                 const session = this.sessionManager.getOrCreateSession(sessionId);
                 const asstIdx = session.messages.findIndex((m) => m.id === assistantMessageId);
@@ -563,7 +596,7 @@ export class AcpEngineManager {
                     `[系统背景与主人长期档案]\n${this.engineSystemPrompt}`,
                 ];
                 if (pendingBackground) {
-                    sections.push(`[前序交流心智接力提要 (3小时前归档)]\n${pendingBackground}`);
+                    sections.push(`[前序交流心智接力提要 (上次静默期归档)]\n${pendingBackground}`);
                 }
                 if (verbatim) {
                     sections.push(`[未竟事项与关键交互原文锚定 (至多5~8轮/最多1500~2000字)]\n${verbatim}`);
@@ -582,9 +615,12 @@ export class AcpEngineManager {
                 }
             );
 
-            // 成功交接后消费/清理提要
-            if (shouldRotate && pendingBackground) {
+            // 成功交接后清理待用提要（首次轮换、失败重试、断档接管都算交付成功），并清除交接标记
+            if (needsRelay && pendingBackground) {
                 this.sessionManager.clearPendingBackground(sessionId);
+            }
+            if (needsRelay) {
+                this.sessionManager.setHandoffPending(sessionId, false);
             }
 
             this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
@@ -642,15 +678,26 @@ export class AcpEngineManager {
         await this.engineStarting;
     }
 
-    private async startEngine(): Promise<void> {
-        // 记忆与人设在引擎启动时加载一次，经环境变量注入（进程级生效），并保留给每轮 prompt 前缀兜底
+    /**
+     * 从工作区重新读取 SOUL/MEMORY/USER 并重建每轮 prompt 前缀。
+     * 这些文件是「请求期数据」而不是「进程期配置」：引擎进程常驻期间用户会持续修改它们，
+     * 冻结在启动时会导致改了记忆却一直不生效。返回是否发生变化，便于记日志。
+     */
+    private rebuildSystemPrompt(): boolean {
         const memoryContext = this.memoryManager.loadContext();
         const systemSections = [
             memoryContext.soul ? `[系统背景]\n${memoryContext.soul}` : '',
             memoryContext.memory ? `[主人记忆]\n${memoryContext.memory}` : '',
             memoryContext.user ? `[主人档案]\n${memoryContext.user}` : '',
         ].filter(Boolean).join('\n\n');
+        const changed = systemSections !== this.engineSystemPrompt;
         this.engineSystemPrompt = systemSections;
+        return changed;
+    }
+
+    private async startEngine(): Promise<void> {
+        // 引擎启动时先加载一次（进程环境变量注入只作兼容兜底，真正生效的是每轮 prompt 前缀）
+        this.rebuildSystemPrompt();
         this.engineDead = false;
 
         const app = acp.client({ name: 'lvtian-server' });
@@ -803,9 +850,12 @@ export class AcpEngineManager {
      * 取得引擎侧会话：
      * 1. 同一连接内的活跃会话直接复用（resume 仅适用于恢复跨连接的非活跃会话，活跃会话 resume 会报 already active）；
      * 2. 连接重建后（引擎重启）尝试 resume 恢复持久化会话；
-     * 3. resume 失败（如旧 headless 会话 ID 不通用）则新建并更新绑定。
+     * 3. resume 失败或返回了另一个会话（旧日志损坏、被引擎自愈替换）则新建/接管并更新绑定，
+     *    同时把 replaced 置真，由调用方按「断档」补注接力上下文，避免静默丢历史。
      */
-    private async resolveEngineSession(sessionId: string): Promise<string> {
+    private async resolveEngineSession(
+        sessionId: string
+    ): Promise<{ id: string; replaced: boolean; savedId?: string }> {
         if (!this.connection) {
             throw new Error('引擎连接不可用');
         }
@@ -813,7 +863,7 @@ export class AcpEngineManager {
         const saved = this.sessionManager.getDshSessionId(sessionId);
 
         if (saved && this.engineSessionIndex.has(saved)) {
-            return saved;
+            return { id: saved, replaced: false };
         }
 
         if (saved) {
@@ -823,8 +873,16 @@ export class AcpEngineManager {
                     cwd: this.workspace,
                 });
                 if (resumed?.sessionId) {
+                    if (resumed.sessionId !== saved) {
+                        this.engineSessionIndex.delete(saved);
+                    }
                     this.engineSessionIndex.set(resumed.sessionId, sessionId);
-                    return resumed.sessionId;
+                    if (resumed.sessionId !== saved) {
+                        // 引擎把损坏的旧会话替换成了新会话：绑定更新，但必须让调用方补上下文
+                        this.sessionManager.setDshSessionId(sessionId, resumed.sessionId);
+                        return { id: resumed.sessionId, replaced: true, savedId: saved };
+                    }
+                    return { id: resumed.sessionId, replaced: false };
                 }
             } catch (err: unknown) {
                 console.warn(
@@ -842,7 +900,7 @@ export class AcpEngineManager {
         }
         this.sessionManager.setDshSessionId(sessionId, created.sessionId);
         this.engineSessionIndex.set(created.sessionId, sessionId);
-        return created.sessionId;
+        return { id: created.sessionId, replaced: Boolean(saved), savedId: saved };
     }
 
     private handleSessionUpdate(engineSessionId: string, update: { sessionUpdate?: string }): void {

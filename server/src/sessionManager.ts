@@ -3,6 +3,8 @@ import path from 'node:path';
 import { AssistantMessage, TaskExecutionState, ApprovalRequest, ToolCallState } from './protocol.js';
 
 export interface SessionData {
+    /** 事件日志结构版本：2 起快照携带完整 state，新增字段无需再逐个补进快照拼装 */
+    schemaVersion: number;
     sessionId: string;
     currentSeq: number;
     messages: AssistantMessage[];
@@ -19,6 +21,8 @@ export interface SessionData {
     contextWindowSize?: number;
     /** 当前 DSH 实例建立时的 seq 起点，用于无 usage_update 时准确估算新会话增量 */
     activeSessionStartSeq?: number;
+    /** 轮换已开始但接力上下文尚未成功交付（用于失败重试时保留摘要，不被提前唤醒逻辑丢弃） */
+    handoffPending?: boolean;
 }
 
 /**
@@ -32,8 +36,16 @@ export interface SessionData {
  * - activity：真实交互完成时间戳记录
  * - usage ：上下文用量更新
  * - snapshot：全量快照，只会作为某个日志文件的首行出现（建会话或轮换时写入）
+ *   v2 起快照以完整 state 对象承载全部会话字段，杜绝新增字段时漏改快照拼装
  */
 type SessionLogEvent =
+    | {
+          t: 'snapshot';
+          v: 2;
+          at: number;
+          seq: number;
+          state: SessionData;
+      }
     | {
           t: 'snapshot';
           at: number;
@@ -53,7 +65,8 @@ type SessionLogEvent =
     | { t: 'dsh'; at: number; dshSessionId: string }
     | { t: 'seq'; at: number; seq: number }
     | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
-    | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number };
+    | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number }
+    | { t: 'handoff'; at: number; handoffPending: boolean };
 
 const ACTIVE_LOG = 'events.jsonl';
 const SEGMENT_PREFIX = 'seg.';
@@ -124,6 +137,7 @@ export class SessionManager {
 
     private emptySession(sessionId: string): SessionData {
         return {
+            schemaVersion: 2,
             sessionId,
             currentSeq: 0,
             messages: [],
@@ -134,22 +148,21 @@ export class SessionManager {
             contextTokens: undefined,
             contextWindowSize: undefined,
             activeSessionStartSeq: 0,
+            handoffPending: false,
         };
     }
 
     private buildSnapshotEvent(session: SessionData): SessionLogEvent {
         return {
             t: 'snapshot',
+            v: 2,
             at: Date.now(),
             seq: session.currentSeq,
-            taskState: session.taskState,
-            approvals: session.pendingApprovals,
-            dshSessionId: session.dshSessionId,
-            msgs: session.messages,
-            lastActiveAt: session.lastActiveAt,
-            contextTokens: session.contextTokens,
-            contextWindowSize: session.contextWindowSize,
-            activeSessionStartSeq: session.activeSessionStartSeq,
+            state: {
+                ...session,
+                messages: session.messages.map((m) => ({ ...m })),
+                pendingApprovals: [...session.pendingApprovals],
+            },
         };
     }
 
@@ -323,16 +336,29 @@ export class SessionManager {
     private applyEvent(session: SessionData, ev: SessionLogEvent): void {
         switch (ev.t) {
             case 'snapshot':
-                session.currentSeq = ev.seq;
-                session.messages = ev.msgs.map((m) => ({ ...m }));
-                session.taskState = ev.taskState;
-                session.pendingApprovals = this.normalizeApprovals(ev);
-                session.dshSessionId = ev.dshSessionId;
-                session.updatedAt = ev.at;
-                session.lastActiveAt = ev.lastActiveAt;
-                session.contextTokens = ev.contextTokens;
-                session.contextWindowSize = ev.contextWindowSize;
-                session.activeSessionStartSeq = ev.activeSessionStartSeq;
+                if ('state' in ev) {
+                    // v2：完整 state 快照（新增字段自动随快照持久化）
+                    const s = ev.state;
+                    const fresh = this.emptySession(s.sessionId ?? session.sessionId);
+                    Object.assign(session, fresh, s, {
+                        sessionId: session.sessionId,
+                        messages: (s.messages ?? []).map((m) => ({ ...m })),
+                        pendingApprovals: [...(s.pendingApprovals ?? [])],
+                        schemaVersion: s.schemaVersion ?? 2,
+                    });
+                } else {
+                    // v1：字段平铺的旧快照
+                    session.currentSeq = ev.seq;
+                    session.messages = ev.msgs.map((m) => ({ ...m }));
+                    session.taskState = ev.taskState;
+                    session.pendingApprovals = this.normalizeApprovals(ev);
+                    session.dshSessionId = ev.dshSessionId;
+                    session.updatedAt = ev.at;
+                    session.lastActiveAt = ev.lastActiveAt;
+                    session.contextTokens = ev.contextTokens;
+                    session.contextWindowSize = ev.contextWindowSize;
+                    session.activeSessionStartSeq = ev.activeSessionStartSeq;
+                }
                 break;
             case 'msg': {
                 const idx = session.messages.findIndex((m) => m.id === ev.m.id);
@@ -382,6 +408,10 @@ export class SessionManager {
                 session.contextTokens = ev.contextTokens;
                 if (ev.contextWindowSize !== undefined) session.contextWindowSize = ev.contextWindowSize;
                 if (ev.activeSessionStartSeq !== undefined) session.activeSessionStartSeq = ev.activeSessionStartSeq;
+                session.updatedAt = ev.at;
+                break;
+            case 'handoff':
+                session.handoffPending = ev.handoffPending;
                 session.updatedAt = ev.at;
                 break;
         }
@@ -905,56 +935,36 @@ export class SessionManager {
         }
     }
 
-    /**
-     * 提取近期对话文本供后台模型提炼心智接力备忘录
-     * - 按消息轮次（默认最近 30 条）与字符预算上限（默认 50,000 字符）倒序截取并保持时间线正序
-     * - 单条超长消息截断并计入分隔符，预留模板与模型输出预算
-     */
-    public getRecentDialogue(
-        sessionId: string,
-        maxMessages = 30,
-        maxChars = 50_000
-    ): string {
+    /** 标记/清除「轮换已开始但接力上下文尚未交付」的状态（随事件日志持久化） */
+    public setHandoffPending(sessionId: string, pending: boolean, at = Date.now()): void {
         const session = this.getOrCreateSession(sessionId);
-        const validMsgs = session.messages.filter(
-            (m) => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim().length > 0
-        );
-        if (validMsgs.length === 0) {
-            return '';
+        if (session.handoffPending === pending) {
+            return;
         }
+        session.handoffPending = pending;
+        session.updatedAt = at;
+        this.appendEvent(sessionId, { t: 'handoff', at, handoffPending: pending });
+    }
 
-        const selected: string[] = [];
-        let accumulatedLength = 0;
+    public isHandoffPending(sessionId: string): boolean {
+        return this.getOrCreateSession(sessionId).handoffPending === true;
+    }
 
-        for (let i = validMsgs.length - 1; i >= 0; i--) {
-            const m = validMsgs[i];
-            const speaker = m.role === 'user' ? '主人' : '助理';
-            let line = `${speaker}: ${m.content.trim()}`;
-
-            if (selected.length === 0) {
-                if (line.length > maxChars) {
-                    line = line.slice(0, Math.max(0, maxChars - 3)) + '...';
-                    selected.unshift(line);
-                    accumulatedLength = line.length;
-                    break;
-                }
-                selected.unshift(line);
-                accumulatedLength = line.length;
-            } else {
-                const delimiterLength = 2; // '\n\n'
-                if (accumulatedLength + delimiterLength + line.length > maxChars) {
-                    break;
-                }
-                selected.unshift(line);
-                accumulatedLength += delimiterLength + line.length;
-            }
-
-            if (selected.length >= maxMessages) {
-                break;
-            }
+    /**
+     * 取服务端保存的全部对话历史，供后台提炼。
+     * 提要是对会话的压缩，只取最近 N 条（或只取当前 DSH 周期）会让早期共识直接丢失；
+     * 输入过长时由调用方分段提炼再合并，而不是在这里截断。
+     */
+    public getHistoryDialogue(sessionId: string): string {
+        const session = this.getOrCreateSession(sessionId);
+        const lines: string[] = [];
+        for (const m of session.messages) {
+            if (m.role !== 'user' && m.role !== 'assistant') continue;
+            if (!m.content || !m.content.trim()) continue;
+            if (m.status === 'error') continue;
+            lines.push(`${m.role === 'user' ? '主人' : '助理'}: ${m.content.trim()}`);
         }
-
-        return selected.join('\n\n');
+        return lines.join('\n\n');
     }
 
     /**

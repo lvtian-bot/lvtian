@@ -45,11 +45,18 @@ function createMockEngine(tracker = {}) {
             return { sessionId };
         })
         .onRequest(acp.methods.agent.session.resume, (c) => {
+            tracker.resumedSessions.push(c.params.sessionId);
+            // 模拟引擎对损坏旧会话的自愈：resume 请求 A，返回的却是全新会话 B
+            if (tracker.resumeReplacementId) {
+                const replacementId = tracker.resumeReplacementId;
+                knownSessions.add(replacementId);
+                activeSessions.add(replacementId);
+                return { sessionId: replacementId };
+            }
             if (!knownSessions.has(c.params.sessionId)) {
                 throw new acp.RequestError(-32002, 'session not found');
             }
             activeSessions.add(c.params.sessionId);
-            tracker.resumedSessions.push(c.params.sessionId);
             return { sessionId: c.params.sessionId };
         })
         .onRequest(acp.methods.agent.session.prompt, async (c) => {
@@ -275,7 +282,7 @@ test('ContextConsolidator 直发模型 API（自发自解、不走 DSH、原子�
         // 验证请求格式符合标准 OpenAI/DeepSeek 兼容接口
         assert.strictEqual(capturedRequest.url, 'https://api.deepseek.com/v1/chat/completions');
         assert.strictEqual(capturedRequest.headers.Authorization, 'Bearer test-key-123');
-        assert.strictEqual(capturedRequest.body.model, 'deepseek-chat');
+        assert.strictEqual(capturedRequest.body.model, 'deepseek-flash');
         assert.ok(capturedRequest.body.messages[1].content.includes('3 小时空闲加 20%'));
     } finally {
         cleanupTempDir(tmpDir);
@@ -424,10 +431,12 @@ test('AcpEngineManager 存在 pendingBackground 时清爽唤醒并切新 DSH 会
         const initialDshSession = sm.getDshSessionId('main');
         assert.strictEqual(tracker.createdSessions.length, 1);
 
-        // 模拟深度静默期间后台已写入 pending_background.txt
+        // 模拟深度静默期间后台已写入 pending_background.txt（同时把活跃时间推到 3h 前）
         const memoContent = `### 1. 核心共识与最终盘面
 - 服务端会话轮换方案定案。`;
         sm.setPendingBackground('main', memoContent);
+        sm.setUsage('main', 40000, 128000);
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
         assert.strictEqual(sm.hasPendingBackground('main'), true);
 
         // 主人再次唤醒（发送新消息）
@@ -444,7 +453,7 @@ test('AcpEngineManager 存在 pendingBackground 时清爽唤醒并切新 DSH 会
 
         // 2. Prompt 成功注入心智接力提要与关键原文锚定
         const secondPrompt = tracker.prompts[1].text;
-        assert.ok(secondPrompt.includes('[前序交流心智接力提要 (3小时前归档)]'));
+        assert.ok(secondPrompt.includes('[前序交流心智接力提要 (上次静默期归档)]'));
         assert.ok(secondPrompt.includes('服务端会话轮换方案定案'));
         assert.ok(secondPrompt.includes('[未竟事项与关键交互原文锚定'));
         assert.ok(secondPrompt.includes('刚才那个方案做好了吗？'));
@@ -547,7 +556,7 @@ test('resolveProviderConfig 成组绑定提供方：OPENAI 凭据与 DeepSeek �
         assert.ok(deepseekConfig);
         assert.strictEqual(deepseekConfig.apiKey, 'sk-deepseek-secret');
         assert.strictEqual(deepseekConfig.baseUrl, 'https://api.deepseek.com');
-        assert.strictEqual(deepseekConfig.model, 'deepseek-chat');
+        assert.strictEqual(deepseekConfig.model, 'deepseek-flash');
 
         // 场景 3: 显式传入 apiKey 且带有 openai/gpt 特征时正确归属
         const customOpenAi = resolveProviderConfig({
@@ -667,22 +676,106 @@ test('SessionManager resetSessionUsage 设定 activeSessionStartSeq，无上报�
     }
 });
 
-test('SessionManager getRecentDialogue 对超长对话历史执行输入预算上限截取（默认 50,000 字符）', () => {
-    const tmpDir = createTempDir('lvtian-dialogue-budget-');
+test('提炼覆盖整段会话：最早的结论不会因为消息条数被丢掉', async () => {
+    const tmpDir = createTempDir('lvtian-span-dialogue-');
     try {
         const sm = new SessionManager(tmpDir);
-
-        // 构造多条各 60,000 字符的长消息（模拟 30 条各 60,000 字符的大体量历史对话）
-        const bigContent = '大容量上下文文本'.repeat(7500); // 60,000 字符
-        for (let i = 1; i <= 5; i++) {
-            sm.addMessage('main', { id: `u-${i}`, role: 'user', content: bigContent, timestamp: i * 10, status: 'sent' });
-            sm.addMessage('main', { id: `a-${i}`, role: 'assistant', content: bigContent, timestamp: i * 10 + 1, status: 'done' });
+        // 第一条就埋下关键结论，后面堆 40 条闲聊把窗口挤出「最近 30 条」
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '定案：方案采用 A 路线，暗号赤松', timestamp: 1, status: 'sent' });
+        for (let i = 2; i <= 41; i++) {
+            sm.addMessage('main', { id: `u-${i}`, role: 'user', content: `闲聊第 ${i} 条`, timestamp: i, status: 'sent' });
+            sm.addMessage('main', { id: `a-${i}`, role: 'assistant', content: `回应第 ${i} 条`, timestamp: i, status: 'done' });
         }
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
+        sm.setUsage('main', 40000, 128000);
 
-        // 测试提取文本严格受控于 50,000 字符上限，避免提炼请求打爆下游 LLM 上下文窗口
-        const dialogue = sm.getRecentDialogue('main', 30, 50000);
-        assert.ok(dialogue.length <= 50000, `实际字符数 ${dialogue.length} 超过预算 50000`);
-        assert.ok(dialogue.endsWith('...'));
+        let captured = '';
+        const consolidator = new ContextConsolidator(sm, {
+            apiKey: 'sk-test',
+            fetchFn: async (_url, init) => {
+                captured = JSON.parse(init.body).messages[1].content;
+                return new Response(JSON.stringify({
+                    choices: [{ message: { content: '整段会话提要' } }],
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            },
+        });
+
+        await consolidator.consolidate('main');
+        assert.ok(captured.includes('暗号赤松'), '第一条消息里的结论必须进入提炼输入');
+        assert.ok(captured.includes('闲聊第 41 条'), '最后一条也要在');
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('提炼读取服务端全部历史：轮换前的对话不会被排除', async () => {
+    const tmpDir = createTempDir('lvtian-history-dialogue-');
+    try {
+        const sm = new SessionManager(tmpDir);
+        sm.addMessage('main', { id: 'u-old', role: 'user', content: '很早以前定下的暗号是青竹', timestamp: 1, status: 'sent' });
+        sm.addMessage('main', { id: 'a-old', role: 'assistant', content: '记住了', timestamp: 2, status: 'done' });
+        // 模拟发生了一次轮换：之后的提炼若按 activeSessionStartSeq 截断，就会漏掉上面的历史
+        sm.resetSessionUsage('main', 99);
+        sm.addMessage('main', { id: 'u-new', role: 'user', content: '轮换后的新话题', timestamp: 3, status: 'sent' });
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
+        sm.setUsage('main', 40000, 128000);
+
+        let captured = '';
+        const consolidator = new ContextConsolidator(sm, {
+            apiKey: 'sk-test',
+            fetchFn: async (_url, init) => {
+                captured = JSON.parse(init.body).messages[1].content;
+                return new Response(JSON.stringify({
+                    choices: [{ message: { content: '完整历史提要' } }],
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            },
+        });
+
+        await consolidator.consolidate('main');
+        assert.ok(captured.includes('暗号是青竹'), '轮换前的历史必须进入提炼输入');
+        assert.ok(captured.includes('轮换后的新话题'));
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('超长会话分段提炼再合并：不截断、不丢中间内容', async () => {
+    const tmpDir = createTempDir('lvtian-span-chunk-');
+    try {
+        const sm = new SessionManager(tmpDir);
+        for (let i = 1; i <= 6; i++) {
+            sm.addMessage('main', {
+                id: `u-${i}`,
+                role: 'user',
+                content: `第${i}段关键内容` + 'x'.repeat(150),
+                timestamp: i,
+                status: 'sent',
+            });
+        }
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
+        sm.setUsage('main', 40000, 128000);
+
+        const calls = [];
+        const consolidator = new ContextConsolidator(sm, {
+            apiKey: 'sk-test',
+            maxDialogueChars: 200,
+            fetchFn: async (_url, init) => {
+                calls.push(JSON.parse(init.body).messages[1].content);
+                return new Response(JSON.stringify({
+                    choices: [{ message: { content: `局部备忘 ${calls.length}` } }],
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            },
+        });
+
+        const result = await consolidator.consolidate('main');
+        assert.ok(result, '应产出合并后的提要');
+        assert.ok(calls.length > 2, `应发生多次调用，实际 ${calls.length}`);
+        const joined = calls.join('\n');
+        for (let i = 1; i <= 6; i++) {
+            assert.ok(joined.includes(`第${i}段关键内容`), `第 ${i} 段不能丢`);
+        }
+        assert.ok(calls[calls.length - 1].includes('合并'), '最后一步应是合并');
+        assert.strictEqual(sm.getPendingBackground('main'), result);
     } finally {
         cleanupTempDir(tmpDir);
     }
@@ -728,6 +821,7 @@ test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支�
         const sm = new SessionManager(tmpDir);
         let shouldFailPrompt = true;
 
+        const prompts = [];
         const mockEngine = acp.agent({ name: 'mock-failing-engine' })
             .onRequest(acp.methods.agent.initialize, () => ({
                 protocolVersion: acp.PROTOCOL_VERSION,
@@ -736,6 +830,7 @@ test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支�
             .onRequest(acp.methods.agent.authenticate, () => ({}))
             .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'engine-new-1' }))
             .onRequest(acp.methods.agent.session.prompt, async (c) => {
+                prompts.push(c.params.prompt?.[0]?.text ?? '');
                 if (shouldFailPrompt) {
                     throw new Error('Connection reset by peer');
                 }
@@ -746,9 +841,11 @@ test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支�
             connectEngine: connectMockEngine(mockEngine),
         });
 
-        // 预设背景提要
+        // 预设背景提要（活跃时间推到 3h 前以满足轮换门禁）
         const memo = '### 1. 核心共识\n重要备忘录';
         sm.setPendingBackground('main', memo);
+        sm.setUsage('main', 40000, 128000);
+        sm.recordActivity('main', Date.now() - 4 * 60 * 60 * 1000);
         assert.strictEqual(sm.hasPendingBackground('main'), true);
 
         // 首轮请求触发轮换，但在发送 prompt 时失败
@@ -770,8 +867,256 @@ test('AcpEngineManager 轮换首轮请求异常时保留 pendingBackground 支�
             onStatusChange: () => {},
         });
 
-        // 成功交接后提要被正常消费清理
+        // 重试时摘要必须重新注入，不能因为用量已重置而被当成「提前回来」丢弃
+        assert.strictEqual(prompts.length, 2);
+        assert.ok(prompts[1].includes('上次静默期归档'), '重试 prompt 应包含提要标题');
+        assert.ok(prompts[1].includes(memo), '重试 prompt 应包含提要正文');
+        // 成功交接后提要被正常消费清理，交接标记也清除
         assert.strictEqual(sm.hasPendingBackground('main'), false);
+        assert.strictEqual(sm.isHandoffPending('main'), false);
+
+        await engine.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+// ------------------------------------------------------------------
+// 提前量、提前唤醒丢弃与断档接管
+// ------------------------------------------------------------------
+
+test('ContextConsolidator 预生成提前量：早于「门禁-提前量」不提炼，进入提前窗口才提炼', async () => {
+    const tmpDir = createTempDir('lvtian-lead-');
+    try {
+        const sm = new SessionManager(tmpDir);
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '讨论轮换方案', timestamp: Date.now(), status: 'sent' });
+        sm.addMessage('main', { id: 'a-1', role: 'assistant', content: '好的', timestamp: Date.now(), status: 'done' });
+        sm.setUsage('main', 40000, 128000); // 31% > 20%
+
+        // 轮换门禁 10s，提前量 2s => 从第 8s 起开始预生成
+        const consolidator = new ContextConsolidator(sm, {
+            idleTimeoutMs: 10_000,
+            consolidationLeadMs: 2_000,
+            apiKey: 'sk-test',
+            fetchFn: async () => new Response(JSON.stringify({
+                choices: [{ message: { content: '预生成提要内容' } }],
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+        });
+
+        sm.recordActivity('main', Date.now() - 7_500);
+        assert.strictEqual(consolidator.isEligible('main'), false, '7.5s 未进入提前窗口');
+
+        sm.recordActivity('main', Date.now() - 8_200);
+        assert.strictEqual(consolidator.isEligible('main'), true, '8.2s 已进入提前窗口');
+
+        const scanned = await consolidator.scanAllSessions();
+        assert.deepStrictEqual(scanned, ['main']);
+        assert.strictEqual(sm.hasPendingBackground('main'), true);
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('预生成后主人提前回来：丢弃提要、保持原 DSH 会话，不提前轮换', async () => {
+    const tmpDir = createTempDir('lvtian-early-return-');
+    try {
+        const mm = new MemoryManager(tmpDir);
+        const sm = new SessionManager(tmpDir);
+        const tracker = {};
+        const engine = new AcpEngineManager(tmpDir, mm, sm, {
+            idleTimeoutMs: 3 * 60 * 60 * 1000,
+            minCapacityRatio: 0.2,
+            connectEngine: connectMockEngine(createMockEngine(tracker)),
+        });
+
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '第一轮', timestamp: Date.now(), status: 'sent' });
+        await engine.execute('main', 'asst-1', '第一轮', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+        const firstSession = sm.getDshSessionId('main');
+        sm.setUsage('main', 40000, 128000); // 容量过线
+
+        // 2h58m：提前窗口内已生成提要，但还没满 3h
+        sm.setPendingBackground('main', '预生成但尚未生效的提要');
+        sm.recordActivity('main', Date.now() - (2 * 60 + 58) * 60 * 1000);
+
+        await engine.execute('main', 'asst-2', '我回来了', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+
+        // 不换会话，提要作废
+        assert.strictEqual(sm.getDshSessionId('main'), firstSession, '未满 3h 不应轮换');
+        assert.strictEqual(tracker.createdSessions.length, 1);
+        assert.strictEqual(sm.hasPendingBackground('main'), false, '提前回来应丢弃预生成提要');
+        assert.ok(!tracker.prompts[1].text.includes('预生成但尚未生效的提要'));
+
+        await engine.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('日志快照轮换写入 v2 完整 state：压缩后会话状态不丢', () => {
+    const tmpDir = createTempDir('lvtian-snapshot-v2-');
+    const prevThreshold = process.env.LVTIAN_SESSION_ROTATE_BYTES;
+    try {
+        process.env.LVTIAN_SESSION_ROTATE_BYTES = '400';
+        const sm = new SessionManager(tmpDir);
+        for (let i = 0; i < 4; i++) {
+            sm.addMessage('main', {
+                id: `m${i}`,
+                role: 'user',
+                content: `消息-${i}-` + 'x'.repeat(200),
+                timestamp: Date.now(),
+                status: 'sent',
+            });
+        }
+        sm.recordActivity('main', 1234567890);
+        sm.setUsage('main', 40000, 128000);
+        // 再写一条，触发快照轮换，确保快照覆盖刚写入的活跃时间与用量
+        sm.addMessage('main', {
+            id: 'm-trigger',
+            role: 'user',
+            content: '触发轮换-' + 'y'.repeat(200),
+            timestamp: Date.now(),
+            status: 'sent',
+        });
+
+        const activeRaw = fs.readFileSync(path.join(tmpDir, 'sessions', 'main', 'events.jsonl'), 'utf8');
+        const first = JSON.parse(activeRaw.slice(0, activeRaw.indexOf('\n')));
+        assert.strictEqual(first.v, 2);
+        assert.strictEqual(first.state.messages.length, 5);
+        assert.strictEqual(first.state.lastActiveAt, 1234567890);
+        assert.strictEqual(first.state.contextTokens, 40000);
+
+        const sm2 = new SessionManager(tmpDir);
+        assert.strictEqual(sm2.getReconcileData('main', 0).messages.length, 5);
+        assert.strictEqual(sm2.getUsage('main').tokens, 40000);
+    } finally {
+        if (prevThreshold === undefined) delete process.env.LVTIAN_SESSION_ROTATE_BYTES;
+        else process.env.LVTIAN_SESSION_ROTATE_BYTES = prevThreshold;
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('底层 resume 返回另一个会话时按断档处理：注入原文锚定而非静默丢上下文', async () => {
+    const tmpDir = createTempDir('lvtian-resume-replaced-');
+    try {
+        const mm = new MemoryManager(tmpDir);
+        const sm = new SessionManager(tmpDir);
+        const tracker = {};
+        const engine1 = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(createMockEngine(tracker)),
+        });
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '请记住暗号是青竹', timestamp: Date.now(), status: 'sent' });
+        await engine1.execute('main', 'asst-1', '请记住暗号是青竹', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+        sm.addMessage('main', { id: 'a-1', role: 'assistant', content: '记住了，暗号是青竹', timestamp: Date.now(), status: 'done' });
+        const firstSession = sm.getDshSessionId('main');
+        await engine1.stopAll();
+
+        // 换一个引擎连接，模拟 resume 时旧会话损坏被替换成全新会话
+        const tracker2 = { resumeReplacementId: 'engine-replacement-1' };
+        const engine2 = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(createMockEngine(tracker2)),
+        });
+        await engine2.execute('main', 'asst-2', '暗号是什么？', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+
+        assert.notStrictEqual(sm.getDshSessionId('main'), firstSession);
+        assert.strictEqual(sm.getDshSessionId('main'), 'engine-replacement-1');
+        const prompt = tracker2.prompts[0].text;
+        assert.ok(prompt.includes('[未竟事项与关键交互原文锚定'), '断档时应补注原文锚定');
+        assert.ok(prompt.includes('青竹'), '应带回上一轮的关键内容');
+
+        await engine2.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('提前窗口内回来且旧会话被替换：保留预生成提要并注入，不提前丢弃', async () => {
+    const tmpDir = createTempDir('lvtian-early-replaced-');
+    try {
+        const mm = new MemoryManager(tmpDir);
+        const sm = new SessionManager(tmpDir);
+        const tracker = {};
+        const engine1 = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(createMockEngine(tracker)),
+        });
+        sm.addMessage('main', { id: 'u-1', role: 'user', content: '较早的结论：方案定稿为 A 路线', timestamp: Date.now(), status: 'sent' });
+        await engine1.execute('main', 'asst-1', '较早的结论', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+        await engine1.stopAll();
+
+        // 2h58m 回来：预生成提要已存在，但还没到 3h 门禁
+        const memo = '### 1. 核心共识\n方案定稿为 A 路线';
+        sm.setPendingBackground('main', memo);
+        sm.setUsage('main', 40000, 128000);
+        sm.recordActivity('main', Date.now() - (2 * 60 + 58) * 60 * 1000);
+
+        // 旧会话恢复时被引擎替换成新会话
+        const tracker2 = { resumeReplacementId: 'engine-replacement-early' };
+        const engine2 = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(createMockEngine(tracker2)),
+        });
+        await engine2.execute('main', 'asst-2', '我回来了', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+
+        assert.ok(tracker2.prompts[0].text.includes('上次静默期归档'), '替换会话应拿到提要');
+        assert.ok(tracker2.prompts[0].text.includes('方案定稿为 A 路线'));
+        assert.strictEqual(sm.hasPendingBackground('main'), false, '交付成功后清理提要');
+        assert.strictEqual(sm.isHandoffPending('main'), false);
+
+        await engine2.stopAll();
+    } finally {
+        cleanupTempDir(tmpDir);
+    }
+});
+
+test('工作区记忆文件每轮重读：MEMORY.md 修改后下一轮 prompt 立即生效', async () => {
+    const tmpDir = createTempDir('lvtian-memory-refresh-');
+    try {
+        const mm = new MemoryManager(tmpDir);
+        const sm = new SessionManager(tmpDir);
+        const tracker = {};
+        const engine = new AcpEngineManager(tmpDir, mm, sm, {
+            connectEngine: connectMockEngine(createMockEngine(tracker)),
+        });
+
+        fs.writeFileSync(path.join(tmpDir, 'MEMORY.md'), '# 旧记忆\n- 当前暗号：青竹\n', 'utf8');
+        await engine.execute('main', 'asst-1', '第一轮', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+        assert.ok(tracker.prompts[0].text.includes('当前暗号：青竹'));
+
+        // 引擎进程不重启，模拟用户在会话进行中修改记忆文件
+        fs.writeFileSync(path.join(tmpDir, 'MEMORY.md'), '# 新记忆\n- 当前暗号：赤松\n', 'utf8');
+        await engine.execute('main', 'asst-2', '第二轮', {
+            onDelta: () => {},
+            onToolCall: () => {},
+            onStatusChange: () => {},
+        });
+        assert.ok(tracker.prompts[1].text.includes('当前暗号：赤松'), '下一轮应加载最新记忆');
+        assert.ok(!tracker.prompts[1].text.includes('当前暗号：青竹'), '不应继续使用旧副本');
 
         await engine.stopAll();
     } finally {
