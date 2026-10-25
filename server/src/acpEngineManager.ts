@@ -635,8 +635,9 @@ export class AcpEngineManager {
                                 const targetFile = path.join(attDir, safeName);
                                 fs.writeFileSync(targetFile, Buffer.from(att.data, 'base64'));
                                 attachmentContext += `\n[主人附带了文件已保存至工作区: attachments/${safeName}] (原名: ${rawName})`;
-                            } catch {
-                                attachmentContext += `\n[主人附带了文件: ${att.name}]`;
+                            } catch (err) {
+                                console.error(`[AcpEngineManager] 保存二进制附件失败:`, err);
+                                throw new Error(`保存二进制附件失败 (${att.name}): ${err instanceof Error ? err.message : String(err)}`);
                             }
                         }
                     }
