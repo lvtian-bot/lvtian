@@ -70,8 +70,15 @@ export class AssistantClient {
         const backgroundDurationMs = this.lastBackgroundTimestamp > 0
             ? Date.now() - this.lastBackgroundTimestamp
             : 0;
+        this.lastBackgroundTimestamp = 0;
 
         const isWsOpen = this.ws && this.ws.readyState === WebSocket.OPEN;
+        const isWsConnecting = this.ws && this.ws.readyState === WebSocket.CONNECTING;
+
+        // 若当前已有连接正处于握手建立中（CONNECTING），避免重复触发推倒重建
+        if (isWsConnecting) {
+            return;
+        }
 
         if (!isWsOpen || backgroundDurationMs > 3000) {
             // 切后台超过 3 秒或连接已断：推倒旧连接，0ms 极速重建

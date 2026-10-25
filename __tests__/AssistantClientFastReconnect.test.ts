@@ -72,4 +72,23 @@ describe('AssistantClient 极速重连与热启动唤醒', () => {
         // 熔断计时器已立即清除
         expect(internalClient.pongTimeoutTimer).toBeNull();
     });
+
+    test('当连接处于 CONNECTING 时，handleAppForeground 防重入不重复触发 connect', () => {
+        const spyConnect = jest.spyOn(client, 'connect').mockImplementation(async () => {});
+
+        const internalClient = client as unknown as {
+            ws: { readyState: number } | null;
+            lastBackgroundTimestamp: number;
+        };
+        // 模拟当前已有连接处于 CONNECTING (0)
+        internalClient.ws = { readyState: 0 };
+        internalClient.lastBackgroundTimestamp = Date.now() - 5000;
+
+        client.handleAppForeground();
+
+        // 验证由于处于 CONNECTING，被防重入保护拦截，不重复触发 connect
+        expect(spyConnect).not.toHaveBeenCalled();
+
+        spyConnect.mockRestore();
+    });
 });
