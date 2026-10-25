@@ -987,7 +987,7 @@ export class SessionManager {
         const lines: string[] = [];
         for (const m of session.messages) {
             if (m.role !== 'user' && m.role !== 'assistant') continue;
-            if (m.status === 'error') continue;
+            if (m.status === 'error' || m.status === 'queued') continue;
             const text = this.formatMessageWithAttachments(m);
             if (!text) continue;
             lines.push(`${m.role === 'user' ? '主人' : '助理'}: ${text}`);
@@ -1013,7 +1013,8 @@ export class SessionManager {
             (m) =>
                 (m.role === 'user' || m.role === 'assistant') &&
                 this.formatMessageWithAttachments(m).length > 0 &&
-                m.status !== 'error'
+                m.status !== 'error' &&
+                m.status !== 'queued'
         );
         if (dialogue.length === 0) {
             return '';

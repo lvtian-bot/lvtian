@@ -514,26 +514,15 @@ export class AssistantClient {
 
     /**
      * 取消排队中的消息
+     * 注意：不作本地乐观状态修改，等待服务端校验并下发 message_ack 确认后再收敛状态，
+     * 避免撤销与服务端刚好开始执行发生状态错乱。
      */
     public cancelQueued(messageId: string): boolean {
-        const sent = this.sendRaw({
+        return this.sendRaw({
             type: 'cancel_queued',
             sessionId: 'main',
             messageId,
         });
-        if (sent) {
-            const store = useAssistantStore.getState();
-            const existing = store.messages.find((m) => m.id === messageId);
-            if (existing) {
-                store.addOrUpdateMessage({
-                    ...existing,
-                    status: 'error',
-                    errorMessage: 'task_cancelled',
-                });
-            }
-            return true;
-        }
-        return false;
     }
 
     /**

@@ -1215,3 +1215,64 @@ test('SessionManager repairAfterLoad：服务重启时未执行的排队消息�
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('SessionManager: getHistoryDialogue 与 getVerbatimExcerpts 自动过滤 queued 状态消息', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-filter-'));
+    const sm = new SessionManager(tmpDir);
+
+    sm.addMessage('test-session', {
+        id: 'u1',
+        role: 'user',
+        content: '第一条指令',
+        timestamp: Date.now(),
+        status: 'done',
+    });
+    sm.addMessage('test-session', {
+        id: 'a1',
+        role: 'assistant',
+        content: '第一条回复',
+        timestamp: Date.now() + 1,
+        status: 'done',
+    });
+    sm.addMessage('test-session', {
+        id: 'u2-queued',
+        role: 'user',
+        content: '排队中的未来指令',
+        timestamp: Date.now() + 2,
+        status: 'queued',
+    });
+
+    const history = sm.getHistoryDialogue('test-session');
+    assert.ok(history.includes('第一条指令'));
+    assert.ok(history.includes('第一条回复'));
+    assert.ok(!history.includes('排队中的未来指令'), '未执行的排队消息不应出现在历史对话中');
+
+    const verbatim = sm.getVerbatimExcerpts('test-session');
+    assert.ok(verbatim.includes('第一条指令'));
+    assert.ok(verbatim.includes('第一条回复'));
+    assert.ok(!verbatim.includes('排队中的未来指令'), '未执行的排队消息不应出现在物理锚定摘要中');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('排队保序：队列中有未处理消息时，新到达消息保持 queued 状态而不插队', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 3, chunkDelayMs: 60 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 1. 发送 u1，并在执行期间发送 u2 排队
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '任务1' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u1', 'u1 ack');
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '任务2' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'queued', 'u2 queued');
+
+    // 2. 发送 u3，验证即使此时队列有待处理消息 u2，u3 必须入队而非插队直接执行
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u3', content: '任务3' }));
+    const ack3 = await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u3', 'u3 ack');
+    assert.equal(ack3.status, 'queued', 'u3 应进入排队而不是插队直接执行');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+

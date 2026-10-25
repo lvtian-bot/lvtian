@@ -591,8 +591,10 @@ export class LvtianServer {
             return;
         }
 
-        // 如果当前已有任务在执行，将该消息存入排队队列（status: 'queued'），并向客户端确认排队
-        if (this.acpEngine.isRunning(sessionId)) {
+        // 如果当前已有任务在执行或队列中已有等待处理的消息，将该消息存入排队队列（status: 'queued'），并向客户端确认排队
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        const hasQueued = session.messages.some((m) => m.role === 'user' && m.status === 'queued');
+        if (this.acpEngine.isRunning(sessionId) || hasQueued) {
             let userMsg;
             try {
                 userMsg = this.sessionManager.addMessage(sessionId, {
@@ -684,7 +686,17 @@ export class LvtianServer {
                 status: 'processing',
             });
         } catch (err) {
+            const errStr = err instanceof Error ? err.message : String(err);
             console.error(`[Server] 添加助理消息失败:`, err);
+            const seq = this.sessionManager.setTaskState(sessionId, 'error');
+            this.broadcastSession(sessionId, {
+                type: 'task_status',
+                seq,
+                sessionId,
+                state: 'error',
+                error: errStr,
+            });
+            this.scheduleProcessQueue(sessionId);
             return;
         }
 
@@ -746,7 +758,11 @@ export class LvtianServer {
                     return;
                 }
                 if (status === 'stopped') {
-                    const seq = this.sessionManager.nextSeq(sessionId);
+                    this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
+                        m.status = 'error';
+                        m.errorMessage = payload?.code || 'task_stopped';
+                    });
+                    const seq = this.sessionManager.setTaskState(sessionId, 'stopped');
                     this.broadcastSession(sessionId, {
                         type: 'task_status',
                         seq,
@@ -754,6 +770,7 @@ export class LvtianServer {
                         state: 'stopped',
                         error: payload?.code,
                     });
+                    this.scheduleProcessQueue(sessionId);
                     return;
                 }
 
@@ -805,7 +822,7 @@ export class LvtianServer {
     }
 
     private processNextQueuedMessage(sessionId: string): void {
-        if (this.acpEngine.isRunning(sessionId)) {
+        if (this.isDraining || this.acpEngine.isRunning(sessionId)) {
             return;
         }
         const session = this.sessionManager.getOrCreateSession(sessionId);
