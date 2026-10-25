@@ -526,27 +526,30 @@ export const ChatScreen = () => {
     const handleRetryMessage = useCallback(async (item: AssistantMessage) => {
         let attachments = item.attachments;
         if (attachments && attachments.length > 0) {
-            attachments = await Promise.all(
-                attachments.map(async (att) => {
-                    if (att.data || att.content || !att.uri) {
-                        return att;
-                    }
-                    try {
+            try {
+                attachments = await Promise.all(
+                    attachments.map(async (att) => {
+                        if (att.data || att.content) {
+                            return att;
+                        }
+                        if (!att.uri) {
+                            throw new Error('ATTACHMENT_URI_MISSING');
+                        }
                         const res = await fsService.readAttachment(att.uri, 750 * 1024, att.mimeType, att.name);
                         return {
                             ...att,
                             content: res.content,
                             data: res.data,
                         };
-                    } catch (e) {
-                        console.warn('[ChatScreen] 重发时恢复附件数据失败:', e);
-                        return att;
-                    }
-                }),
-            );
+                    }),
+                );
+            } catch {
+                Alert.alert(t('common.error', '错误'), t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'));
+                return;
+            }
         }
         AssistantClient.getInstance().sendMessage(item.content, attachments);
-    }, []);
+    }, [t]);
 
     const handleSend = () => {
         const text = inputContent.trim();
@@ -696,11 +699,14 @@ export const ChatScreen = () => {
                                           ],
                                 ]}
                             >
-                                {item.attachments && item.attachments.map((att, idx) => (
-                                    att.type === 'image' && att.data ? (
+                                {item.attachments && item.attachments.map((att, idx) => {
+                                    const imageUri = att.type === 'image'
+                                        ? (att.data ? `data:${att.mimeType || 'image/jpeg'};base64,${att.data}` : att.uri)
+                                        : undefined;
+                                    return imageUri ? (
                                         <Image
                                             key={idx}
-                                            source={{ uri: `data:${att.mimeType || 'image/jpeg'};base64,${att.data}` }}
+                                            source={{ uri: imageUri }}
                                             style={styles.attachmentImage}
                                             resizeMode="cover"
                                         />
@@ -728,8 +734,8 @@ export const ChatScreen = () => {
                                                 {att.name}
                                             </Text>
                                         </View>
-                                    )
-                                ))}
+                                    );
+                                })}
 
                                 {isUser ? (
                                     <Text style={styles.userText} selectable={true}>

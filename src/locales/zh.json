@@ -20,7 +20,8 @@
     "pickImageError": "选择图片失败",
     "pickDocumentError": "选择文件失败",
     "attachmentTooLarge": "附件体积过大（上限 750KB）",
-    "attachmentReadError": "读取附件文件失败"
+    "attachmentReadError": "读取附件文件失败",
+    "retryAttachmentFailed": "附件原文件已失效，无法重新发送"
   },
   "moments": {
     "placeholderTitle": "动态资讯",
