@@ -361,8 +361,36 @@ export class AssistantClient {
                     })
                 );
             } catch {
-                // 原文件失效时保持降级重试已有数据
+                // 原文件失效：中止发送残缺指令，将消息标记为明确错误并移出队列
+                const existing = store.messages.find((m) => m.id === nextItem.messageId);
+                store.addOrUpdateMessage({
+                    id: nextItem.messageId,
+                    seq: existing?.seq ?? store.currentSeq,
+                    role: 'user',
+                    content: nextItem.content,
+                    timestamp: existing?.timestamp ?? Date.now(),
+                    status: 'error',
+                    errorMessage: i18n.t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'),
+                    attachments: nextItem.attachments,
+                });
+                store.removeFromPendingSendQueue(nextItem.messageId);
+                // 推进后续排队消息
+                this.flushPendingSendQueue();
+                return;
             }
+        }
+
+        // 异步 I/O 完成后二次校验：核验该项是否仍处于待发队列中且无活跃冲突
+        const currentStore = useAssistantStore.getState();
+        if (
+            currentStore.isServerUpgrading ||
+            currentStore.taskState === 'processing' ||
+            currentStore.taskState === 'awaiting_approval'
+        ) {
+            return;
+        }
+        if (!currentStore.pendingSendQueue.some((q) => q.messageId === nextItem.messageId)) {
+            return;
         }
 
         this.sendRaw({

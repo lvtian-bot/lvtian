@@ -368,4 +368,57 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue[0].attachments?.[0].name).toBe('diag.png');
         expect(state.messages[0].attachments?.[0].name).toBe('diag.png');
     });
+
+    test('重水化附件失败时标记错误并移出待发队列，不发送残缺指令', async () => {
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-att-missing',
+                    seq: 1,
+                    role: 'user',
+                    content: '丢失附件的消息',
+                    timestamp: Date.now(),
+                    status: 'sending',
+                    attachments: [
+                        {
+                            type: 'image',
+                            name: 'gone.png',
+                            uri: 'file:///non-existent-image.png',
+                        },
+                    ],
+                },
+            ],
+            pendingSendQueue: [
+                {
+                    sessionId: 'main',
+                    messageId: 'm-att-missing',
+                    content: '丢失附件的消息',
+                    attachments: [
+                        {
+                            type: 'image',
+                            name: 'gone.png',
+                            uri: 'file:///non-existent-image.png',
+                        },
+                    ],
+                },
+            ],
+            isServerUpgrading: false,
+            taskState: 'idle',
+        });
+
+        await client.flushPendingSendQueue();
+
+        const state = useAssistantStore.getState();
+        // 1. 绝不发送残缺消息
+        expect(sendRawSpy).not.toHaveBeenCalled();
+        // 2. 消息标记为失败状态以供重试
+        expect(state.messages[0].status).toBe('error');
+        expect(state.messages[0].errorMessage).toMatch(/失效|无法重新发送|Attachment file is no longer available/);
+        // 3. 移出队列释放队首
+        expect(state.pendingSendQueue.length).toBe(0);
+
+        sendRawSpy.mockRestore();
+    });
 });
