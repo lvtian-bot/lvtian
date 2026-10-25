@@ -57,7 +57,13 @@ jobs:
 
             echo "=== 构建服务端产物 ==="
             cd "${DEPLOY_DIR}/server"
-            npm ci
+            # 避免使用会整体清空已运行 node_modules 的 npm ci；优先判断依赖变动，必要时执行安全的增量安装
+            if [ -d "node_modules" ] && git diff --quiet HEAD@{1} HEAD -- package.json package-lock.json 2>/dev/null; then
+              echo "依赖未变动，复用现有依赖加速构建"
+            else
+              echo "检测到依赖变动或首次构建，执行安全增量安装"
+              npm install --prefer-offline --no-audit
+            fi
             npm run build
 
             echo "=== 发送优雅升级信号 ==="
