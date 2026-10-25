@@ -1,5 +1,6 @@
 import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
+import { fsService } from './FileSystemService';
 import {
     ClientMessage,
     ServerMessage,
@@ -9,6 +10,7 @@ import {
 
 export class AssistantClient {
     private static instance: AssistantClient | null = null;
+    private static messageSeq = 0;
     private ws: WebSocket | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -289,8 +291,14 @@ export class AssistantClient {
         if (this.isExplicitlyClosed || this.reconnectTimer) return;
 
         this.reconnectAttempts += 1;
-        // 指数退避: 1s, 2s, 4s, 最大 10s
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
+        const isUpgrading = useAssistantStore.getState().isServerUpgrading;
+        // 升级期间前 5 次尝试采用 1 秒快速重连，使服务秒级重启就绪后即刻重连；常规断开采用指数退避
+        let delay: number;
+        if (isUpgrading && this.reconnectAttempts <= 5) {
+            delay = 1000;
+        } else {
+            delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
+        }
 
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
@@ -322,10 +330,12 @@ export class AssistantClient {
 
     /**
      * 发送聊天消息
+     * 遵循产品铁律：无论离线、断线还是服务端升级期间，绝不弹窗报错或中断心流，
+     * 消息乐观上屏并在本地队列排队，连上对账后自动静默补发。
      */
-    public sendMessage(content: string, attachments?: ChatAttachment[]): string {
+    public sendMessage(content: string, attachments?: ChatAttachment[], customMessageId?: string): string {
         const store = useAssistantStore.getState();
-        const messageId = `msg-${Date.now()}`;
+        const messageId = customMessageId || `msg-${Date.now()}-${++AssistantClient.messageSeq}`;
 
         const localMessage: AssistantMessage = {
             id: messageId,
@@ -339,6 +349,23 @@ export class AssistantClient {
 
         store.addOrUpdateMessage(localMessage);
 
+        const isConnected = this.ws && this.ws.readyState === WebSocket.OPEN && store.connectionState === 'connected';
+        const isUpgrading = store.isServerUpgrading;
+
+        // 若处于升级中或连接未就绪：自动进入本地待发队列排队，状态保持 sending（微小等待图标），不报任何网络错误
+        if (!isConnected || isUpgrading) {
+            store.addToPendingSendQueue({
+                sessionId: 'main',
+                messageId,
+                content,
+                attachments,
+            });
+            if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
+                this.connect();
+            }
+            return messageId;
+        }
+
         const sent = this.sendRaw({
             type: 'chat',
             sessionId: 'main',
@@ -348,14 +375,107 @@ export class AssistantClient {
         });
 
         if (!sent) {
-            store.addOrUpdateMessage({
-                ...localMessage,
-                status: 'error',
-                errorMessage: i18n.t('assistant.sendFailedOffline', '网络连接未就绪，消息已暂存，连上后可重试'),
+            // 发送失败兜底入队
+            store.addToPendingSendQueue({
+                sessionId: 'main',
+                messageId,
+                content,
+                attachments,
             });
         }
 
         return messageId;
+    }
+
+    /**
+     * 自动静默补发待发队列中的积压消息（FIFO 串行推进）
+     * 遵循服务端单会话单任务约束：仅在当前无进行中任务时补发第一条，
+     * 待收到服务端成功回执后移出队列，并在上一任务执行完毕后自动推进下一条。
+     */
+    public async flushPendingSendQueue(): Promise<void> {
+        const store = useAssistantStore.getState();
+        if (store.isServerUpgrading) {
+            return;
+        }
+        // 若当前有任务正在执行中，等待其终态收尾后再推进队列下一条
+        if (store.taskState === 'processing' || store.taskState === 'awaiting_approval') {
+            return;
+        }
+
+        const queue = store.pendingSendQueue;
+        if (queue.length === 0) return;
+
+        const nextItem = queue[0];
+        let attachments = nextItem.attachments;
+
+        // 若附件在持久化脱水后缺少 Base64/content，依据本地 uri 异步重新读取补全
+        if (attachments && attachments.length > 0) {
+            try {
+                attachments = await Promise.all(
+                    attachments.map(async (att) => {
+                        if (att.data || att.content || !att.uri) {
+                            return att;
+                        }
+                        const isImg = att.type === 'image';
+                        const res = await fsService.readAttachment(
+                            att.uri,
+                            750 * 1024,
+                            isImg ? 'image/jpeg' : att.mimeType,
+                            att.name
+                        );
+                        return {
+                            ...att,
+                            mimeType: isImg ? 'image/jpeg' : (att.mimeType || 'application/octet-stream'),
+                            content: res.content,
+                            data: res.data,
+                        };
+                    })
+                );
+            } catch {
+                // 原文件失效：若在此期间会话已被清空或重置，不再写入旧消息
+                const currentStore = useAssistantStore.getState();
+                if (!currentStore.pendingSendQueue.some((q) => q.messageId === nextItem.messageId)) {
+                    return;
+                }
+                const existing = currentStore.messages.find((m) => m.id === nextItem.messageId);
+                currentStore.addOrUpdateMessage({
+                    id: nextItem.messageId,
+                    seq: existing?.seq ?? currentStore.currentSeq,
+                    role: 'user',
+                    content: nextItem.content,
+                    timestamp: existing?.timestamp ?? Date.now(),
+                    status: 'error',
+                    errorMessage: i18n.t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'),
+                    attachments: nextItem.attachments,
+                });
+                currentStore.removeFromPendingSendQueue(nextItem.messageId);
+                // 推进后续排队消息
+                this.flushPendingSendQueue();
+                return;
+            }
+        }
+
+        // 异步 I/O 完成后二次校验：核验该项是否仍处于待发队列中且无活跃冲突
+        const currentStore = useAssistantStore.getState();
+        if (
+            currentStore.isServerUpgrading ||
+            currentStore.taskState === 'processing' ||
+            currentStore.taskState === 'awaiting_approval'
+        ) {
+            return;
+        }
+        if (!currentStore.pendingSendQueue.some((q) => q.messageId === nextItem.messageId)) {
+            return;
+        }
+
+        this.sendRaw({
+            type: 'chat',
+            sessionId: nextItem.sessionId || 'main',
+            messageId: nextItem.messageId,
+            content: nextItem.content,
+            attachments,
+        });
+        // 收到服务端确认前保持保留在队列中，防止网络闪断丢消息
     }
 
     /**
@@ -416,7 +536,16 @@ export class AssistantClient {
                 break;
             }
 
+            case 'service_upgrading': {
+                store.setIsServerUpgrading(true);
+                // 收到升级预告，重置重连计数以便进入 1 秒快速重连周期
+                this.reconnectAttempts = 0;
+                break;
+            }
+
             case 'sync_result': {
+                // 重连并完成对账，服务端已恢复正常，解除升级态
+                store.setIsServerUpgrading(false);
                 store.setCurrentSeq(msg.currentSeq);
                 store.setTaskState(msg.taskState);
                 // 队列字段优先；回退兼容仅返回单审批的旧服务端
@@ -437,16 +566,22 @@ export class AssistantClient {
                 );
                 const serverIdSet = new Set(validServerMessages.map((m) => m.id));
                 const localMessages = store.messages;
+                const pendingIds = new Set(store.pendingSendQueue.map((q) => q.messageId));
 
                 const msgMap = new Map<string, AssistantMessage>();
-                // 先写入本地已有的所有消息；若原本处于 sending 的消息未在服务端返回列表中，转为 error 状态以激活重试按钮
+                // 先写入本地已有的所有消息；排队中消息保持 sending 态，其余未确认消息转 error
                 for (const m of localMessages) {
                     if (m.status === 'sending' && !serverIdSet.has(m.id)) {
-                        msgMap.set(m.id, {
-                            ...m,
-                            status: 'error',
-                            errorMessage: m.errorMessage || i18n.t('assistant.sendInterrupted', '发送中断，请重试'),
-                        });
+                        if (pendingIds.has(m.id)) {
+                            // 消息仍在本地队列中等待补发，保持 sending 态，不报错
+                            msgMap.set(m.id, m);
+                        } else {
+                            msgMap.set(m.id, {
+                                ...m,
+                                status: 'error',
+                                errorMessage: m.errorMessage || i18n.t('assistant.sendInterrupted', '发送中断，请重试'),
+                            });
+                        }
                     } else {
                         msgMap.set(m.id, m);
                     }
@@ -454,18 +589,70 @@ export class AssistantClient {
                 // 服务端下发的有效消息优先覆盖更新
                 for (const m of validServerMessages) {
                     msgMap.set(m.id, m);
+                    if (pendingIds.has(m.id)) {
+                        store.removeFromPendingSendQueue(m.id);
+                    }
                 }
 
                 const merged = Array.from(msgMap.values()).sort(
                     (a, b) => a.timestamp - b.timestamp
                 );
                 store.setMessages(merged);
+
+                // 对账完成后，自动静默补发待发队列中的排队消息
+                this.flushPendingSendQueue();
                 break;
             }
 
             case 'message_ack': {
                 const existing = store.messages.find((m) => m.id === msg.messageId);
                 const isError = msg.status === 'error';
+
+                // 服务端在优雅停机排空期拒绝新任务：客户端将其重新加入本地排队队列并置为升级中态，不向用户报错
+                if (isError && msg.error === 'service_upgrading') {
+                    store.setIsServerUpgrading(true);
+                    this.reconnectAttempts = 0;
+                    store.addOrUpdateMessage({
+                        id: msg.messageId,
+                        seq: msg.seq,
+                        role: 'user',
+                        content: existing ? existing.content : (msg.content || ''),
+                        timestamp: existing ? existing.timestamp : Date.now(),
+                        status: 'sending',
+                        attachments: existing?.attachments,
+                    });
+                    store.addToPendingSendQueue({
+                        sessionId: 'main',
+                        messageId: msg.messageId,
+                        content: existing ? existing.content : (msg.content || ''),
+                        attachments: existing?.attachments,
+                    });
+                    break;
+                }
+
+                // 服务端会话忙碌（如手动停止后底层子进程尚未完全释放收尾）：排队消息保持 sending 态，稍后自动重试
+                if (isError && msg.error === 'session_busy') {
+                    store.addOrUpdateMessage({
+                        id: msg.messageId,
+                        seq: msg.seq,
+                        role: 'user',
+                        content: existing ? existing.content : (msg.content || ''),
+                        timestamp: existing ? existing.timestamp : Date.now(),
+                        status: 'sending',
+                        attachments: existing?.attachments,
+                    });
+                    store.addToPendingSendQueue({
+                        sessionId: 'main',
+                        messageId: msg.messageId,
+                        content: existing ? existing.content : (msg.content || ''),
+                        attachments: existing?.attachments,
+                    });
+                    setTimeout(() => {
+                        this.flushPendingSendQueue();
+                    }, 500);
+                    break;
+                }
+
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
@@ -477,6 +664,12 @@ export class AssistantClient {
                     attachments: existing?.attachments || msg.attachments,
                 });
                 store.setCurrentSeq(msg.seq);
+                // 收到服务端终态回执（成功或明确失败）：均移出本地待发队列释放队首
+                store.removeFromPendingSendQueue(msg.messageId);
+                // 若为终态失败回执，后续不会产生任务执行与状态回调，主动推进队列中的下一条积压消息
+                if (isError) {
+                    this.flushPendingSendQueue();
+                }
                 break;
             }
 
@@ -545,6 +738,16 @@ export class AssistantClient {
                             errorMessage: msg.error,
                             stopReason: msg.stopReason,
                         });
+                    }
+
+                    // 上一个任务已结束，串行推进待发队列中的下一条排队消息
+                    // 若为停止操作，轻量缓冲 300ms 避开服务端底层子进程异步收尾间隙
+                    if (msg.state === 'stopped') {
+                        setTimeout(() => {
+                            this.flushPendingSendQueue();
+                        }, 300);
+                    } else {
+                        this.flushPendingSendQueue();
                     }
                 }
                 break;

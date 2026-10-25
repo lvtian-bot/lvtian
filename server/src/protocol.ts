@@ -63,7 +63,19 @@ export type ClientMessage =
     | { type: 'ping' };
 
 // 服务端下发给客户端的报文
+/** 服务端即将升级通知 */
+export interface ServiceUpgradingMessage {
+    type: 'service_upgrading';
+    /** 预计重启恢复所需秒数（通常为 3~5 秒） */
+    estimatedSeconds: number;
+    /** 即将升级的目标版本号或提交简写 */
+    targetVersion?: string;
+    /** 提示文案（可选，客户端优先使用本地国际化） */
+    reason?: string;
+}
+
 export type ServerMessage =
+    | ServiceUpgradingMessage
     | {
           type: 'auth_result';
           success: boolean;

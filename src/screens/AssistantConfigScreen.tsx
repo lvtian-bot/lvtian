@@ -225,7 +225,7 @@ export const AssistantConfigScreen = () => {
                     <Text style={styles.label}>{t('assistant.serverUrl', '服务地址 (URL)')}</Text>
                     <TextInput
                         style={styles.input}
-                        placeholder={t('assistant.serverUrlPlaceholder', '例如 http://192.168.1.100:3000 或域名')}
+                        placeholder={t('assistant.serverUrlPlaceholder', '例如 http://192.168.1.100:1999 或域名')}
                         placeholderTextColor={theme.colors.textSecondary}
                         value={url}
                         onChangeText={(val) => {

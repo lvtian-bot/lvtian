@@ -100,8 +100,18 @@ async function main() {
         process.exit(0);
     };
 
+    const gracefulUpgrade = async () => {
+        if (isShuttingDown) return;
+        isShuttingDown = true;
+        console.log('\n[Server] 收到 SIGUSR1 升级信号，开始执行优雅避让停机...');
+        await server.gracefulDrainAndStop({ estimatedSeconds: 5 });
+        console.log('[Server] 优雅避让停机完成，服务安全退出。');
+        process.exit(0);
+    };
+
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+    process.on('SIGUSR1', gracefulUpgrade);
 }
 
 main().catch((err) => {

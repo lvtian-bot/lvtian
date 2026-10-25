@@ -1,0 +1,103 @@
+name: 服务端优雅自动部署
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: server-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 部署至生产服务器
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 SSH 专用通道
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: 远程拉取、构建并优雅重启
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
+          SERVER_USER: ${{ secrets.SERVER_USER || 'ubuntu' }}
+        run: |
+          ssh -i ~/.ssh/id_rsa -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" 'bash -s' -- "$SERVER_USER" << 'EOF'
+            set -euo pipefail
+            SERVER_USER="${1:-ubuntu}"
+            if [ -d "/home/${SERVER_USER}/code/lvtian" ]; then
+              DEPLOY_DIR="/home/${SERVER_USER}/code/lvtian"
+            else
+              DEPLOY_DIR="/home/${SERVER_USER}/lvtian-server"
+            fi
+            echo "=== 进入部署目录: ${DEPLOY_DIR} ==="
+            cd "${DEPLOY_DIR}"
+
+            echo "=== 同步主分支代码 ==="
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "=== 构建服务端产物 ==="
+            cd "${DEPLOY_DIR}/server"
+            # 避免使用会整体清空已运行 node_modules 的 npm ci；优先判断依赖变动，必要时执行安全的增量安装
+            if [ -d "node_modules" ] && git diff --quiet HEAD@{1} HEAD -- package.json package-lock.json 2>/dev/null; then
+              echo "依赖未变动，复用现有依赖加速构建"
+            else
+              echo "检测到依赖变动或首次构建，执行安全增量安装"
+              npm install --prefer-offline --no-audit
+            fi
+            npm run build
+
+            echo "=== 发送优雅升级信号 ==="
+            npm run upgrade-notify || true
+
+            echo "=== 确保服务重启与运行 ==="
+            # 兼容仓库标准系统级模板单元 lvtian-server@<user>.service 与用户级实例 lvtian-server.service
+            if systemctl is-active --quiet "lvtian-server@${SERVER_USER}.service" 2>/dev/null; then
+              sudo systemctl restart "lvtian-server@${SERVER_USER}.service"
+            elif systemctl --user is-active --quiet lvtian-server.service 2>/dev/null; then
+              systemctl --user restart lvtian-server.service
+            else
+              # 老进程已优雅退出处于非激活态时，依次尝试拉起系统级或用户级服务
+              sudo systemctl restart "lvtian-server@${SERVER_USER}.service" 2>/dev/null || systemctl --user restart lvtian-server.service 2>/dev/null || true
+            fi
+
+            echo "=== 健康检查（等待服务拉起） ==="
+            HEALTH_URL="http://127.0.0.1:1999/health"
+            SUCCESS=0
+            for i in $(seq 1 30); do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${HEALTH_URL}" || true)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✅ 健康检查通过 (HTTP 200)！耗时约 $((i * 2)) 秒。"
+                SUCCESS=1
+                break
+              fi
+              echo "等待服务就绪... (${i}/30) HTTP: ${HTTP_CODE}"
+              sleep 2
+            done
+
+            if [ "$SUCCESS" -ne 1 ]; then
+              echo "❌ 60 秒内服务健康检查失败！输出最近系统日志:"
+              journalctl -u "lvtian-server@${SERVER_USER}.service" -n 50 --no-pager 2>/dev/null || journalctl --user -u lvtian-server.service -n 50 --no-pager 2>/dev/null || true
+              exit 1
+            fi
+            echo "🎉 绿天独立服务端优雅升级部署成功！"
+          EOF

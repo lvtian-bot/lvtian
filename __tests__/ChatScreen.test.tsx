@@ -24,6 +24,7 @@ describe('ChatScreen 输入区与操作菜单', () => {
 
     beforeEach(async () => {
         jest.clearAllMocks();
+        currentRenderer = undefined;
         jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
         await ReactTestRenderer.act(async () => {
             useAssistantStore.setState({
@@ -161,5 +162,24 @@ describe('ChatScreen 输入区与操作菜单', () => {
         const root = currentRenderer!.root;
         const allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts).toContain('document.pdf');
+    });
+
+    it('处于服务端升级状态时展示温和升级横幅，隐藏常规断开条', async () => {
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({
+                serverUrl: 'http://localhost:8080',
+                connectionState: 'disconnected',
+                isServerUpgrading: true,
+            });
+        });
+
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const allTexts = root.findAllByType(Text).map((node) => node.props.children);
+        expect(allTexts.some((t) => typeof t === 'string' && /服务端正在升级|Server is updating/.test(t))).toBe(true);
+        expect(allTexts.some((t) => typeof t === 'string' && /服务未连接|Disconnected/.test(t))).toBe(false);
     });
 });

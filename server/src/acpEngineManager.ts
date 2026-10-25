@@ -325,6 +325,8 @@ export class AcpEngineManager {
     private stopRecoveryTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
     /** 任务占用看门狗计时器（键为会话 ID）：执行结束即取消 */
     private taskWatchdogTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+    /** 空闲等待者队列：用于优雅停机避让等待所有正在运行的任务结束 */
+    private idleWaiters: Array<() => void> = [];
 
     constructor(
         workspace: string,
@@ -454,6 +456,47 @@ export class AcpEngineManager {
         return this.handoffInProgressSessions.has(sessionId);
     }
 
+    /** 是否有任何会话正在执行任务 */
+    public hasActiveTasks(): boolean {
+        return this.activeSessions.size > 0;
+    }
+
+    /** 等待当前所有执行中的任务结束（支持超时熔断兜底） */
+    public async waitForIdle(timeoutMs = 30000): Promise<void> {
+        if (this.activeSessions.size === 0) {
+            return;
+        }
+        return new Promise<void>((resolve) => {
+            let timer: ReturnType<typeof setTimeout> | null = null;
+            const onIdle = () => {
+                if (timer) clearTimeout(timer);
+                resolve();
+            };
+            timer = setTimeout(() => {
+                const idx = this.idleWaiters.indexOf(onIdle);
+                if (idx >= 0) {
+                    this.idleWaiters.splice(idx, 1);
+                }
+                console.warn(`[AcpEngine] 等待活跃任务避让结束超时 (${timeoutMs}ms)，触发熔断`);
+                resolve();
+            }, timeoutMs);
+
+            this.idleWaiters.push(onIdle);
+        });
+    }
+
+    private notifyIdleIfEmpty(): void {
+        if (this.activeSessions.size === 0 && this.idleWaiters.length > 0) {
+            const waiters = [...this.idleWaiters];
+            this.idleWaiters = [];
+            for (const waiter of waiters) {
+                try {
+                    waiter();
+                } catch {}
+            }
+        }
+    }
+
     public handleApproval(sessionId: string, approvalId: string, approved: boolean): boolean {
         // 任务已停止：审批已在停止时被统一拒绝，不再受理应答
         if (this.stoppedSessions.has(sessionId)) {
@@ -570,6 +613,7 @@ export class AcpEngineManager {
             this.stop(sessionId);
         }
         await this.reclaimConnection();
+        this.notifyIdleIfEmpty();
     }
 
     public async execute(
@@ -810,6 +854,7 @@ export class AcpEngineManager {
             this.activeSessions.delete(sessionId);
             this.activeExecutions.delete(sessionId);
             resolveDone();
+            this.notifyIdleIfEmpty();
             // 执行已收尾：取消停止回收与占用看门狗计时器，避免误杀同会话的后续请求
             const recoveryTimer = this.stopRecoveryTimers.get(sessionId);
             if (recoveryTimer) {

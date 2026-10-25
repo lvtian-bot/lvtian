@@ -991,4 +991,80 @@ test('同一会话并发审批：两卡独立下发、各自应答互不丢弃',
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('服务端优雅停机：向所有在线客户端广播 service_upgrading 并平滑退出', async () => {
+    const { server, tmp, port } = await buildWiredServer();
+    const token = 'test-token-wired-12345';
+    const received1 = [];
+    const received2 = [];
+    const ws1 = await openAuthenticatedClient(port, token, received1);
+    const ws2 = await openAuthenticatedClient(port, token, received2);
+
+    // 触发优雅停机
+    await server.gracefulDrainAndStop({
+        estimatedSeconds: 5,
+        targetVersion: 'v0.3.5-test',
+    });
+
+    // 两个客户端均应收到 service_upgrading 广播
+    const upg1 = received1.find((m) => m.type === 'service_upgrading');
+    const upg2 = received2.find((m) => m.type === 'service_upgrading');
+    assert.ok(upg1, '客户端 1 必须收到 service_upgrading 报文');
+    assert.ok(upg2, '客户端 2 必须收到 service_upgrading 报文');
+    assert.equal(upg1.estimatedSeconds, 5);
+    assert.equal(upg1.targetVersion, 'v0.3.5-test');
+    assert.equal(upg2.estimatedSeconds, 5);
+
+    // 验证服务端标记进入排空退出状态
+    assert.ok(server.isShuttingDownOrDraining());
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('服务端优雅停机避让：等待活跃任务完成后再广播升级与停机', async () => {
+    // 模拟一个包含耗时分块的执行引擎（总耗时约 300ms，以产生真实避让窗口）
+    const { server, tmp, port } = await buildWiredServer({
+        chunkCount: 2,
+        chunkDelayMs: 150,
+    });
+    const token = 'test-token-wired-12345';
+    const received = [];
+    const ws = await openAuthenticatedClient(port, token, received);
+
+    // 发送任务
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u-drain-1', content: '测试排空' }));
+
+    // 等待任务已进入执行状态
+    await delay(30);
+
+    // 此时触发优雅停机（应避让等待本任务完成）
+    const drainPromise = server.gracefulDrainAndStop({
+        estimatedSeconds: 3,
+        timeoutMs: 5000,
+    });
+
+    // 排空期间新任务应该被拒绝
+    const receivedReject = [];
+    const ws2 = await openAuthenticatedClient(port, token, receivedReject);
+    ws2.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u-drain-2', content: '排空中被拒' }));
+    await waitForMsg(receivedReject, (m) => m.type === 'message_ack' && m.status === 'error', '排空期拒绝回执');
+    const rejAck = receivedReject.find((m) => m.type === 'message_ack' && m.messageId === 'u-drain-2');
+    assert.equal(rejAck?.error, 'service_upgrading', '排空期拒绝回执应使用可国际化的稳定错误码');
+
+    await drainPromise;
+
+    // 验证先前正在执行的任务完整跑完，且收到提前与收尾的 service_upgrading 广播
+    const completedMsg = received.find((m) => m.type === 'task_status' && m.state === 'completed');
+    const upgradingMsgs = received.filter((m) => m.type === 'service_upgrading');
+    assert.ok(completedMsg, '先前执行的任务必须顺利执行完毕 (completed)');
+    assert.ok(upgradingMsgs.length >= 2, '避让流程开始与收尾阶段均应广播 service_upgrading');
+
+    const firstUpgradeIdx = received.indexOf(upgradingMsgs[0]);
+    const lastUpgradeIdx = received.lastIndexOf(upgradingMsgs[upgradingMsgs.length - 1]);
+    const completedIdx = received.indexOf(completedMsg);
+    assert.ok(firstUpgradeIdx < completedIdx, '升级预告必须在避让流程开始时第一时间送达客户端');
+    assert.ok(completedIdx < lastUpgradeIdx, '活跃任务必须在最终关停升级广播之前完整收尾（执行避让）');
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
 

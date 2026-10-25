@@ -8,6 +8,7 @@ import {
     TaskExecutionState,
     ApprovalRequest,
     ToolCallState,
+    ChatAttachment,
 } from '../types/assistantProtocol';
 
 const ASSISTANT_TOKEN_KEY = 'lvtian_assistant_token';
@@ -24,6 +25,10 @@ interface AssistantState {
     currentSeq: number;
     hasHydrated: boolean;
     permissionMode: 'workspace-write' | 'danger-full-access';
+    /** 服务端是否正在优雅升级中 */
+    isServerUpgrading: boolean;
+    /** 待发送消息队列（离线/升级期间乐观入队，重连对账后自动静默补发） */
+    pendingSendQueue: Array<{ sessionId: string; messageId: string; content: string; attachments?: ChatAttachment[] }>;
 
     // Actions
     setHasHydrated: (hydrated: boolean) => void;
@@ -42,6 +47,10 @@ interface AssistantState {
     setCurrentSeq: (seq: number) => void;
     clearedSeq: number;
     clearChat: () => void;
+    setIsServerUpgrading: (upgrading: boolean) => void;
+    addToPendingSendQueue: (item: { sessionId: string; messageId: string; content: string; attachments?: ChatAttachment[] }) => void;
+    removeFromPendingSendQueue: (messageId: string) => void;
+    clearPendingSendQueue: () => void;
 }
 
 export const useAssistantStore = create<AssistantState>()(
@@ -58,6 +67,8 @@ export const useAssistantStore = create<AssistantState>()(
             clearedSeq: 0,
             hasHydrated: false,
             permissionMode: 'workspace-write',
+            isServerUpgrading: false,
+            pendingSendQueue: [],
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
             setPermissionMode: (mode) => set({ permissionMode: mode }),
@@ -90,6 +101,8 @@ export const useAssistantStore = create<AssistantState>()(
                         clearedSeq: 0,
                         taskState: 'idle',
                         pendingApprovals: [],
+                        isServerUpgrading: false,
+                        pendingSendQueue: [],
                     });
                 } else {
                     set({ serverUrl: cleanUrl, serverToken: cleanToken });
@@ -201,8 +214,29 @@ export const useAssistantStore = create<AssistantState>()(
                         clearedSeq: maxSeq,
                         taskState: 'idle',
                         pendingApprovals: [],
+                        pendingSendQueue: [],
                     };
                 }),
+
+            setIsServerUpgrading: (isServerUpgrading) => set({ isServerUpgrading }),
+
+            addToPendingSendQueue: (item) =>
+                set((state) => {
+                    const idx = state.pendingSendQueue.findIndex((q) => q.messageId === item.messageId);
+                    if (idx >= 0) {
+                        const updated = [...state.pendingSendQueue];
+                        updated[idx] = { ...updated[idx], ...item };
+                        return { pendingSendQueue: updated };
+                    }
+                    return { pendingSendQueue: [...state.pendingSendQueue, item] };
+                }),
+
+            removeFromPendingSendQueue: (messageId) =>
+                set((state) => ({
+                    pendingSendQueue: state.pendingSendQueue.filter((q) => q.messageId !== messageId),
+                })),
+
+            clearPendingSendQueue: () => set({ pendingSendQueue: [] }),
         }),
         {
             name: 'lvtian-assistant-storage',
@@ -236,6 +270,23 @@ export const useAssistantStore = create<AssistantState>()(
                     (max, m) => Math.max(max, m.seq ?? 0),
                     0
                 );
+                // 待发送队列脱水：同样剥离附件庞大 Base64 数据，仅保留轻量元数据与本地 uri，避免突破 Android AsyncStorage 2MB 上限
+                const sanitizedPendingSendQueue = state.pendingSendQueue.map((item) => {
+                    if (!item.attachments || item.attachments.length === 0) {
+                        return item;
+                    }
+                    const sanitizedAttachments = item.attachments.map((att) => ({
+                        type: att.type,
+                        name: att.name,
+                        mimeType: att.mimeType,
+                        size: att.size,
+                        uri: att.uri,
+                    }));
+                    return {
+                        ...item,
+                        attachments: sanitizedAttachments,
+                    };
+                });
                 return {
                     serverUrl: state.serverUrl,
                     // serverToken 不在此序列化，走 SecureStore
@@ -243,6 +294,7 @@ export const useAssistantStore = create<AssistantState>()(
                     messages: persistedMessages,
                     currentSeq: durableSeq,
                     clearedSeq: state.clearedSeq ?? 0,
+                    pendingSendQueue: sanitizedPendingSendQueue,
                     permissionMode: state.permissionMode ?? 'workspace-write',
                 };
             },
