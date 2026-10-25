@@ -928,7 +928,9 @@ export class AssistantClient {
             case 'cancel_failed': {
                 store.removeFromPendingCancelQueue(msg.messageId);
                 const backup = this.cancellingMessages.get(msg.messageId);
-                if (backup && !store.messages.some((m) => m.id === msg.messageId)) {
+                // 仅当失败原因是任务已开始执行 (already_started) 时才恢复备份气泡；
+                // 若原因是消息不存在 (not_found，如已被另一端成功撤销)，保持删除状态不复活
+                if (msg.reason === 'already_started' && backup && !store.messages.some((m) => m.id === msg.messageId)) {
                     store.addOrUpdateMessage(backup);
                 }
                 this.cancellingMessages.delete(msg.messageId);

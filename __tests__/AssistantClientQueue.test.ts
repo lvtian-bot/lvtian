@@ -736,4 +736,42 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(restored).toBeDefined();
         expect(restored?.content).toBe('竞态开始执行的消息');
     });
+
+    test('收到 cancel_failed 且 reason 为 not_found 时，保持删除状态不复活旧气泡', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        const testMsg: AssistantMessage = {
+            id: 'm-already-deleted',
+            seq: 21,
+            role: 'user',
+            content: '另一端已撤销的消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        };
+
+        useAssistantStore.setState({
+            messages: [testMsg],
+            pendingCancelQueue: [],
+        });
+
+        // 模拟本地点击撤销
+        client.cancelQueued(testMsg.id, testMsg);
+        expect(useAssistantStore.getState().messages.find((m) => m.id === testMsg.id)).toBeUndefined();
+
+        // 服务端返回 cancel_failed(not_found)，说明服务端早已被删除
+        handleServerMessage({
+            type: 'cancel_failed',
+            sessionId: 'main',
+            messageId: testMsg.id,
+            reason: 'not_found',
+        });
+
+        const afterState = useAssistantStore.getState();
+        // 1. 待撤销队列必须出队
+        expect(afterState.pendingCancelQueue.includes(testMsg.id)).toBe(false);
+        // 2. 消息绝不复活，保持为 undefined
+        expect(afterState.messages.find((m) => m.id === testMsg.id)).toBeUndefined();
+    });
 });
