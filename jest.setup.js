@@ -57,3 +57,11 @@ jest.mock('@expo/vector-icons', () => {
     MaterialIcons: (props) => React.createElement(Text, props, props.name),
   };
 });
+
+jest.mock('expo-image-picker', () => ({
+  launchImageLibraryAsync: jest.fn().mockResolvedValue({ canceled: true, assets: [] }),
+}));
+
+jest.mock('expo-document-picker', () => ({
+  getDocumentAsync: jest.fn().mockResolvedValue({ canceled: true, assets: [] }),
+}));

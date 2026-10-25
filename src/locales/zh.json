@@ -11,7 +11,17 @@
   },
   "chat": {
     "placeholderTitle": "绿天个人助理",
-    "placeholderDesc": "服务待连接。接通独立服务端后，您可在此持续与助理交流、安排事项并跟进任务进展。"
+    "placeholderDesc": "服务待连接。接通独立服务端后，您可在此持续与助理交流、安排事项并跟进任务进展。",
+    "addAttachment": "添加内容",
+    "pickImage": "图片",
+    "pickDocument": "文件",
+    "attachedImage": "发送了图片",
+    "attachedFile": "发送了文件",
+    "pickImageError": "选择图片失败",
+    "pickDocumentError": "选择文件失败",
+    "attachmentTooLarge": "附件体积过大（上限 750KB）",
+    "attachmentReadError": "读取附件文件失败",
+    "retryAttachmentFailed": "附件原文件已失效，无法重新发送"
   },
   "moments": {
     "placeholderTitle": "动态资讯",

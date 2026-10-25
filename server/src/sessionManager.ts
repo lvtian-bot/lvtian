@@ -955,14 +955,31 @@ export class SessionManager {
      * 提要是对会话的压缩，只取最近 N 条（或只取当前 DSH 周期）会让早期共识直接丢失；
      * 输入过长时由调用方分段提炼再合并，而不是在这里截断。
      */
+    private formatMessageWithAttachments(m: AssistantMessage): string {
+        let text = m.content ? m.content.trim() : '';
+        if (m.attachments && m.attachments.length > 0) {
+            const attParts = m.attachments
+                .map((att) => {
+                    if (att.content) {
+                        return `[附件文本: ${att.name}]\n${att.content}`;
+                    }
+                    return `[附件: ${att.name}]`;
+                })
+                .join('\n');
+            text = text ? `${text}\n${attParts}` : attParts;
+        }
+        return text;
+    }
+
     public getHistoryDialogue(sessionId: string): string {
         const session = this.getOrCreateSession(sessionId);
         const lines: string[] = [];
         for (const m of session.messages) {
             if (m.role !== 'user' && m.role !== 'assistant') continue;
-            if (!m.content || !m.content.trim()) continue;
             if (m.status === 'error') continue;
-            lines.push(`${m.role === 'user' ? '主人' : '助理'}: ${m.content.trim()}`);
+            const text = this.formatMessageWithAttachments(m);
+            if (!text) continue;
+            lines.push(`${m.role === 'user' ? '主人' : '助理'}: ${text}`);
         }
         return lines.join('\n\n');
     }
@@ -982,7 +999,10 @@ export class SessionManager {
     ): string {
         const session = this.getOrCreateSession(sessionId);
         let dialogue = session.messages.filter(
-            (m) => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim().length > 0 && m.status !== 'error'
+            (m) =>
+                (m.role === 'user' || m.role === 'assistant') &&
+                this.formatMessageWithAttachments(m).length > 0 &&
+                m.status !== 'error'
         );
         if (dialogue.length === 0) {
             return '';
@@ -1008,7 +1028,8 @@ export class SessionManager {
         for (let i = dialogue.length - 1; i >= 0; i--) {
             const m = dialogue[i];
             const speaker = m.role === 'user' ? '主人' : '助理';
-            let line = `${speaker}: ${m.content.trim()}`;
+            const formattedText = this.formatMessageWithAttachments(m);
+            let line = `${speaker}: ${formattedText}`;
 
             if (selected.length === 0) {
                 if (line.length > maxChars) {

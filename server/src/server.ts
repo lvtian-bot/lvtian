@@ -14,6 +14,7 @@ import {
     ServerMessage,
     ToolCallState,
     TaskExecutionState,
+    ChatAttachment,
 } from './protocol.js';
 
 const require = createRequire(import.meta.url);
@@ -78,7 +79,7 @@ export class LvtianServer {
 
         this.wss = new WS.Server({
             server: this.httpServer,
-            maxPayload: 1024 * 1024, // 限制单条报文 1MB 上限，防止超大报文消耗内存或阻塞事件循环
+            maxPayload: 5 * 1024 * 1024, // 限制单条报文 5MB 上限，防止超大报文消耗内存，同时为图片/文件 Base64 预留充裕空间
         }) as WebSocketServer;
         this.setupWebSocket();
     }
@@ -419,7 +420,7 @@ export class LvtianServer {
                     });
                     break;
                 }
-                this.handleChat(ws, rawSessionId, msg.messageId, msg.content);
+                this.handleChat(ws, rawSessionId, msg.messageId, msg.content, msg.attachments);
                 break;
             }
 
@@ -468,7 +469,8 @@ export class LvtianServer {
         ws: AuthenticatedSocket,
         sessionId: string,
         userMessageId: string,
-        content: string
+        content: string,
+        attachments?: ChatAttachment[]
     ): void {
         // 如果当前已有任务在执行，拒绝并发任务且通知客户端该消息发送失败
         if (this.acpEngine.isRunning(sessionId)) {
@@ -502,6 +504,7 @@ export class LvtianServer {
                 content,
                 timestamp: Date.now(),
                 status: 'sent',
+                attachments,
             });
             asstMsg = this.sessionManager.addMessage(sessionId, {
                 id: assistantMessageId,
@@ -530,6 +533,7 @@ export class LvtianServer {
             seq: userMsg.seq,
             role: 'user',
             content,
+            attachments,
         });
 
         // 3. 广播助理消息占位
@@ -543,7 +547,11 @@ export class LvtianServer {
         });
 
         // 4. 调用 ACP 引擎管理器驱动底层任务 (捕获异步异常，避免 unhandled rejection 导致主进程崩溃)
-        this.acpEngine.execute(sessionId, assistantMessageId, content, {
+        this.acpEngine.execute(
+            sessionId,
+            assistantMessageId,
+            content,
+            {
             onDelta: (delta: string) => {
                 const updated = this.sessionManager.appendDelta(sessionId, assistantMessageId, delta);
                 if (updated) {
@@ -621,7 +629,9 @@ export class LvtianServer {
                     stopReason: payload?.stopReason,
                 });
             },
-        }).catch((err: unknown) => {
+        },
+        attachments,
+    ).catch((err: unknown) => {
             const errorMsg = err instanceof Error ? err.message : String(err);
             console.error(`[Server] 执行任务发生未捕获异常:`, err);
             this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
