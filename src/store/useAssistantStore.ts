@@ -29,6 +29,8 @@ interface AssistantState {
     isServerUpgrading: boolean;
     /** 待发送消息队列（离线/升级期间乐观入队，重连对账后自动静默补发） */
     pendingSendQueue: Array<{ sessionId: string; messageId: string; content: string; attachments?: ChatAttachment[] }>;
+    /** 待撤销排队消息队列（离线取消时入队，重连对账后自动静默补发） */
+    pendingCancelQueue: string[];
 
     // Actions
     setHasHydrated: (hydrated: boolean) => void;
@@ -52,6 +54,8 @@ interface AssistantState {
     addToPendingSendQueue: (item: { sessionId: string; messageId: string; content: string; attachments?: ChatAttachment[] }) => void;
     removeFromPendingSendQueue: (messageId: string) => void;
     clearPendingSendQueue: () => void;
+    addToPendingCancelQueue: (messageId: string) => void;
+    removeFromPendingCancelQueue: (messageId: string) => void;
 }
 
 export const useAssistantStore = create<AssistantState>()(
@@ -70,6 +74,7 @@ export const useAssistantStore = create<AssistantState>()(
             permissionMode: 'workspace-write',
             isServerUpgrading: false,
             pendingSendQueue: [],
+            pendingCancelQueue: [],
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
             setPermissionMode: (mode) => set({ permissionMode: mode }),
@@ -228,6 +233,7 @@ export const useAssistantStore = create<AssistantState>()(
                         taskState: 'idle',
                         pendingApprovals: [],
                         pendingSendQueue: [],
+                        pendingCancelQueue: [],
                     };
                 }),
 
@@ -250,6 +256,18 @@ export const useAssistantStore = create<AssistantState>()(
                 })),
 
             clearPendingSendQueue: () => set({ pendingSendQueue: [] }),
+
+            addToPendingCancelQueue: (messageId) =>
+                set((state) => ({
+                    pendingCancelQueue: state.pendingCancelQueue.includes(messageId)
+                        ? state.pendingCancelQueue
+                        : [...state.pendingCancelQueue, messageId],
+                })),
+
+            removeFromPendingCancelQueue: (messageId) =>
+                set((state) => ({
+                    pendingCancelQueue: state.pendingCancelQueue.filter((id) => id !== messageId),
+                })),
         }),
         {
             name: 'lvtian-assistant-storage',
@@ -308,6 +326,7 @@ export const useAssistantStore = create<AssistantState>()(
                     currentSeq: durableSeq,
                     clearedSeq: state.clearedSeq ?? 0,
                     pendingSendQueue: sanitizedPendingSendQueue,
+                    pendingCancelQueue: state.pendingCancelQueue ?? [],
                     permissionMode: state.permissionMode ?? 'workspace-write',
                 };
             },

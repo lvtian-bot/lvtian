@@ -863,7 +863,7 @@ test('审批卡下发与应答：approval_request 转发、允许后任务恢复
 
     ws.send(JSON.stringify({ type: 'approval_response', approvalId: approval.approvalId, approved: true }));
 
-    const resumed = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing', '应答后恢复执行中');
+    const resumed = await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing' && m.seq > approval.seq, '应答后恢复执行中');
     assert.ok(resumed.seq > approval.seq, '恢复执行中的 seq 应推进');
 
     await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
@@ -890,7 +890,7 @@ test('审批拒绝后任务不终止：状态恢复执行中并由引擎正常�
     const approval = await waitForMsg(received, (m) => m.type === 'approval_request', 'approval_request');
     ws.send(JSON.stringify({ type: 'approval_response', approvalId: approval.approvalId, approved: false }));
 
-    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing', '拒绝后恢复执行中');
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'processing' && m.seq > approval.seq, '拒绝后恢复执行中');
     await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '完成终态');
 
     const allDeltas = received.filter((m) => m.type === 'event_chunk' && m.delta).map((m) => m.delta).join('');
@@ -1120,7 +1120,7 @@ test('并发发送消息自动排队，前序任务完成后按序流水推进',
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('撤销排队消息：cancel_queued 将排队中消息标记为取消且不执行', async () => {
+test('撤销排队消息：cancel_queued 将排队中消息彻底删除并广播 message_deleted 且不执行', async () => {
     const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 3, chunkDelayMs: 80 });
     const received = [];
     const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
@@ -1136,13 +1136,13 @@ test('撤销排队消息：cancel_queued 将排队中消息标记为取消且不
     // 发送撤销排队报文
     ws.send(JSON.stringify({ type: 'cancel_queued', sessionId: 'main', messageId: 'u2' }));
 
-    // 验证收到取消回执
-    const cancelAck = await waitForMsg(
+    // 验证收到删除广播回执
+    const deleteMsg = await waitForMsg(
         received,
-        (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'error' && m.error === 'task_cancelled',
-        'u2 取消回执'
+        (m) => m.type === 'message_deleted' && m.messageId === 'u2',
+        'u2 删除广播回执'
     );
-    assert.ok(cancelAck);
+    assert.ok(deleteMsg);
 
     // 等待第一条任务自然结束
     await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '首个任务完成');
@@ -1153,8 +1153,46 @@ test('撤销排队消息：cancel_queued 将排队中消息标记为取消且不
 
     const session = sessionManager.getOrCreateSession('main');
     const u2 = session.messages.find((m) => m.id === 'u2');
-    assert.equal(u2.status, 'error');
-    assert.equal(u2.errorMessage, 'task_cancelled');
+    assert.equal(u2, undefined, '排队消息应被物理删除，不在会话记录中');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('撤销排队消息：目标非排队态时返回 cancel_failed 回执且不删除消息', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 2, chunkDelayMs: 60 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 1. 对不存在的消息发送撤销
+    ws.send(JSON.stringify({ type: 'cancel_queued', sessionId: 'main', messageId: 'not-exist' }));
+    const failedNotFound = await waitForMsg(
+        received,
+        (m) => m.type === 'cancel_failed' && m.messageId === 'not-exist',
+        'not_found cancel_failed'
+    );
+    assert.equal(failedNotFound.reason, 'not_found');
+
+    // 2. 发送正在执行的消息
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u-running', content: '正在执行的任务' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u-running' && m.status === 'sent', 'u-running sent');
+
+    // 尝试对已处于执行中的消息撤销排队
+    ws.send(JSON.stringify({ type: 'cancel_queued', sessionId: 'main', messageId: 'u-running' }));
+    const failedStarted = await waitForMsg(
+        received,
+        (m) => m.type === 'cancel_failed' && m.messageId === 'u-running',
+        'already_started cancel_failed'
+    );
+    assert.equal(failedStarted.reason, 'already_started');
+
+    // 等待任务执行结束
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '任务完成');
+
+    // 验证消息依然保留在会话中
+    const session = sessionManager.getOrCreateSession('main');
+    assert.ok(session.messages.some((m) => m.id === 'u-running'), '正在执行的消息未被误删除');
 
     ws.close();
     await server.stop();
@@ -1341,5 +1379,68 @@ test('排队幂等去重：相同 messageId 重复到达时不重复追加排队
     ws.close();
     await server.stop();
     fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('SessionManager deleteMessage 推进序列号并纳入 getReconcileData 增量对账与重启重放', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-del-'));
+    const sm = new SessionManager(tmpDir);
+
+    const m1 = sm.addMessage('test-session', {
+        id: 'u-1',
+        role: 'user',
+        content: '第一条消息',
+        timestamp: Date.now(),
+        status: 'queued',
+    });
+    const lastSeq = m1.seq;
+
+    // 删除排队消息
+    const deleted = sm.deleteMessage('test-session', 'u-1');
+    assert.equal(deleted, true);
+
+    // 增量对账：lastSeq 后的删除记录应包含 u-1
+    const reconcile = sm.getReconcileData('test-session', lastSeq);
+    assert.deepEqual(reconcile.deletedMessageIds, ['u-1']);
+    assert.ok(reconcile.currentSeq > lastSeq, '删除操作推进了序列号');
+
+    // 模拟服务端重启重放
+    const smRestarted = new SessionManager(tmpDir);
+    const session = smRestarted.getOrCreateSession('test-session');
+    assert.equal(session.messages.find((m) => m.id === 'u-1'), undefined);
+    const reconcileAfterRestart = smRestarted.getReconcileData('test-session', lastSeq);
+    assert.deepEqual(reconcileAfterRestart.deletedMessageIds, ['u-1']);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager deleteMessage 超过100条时完整保留删除历史，不截断', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-del-many-'));
+    const sm = new SessionManager(tmpDir);
+
+    const m0 = sm.addMessage('test-session', {
+        id: 'msg-init',
+        role: 'user',
+        content: '初始基准消息',
+        timestamp: Date.now(),
+        status: 'sent',
+    });
+    const baseSeq = m0.seq;
+    for (let i = 0; i < 120; i++) {
+        sm.addMessage('test-session', {
+            id: `msg-${i}`,
+            role: 'user',
+            content: `内容 ${i}`,
+            timestamp: Date.now(),
+            status: 'queued',
+        });
+        sm.deleteMessage('test-session', `msg-${i}`);
+    }
+
+    const session = sm.getOrCreateSession('test-session');
+    assert.equal(session.deletedMessages?.length, 120, '120条删除历史全部完整保留');
+    const reconcile = sm.getReconcileData('test-session', baseSeq);
+    assert.equal(reconcile.deletedMessageIds?.length, 120, '对账时返回全部120条删除ID');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

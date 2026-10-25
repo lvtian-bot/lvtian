@@ -379,7 +379,15 @@ export const ChatScreen = () => {
                     text: t('assistant.cancelQueuedConfirm', '取消排队'),
                     style: 'destructive',
                     onPress: () => {
-                        AssistantClient.getInstance().cancelQueued(msg.id);
+                        const current = useAssistantStore.getState().messages.find((m) => m.id === msg.id);
+                        if (current && current.status !== 'queued') {
+                            Alert.alert(
+                                t('common.tip', '提示'),
+                                t('assistant.cancelFailedAlreadyStarted', '该任务已开始执行，无法取消排队')
+                            );
+                            return;
+                        }
+                        AssistantClient.getInstance().cancelQueued(msg.id, current || msg);
                         setInputContent(msg.content);
                     },
                 },
@@ -1656,15 +1664,17 @@ const styles = StyleSheet.create({
     stopBtnActive: {
         width: 32,
         height: 32,
+        borderRadius: 16,
+        backgroundColor: theme.colors.primary,
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 6,
     },
     stopSquare: {
-        width: 20,
-        height: 20,
-        backgroundColor: '#111827',
-        borderRadius: 5,
+        width: 12,
+        height: 12,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 2,
     },
     scrollBottomContainer: {
         position: 'absolute',

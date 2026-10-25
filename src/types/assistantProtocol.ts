@@ -93,6 +93,7 @@ export type ServerMessage =
           type: 'sync_result';
           sessionId: string;
           messages: AssistantMessage[];
+          deletedMessageIds?: string[];
           taskState: TaskExecutionState;
           /** 兼容旧服务端：仅返回单审批时的回退字段 */
           pendingApproval?: ApprovalRequest;
@@ -136,6 +137,17 @@ export type ServerMessage =
           state: TaskExecutionState;
           error?: string;
           stopReason?: string;
+      }
+    | {
+          type: 'message_deleted';
+          sessionId: string;
+          messageId: string;
+      }
+    | {
+          type: 'cancel_failed';
+          sessionId: string;
+          messageId: string;
+          reason: 'already_started' | 'not_found';
       }
     | { type: 'pong' };
 

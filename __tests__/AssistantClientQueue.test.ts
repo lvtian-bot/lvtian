@@ -1,6 +1,6 @@
 import { AssistantClient } from '../src/services/AssistantClient';
 import { useAssistantStore } from '../src/store/useAssistantStore';
-import { ServerMessage } from '../src/types/assistantProtocol';
+import { AssistantMessage, ServerMessage } from '../src/types/assistantProtocol';
 
 describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () => {
     let client: AssistantClient;
@@ -473,5 +473,309 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue.length).toBe(0);
 
         sendRawSpy.mockRestore();
+    });
+
+    test('cancelQueued 立即从本地消息列表与待发队列中物理移除该排队消息', () => {
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: (msg: unknown) => boolean }, 'sendRaw').mockReturnValue(true);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-queued',
+                    seq: 1,
+                    role: 'user',
+                    content: '排队中的指令',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingSendQueue: [
+                {
+                    sessionId: 'main',
+                    messageId: 'm-queued',
+                    content: '排队中的指令',
+                },
+            ],
+        });
+
+        const success = client.cancelQueued('m-queued');
+        expect(success).toBe(true);
+        expect(sendRawSpy).toHaveBeenCalledWith({
+            type: 'cancel_queued',
+            sessionId: 'main',
+            messageId: 'm-queued',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-queued')).toBeUndefined();
+        expect(state.pendingSendQueue.find((q) => q.messageId === 'm-queued')).toBeUndefined();
+
+        sendRawSpy.mockRestore();
+    });
+
+    test('收到服务端 message_deleted 广播时移除对应消息', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-to-delete',
+                    seq: 2,
+                    role: 'user',
+                    content: '待删除的消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+        });
+
+        handleServerMessage({
+            type: 'message_deleted',
+            sessionId: 'main',
+            messageId: 'm-to-delete',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-to-delete')).toBeUndefined();
+    });
+
+    test('收到服务端 task_status processing 时更新 taskState 为 processing', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            taskState: 'idle',
+        });
+
+        handleServerMessage({
+            type: 'task_status',
+            seq: 10,
+            sessionId: 'main',
+            state: 'processing',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.taskState).toBe('processing');
+        expect(state.currentSeq).toBe(10);
+    });
+
+    test('离线时 cancelQueued 自动入队 pendingCancelQueue，恢复后静默补发并移除', () => {
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: (msg: unknown) => boolean }, 'sendRaw')
+            .mockReturnValueOnce(false) // 首次离线发送失败
+            .mockReturnValueOnce(true);  // 重连后补发成功
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-offline-cancel',
+                    seq: 1,
+                    role: 'user',
+                    content: '离线时撤销的排队消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingCancelQueue: [],
+        });
+
+        // 离线撤销：无条件入队 pendingCancelQueue 并从本地 messages 移除
+        const success = client.cancelQueued('m-offline-cancel');
+        expect(success).toBe(false);
+
+        let state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-offline-cancel')).toBeUndefined();
+        expect(state.pendingCancelQueue).toEqual(['m-offline-cancel']);
+
+        // 模拟恢复连接并触发补发
+        client.flushPendingCancelQueue();
+
+        state = useAssistantStore.getState();
+        // 补发调用后不盲目出队，依然保持在队列中，杜绝半开连接假死时丢失撤销
+        expect(state.pendingCancelQueue).toEqual(['m-offline-cancel']);
+        expect(sendRawSpy).toHaveBeenCalledTimes(2);
+
+        // 收到服务端确认回执后才安全出队
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+        handleServerMessage({
+            type: 'message_deleted',
+            sessionId: 'main',
+            messageId: 'm-offline-cancel',
+        });
+
+        state = useAssistantStore.getState();
+        expect(state.pendingCancelQueue.length).toBe(0);
+
+        sendRawSpy.mockRestore();
+    });
+
+    test('收到 sync_result 携带 deletedMessageIds 时增量剔除本地对应消息、清理待发队列与暂存备份', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        const cancellingMap = (client as unknown as { cancellingMessages: Map<string, unknown> }).cancellingMessages;
+        cancellingMap.set('m-deleted-remote', { id: 'm-deleted-remote', content: '待释放的暂存消息' });
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-keep',
+                    seq: 1,
+                    role: 'user',
+                    content: '保留的消息',
+                    timestamp: Date.now() - 1000,
+                    status: 'sent',
+                },
+                {
+                    id: 'm-deleted-remote',
+                    seq: 2,
+                    role: 'user',
+                    content: '在其他端已撤销的消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingCancelQueue: ['m-deleted-remote'],
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-deleted-remote', content: '在其他端已撤销的消息' },
+                { sessionId: 'main', messageId: 'm-keep-send', content: '正常待发' },
+            ],
+        });
+
+        handleServerMessage({
+            type: 'sync_result',
+            sessionId: 'main',
+            currentSeq: 5,
+            taskState: 'idle',
+            messages: [],
+            deletedMessageIds: ['m-deleted-remote'],
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-deleted-remote')).toBeUndefined();
+        expect(state.messages.find((m) => m.id === 'm-keep')).toBeDefined();
+        expect(state.pendingCancelQueue.includes('m-deleted-remote')).toBe(false);
+        expect(state.pendingSendQueue.some((q) => q.messageId === 'm-deleted-remote')).toBe(false);
+        expect(state.pendingSendQueue.some((q) => q.messageId === 'm-keep-send')).toBe(true);
+        expect(cancellingMap.has('m-deleted-remote')).toBe(false);
+    });
+
+    test('收到 message_deleted 广播时同步剔除待发队列中的残留', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-broadcast-del',
+                    seq: 2,
+                    role: 'user',
+                    content: '被广播删除的消息',
+                    timestamp: Date.now(),
+                    status: 'queued',
+                },
+            ],
+            pendingCancelQueue: ['m-broadcast-del'],
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-broadcast-del', content: '被广播删除的消息' },
+            ],
+        });
+
+        handleServerMessage({
+            type: 'message_deleted',
+            sessionId: 'main',
+            messageId: 'm-broadcast-del',
+        });
+
+        const state = useAssistantStore.getState();
+        expect(state.messages.find((m) => m.id === 'm-broadcast-del')).toBeUndefined();
+        expect(state.pendingCancelQueue.includes('m-broadcast-del')).toBe(false);
+        expect(state.pendingSendQueue.some((q) => q.messageId === 'm-broadcast-del')).toBe(false);
+    });
+
+    test('收到 cancel_failed 回执时清理 pendingCancelQueue 并安全恢复暂存的消息', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        const testMsg: AssistantMessage = {
+            id: 'm-race-cancel',
+            seq: 20,
+            role: 'user',
+            content: '竞态开始执行的消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        };
+
+        useAssistantStore.setState({
+            messages: [testMsg],
+            pendingCancelQueue: [],
+        });
+
+        // 模拟用户触发撤销（带备份消息暂存）
+        client.cancelQueued(testMsg.id, testMsg);
+
+        // 本地立即从 messages 移除
+        expect(useAssistantStore.getState().messages.find((m) => m.id === testMsg.id)).toBeUndefined();
+
+        // 服务端返回 cancel_failed（例如原因已开始执行 already_started）
+        handleServerMessage({
+            type: 'cancel_failed',
+            sessionId: 'main',
+            messageId: testMsg.id,
+            reason: 'already_started',
+        });
+
+        const afterState = useAssistantStore.getState();
+        // 1. 待撤销队列必须被清理，不无限补发
+        expect(afterState.pendingCancelQueue.includes(testMsg.id)).toBe(false);
+        // 2. 消息必须被恢复回 messages 列表，避免被凭空丢弃
+        const restored = afterState.messages.find((m) => m.id === testMsg.id);
+        expect(restored).toBeDefined();
+        expect(restored?.content).toBe('竞态开始执行的消息');
+    });
+
+    test('收到 cancel_failed 且 reason 为 not_found 时，保持删除状态不复活旧气泡', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        const testMsg: AssistantMessage = {
+            id: 'm-already-deleted',
+            seq: 21,
+            role: 'user',
+            content: '另一端已撤销的消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        };
+
+        useAssistantStore.setState({
+            messages: [testMsg],
+            pendingCancelQueue: [],
+        });
+
+        // 模拟本地点击撤销
+        client.cancelQueued(testMsg.id, testMsg);
+        expect(useAssistantStore.getState().messages.find((m) => m.id === testMsg.id)).toBeUndefined();
+
+        // 服务端返回 cancel_failed(not_found)，说明服务端早已被删除
+        handleServerMessage({
+            type: 'cancel_failed',
+            sessionId: 'main',
+            messageId: testMsg.id,
+            reason: 'not_found',
+        });
+
+        const afterState = useAssistantStore.getState();
+        // 1. 待撤销队列必须出队
+        expect(afterState.pendingCancelQueue.includes(testMsg.id)).toBe(false);
+        // 2. 消息绝不复活，保持为 undefined
+        expect(afterState.messages.find((m) => m.id === testMsg.id)).toBeUndefined();
     });
 });
