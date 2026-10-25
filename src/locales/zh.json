@@ -167,6 +167,7 @@
     "placeholder": "开始写作..."
   },
   "common": {
+    "recommended": "推荐",
     "actions": "快捷操作",
     "back": "返回",
     "save": "保存",

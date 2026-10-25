@@ -167,6 +167,7 @@
     "placeholder": "Start writing..."
   },
   "common": {
+    "recommended": "Recommended",
     "actions": "Quick Actions",
     "back": "Back",
     "save": "Save",

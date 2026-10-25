@@ -90,10 +90,6 @@ export const AssistantConfigScreen = () => {
 
         const res = await AssistantClient.testConnection(url, token);
         setTesting(false);
-        if (res.permissionMode) {
-            hasUserSelectedRef.current = true;
-            setSelectedMode(res.permissionMode);
-        }
         setTestResult({
             success: res.success,
             message: res.message + (res.version ? ` (v${res.version})` : ''),
