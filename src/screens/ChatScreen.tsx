@@ -35,6 +35,10 @@ import Icon from '@expo/vector-icons/MaterialIcons';
 import Markdown from 'react-native-markdown-display';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
 import { theme } from '../utils/theme';
+import {
+    getInvertedChatScrollTarget,
+    getInvertedDistanceFromBottom,
+} from '../utils/chatScrollMetrics';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ToolCallState } from '../types/assistantProtocol';
@@ -295,6 +299,7 @@ export const ChatScreen = () => {
     const tabBarHeight = useContext(TabBarHeightContext);
     const flatListRef = useRef<FlatList<AssistantMessage>>(null);
     const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
+    const contentInsetsRef = useRef<{ top: number; bottom: number }>({ top: 0, bottom: 0 });
     const extraContentPadding = useSharedValue(0);
     const composerHeight = useSharedValue(60);
 
@@ -325,14 +330,21 @@ export const ChatScreen = () => {
     const handleInputLayout = useCallback((event: LayoutChangeEvent) => {
         extraContentPadding.value = Math.max(event.nativeEvent.layout.height - 40, 0);
     }, [extraContentPadding]);
+    const handleContentInsetChange = useCallback(
+        (insets: Parameters<NonNullable<KeyboardChatScrollViewProps['onContentInsetChange']>>[0]) => {
+            contentInsetsRef.current = { top: insets.top, bottom: insets.bottom };
+        },
+        [],
+    );
     const renderChatScrollComponent = useCallback(
         (props: ScrollViewProps) => (
             <ChatScrollView
                 {...props}
                 extraContentPadding={extraContentPadding}
+                onContentInsetChange={handleContentInsetChange}
             />
         ),
-        [extraContentPadding],
+        [extraContentPadding, handleContentInsetChange],
     );
 
     const {
@@ -372,12 +384,14 @@ export const ChatScreen = () => {
 
     const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const offsetY = event.nativeEvent.contentOffset.y;
-        // 倒序列表中 offsetY=0 为最底部最新消息，向旧消息上滑时 offsetY 增大
-        setShowScrollBottom(offsetY > 160);
+        // 倒序列表中，根据顶部 inset 补偿计算视口距最新消息的物理距离；向旧消息上滑时距离增大
+        const distanceFromBottom = getInvertedDistanceFromBottom(offsetY, contentInsetsRef.current.top);
+        setShowScrollBottom(distanceFromBottom > 160);
     }, []);
 
     const scrollToBottom = useCallback(() => {
-        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+        const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+        flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
     }, []);
 
     const renderListFooter = useCallback(() => {
@@ -444,7 +458,8 @@ export const ChatScreen = () => {
         const text = inputContent.trim();
         if (!text) return;
         setInputContent('');
-        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+        const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
+        flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
         AssistantClient.getInstance().sendMessage(text);
     };
 
