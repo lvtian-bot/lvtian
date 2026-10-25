@@ -44,7 +44,7 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
     }
 
     const host = overrides?.host || existing.host || '0.0.0.0';
-    const port = overrides?.port || existing.port || 3000;
+    const port = overrides?.port || existing.port || 1999;
     const token = overrides?.token || existing.token || crypto.randomBytes(16).toString('hex');
     const workspace = resolveUserPath(overrides?.workspace || existing.workspace || '~/workspace');
     const dataDir = resolveUserPath(overrides?.dataDir || existing.dataDir || path.join(configDir, 'data'));

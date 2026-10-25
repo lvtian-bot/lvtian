@@ -81,7 +81,7 @@ jobs:
             fi
 
             echo "=== 健康检查（等待服务拉起） ==="
-            HEALTH_URL="http://127.0.0.1:3000/health"
+            HEALTH_URL="http://127.0.0.1:1999/health"
             SUCCESS=0
             for i in $(seq 1 30); do
               HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${HEALTH_URL}" || true)

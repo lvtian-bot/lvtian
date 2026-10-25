@@ -326,7 +326,7 @@
     "clipboardExtracted": "已从剪贴板自动提取服务配置",
     "clipboardFail": "读取剪贴板失败",
     "serverUrl": "服务地址 (URL)",
-    "serverUrlPlaceholder": "例如 http://192.168.1.100:3000 或域名",
+    "serverUrlPlaceholder": "例如 http://192.168.1.100:1999 或域名",
     "serverUrlHint": "支持局域网 IP、Tailscale 虚拟内网或公网反代域名",
     "token": "访问令牌 (Token)",
     "tokenPlaceholder": "服务端生成的 32 位访问令牌",
