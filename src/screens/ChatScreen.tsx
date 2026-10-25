@@ -467,7 +467,7 @@ export const ChatScreen = () => {
 
                 let readResult: { content?: string; data?: string; size: number };
                 try {
-                    readResult = await fsService.readAttachment(asset.uri, 750 * 1024);
+                    readResult = await fsService.readAttachment(asset.uri, 750 * 1024, mimeType, name);
                 } catch (readErr: unknown) {
                     const errorMsg = readErr instanceof Error ? readErr.message : String(readErr);
                     if (errorMsg === 'ATTACHMENT_TOO_LARGE') {
@@ -686,7 +686,7 @@ export const ChatScreen = () => {
                                             ]}
                                         >
                                             <Icon
-                                                name="insert-drive-file"
+                                                name={att.type === 'image' ? 'image' : 'insert-drive-file'}
                                                 size={18}
                                                 color={isUser ? '#fff' : theme.colors.primary}
                                                 style={styles.attachmentFileIcon}

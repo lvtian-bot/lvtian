@@ -625,7 +625,7 @@ export class AcpEngineManager {
                             attachmentContext += `\n\n[主人附带了文件内容: ${att.name}]\n\`\`\`\n${att.content}\n\`\`\``;
                         } else if (att.data) {
                             try {
-                                const attDir = path.join(this.workspaceDir, 'attachments');
+                                const attDir = path.join(this.workspace, 'attachments');
                                 if (!fs.existsSync(attDir)) {
                                     fs.mkdirSync(attDir, { recursive: true });
                                 }

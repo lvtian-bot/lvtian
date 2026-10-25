@@ -294,15 +294,47 @@ class FileSystemService {
         return this.rootPath;
     }
 
+    private isTextFile(mimeType?: string, fileName?: string): boolean {
+        if (mimeType) {
+            const lowerMime = mimeType.toLowerCase();
+            if (lowerMime.startsWith('text/')) return true;
+            if (
+                lowerMime === 'application/json' ||
+                lowerMime === 'application/javascript' ||
+                lowerMime === 'application/typescript' ||
+                lowerMime === 'application/xml' ||
+                lowerMime === 'application/x-sh' ||
+                lowerMime === 'application/x-yaml'
+            ) {
+                return true;
+            }
+        }
+        if (fileName) {
+            const lowerName = fileName.toLowerCase();
+            const textExtensions = [
+                '.txt', '.md', '.markdown', '.json', '.js', '.jsx', '.ts', '.tsx',
+                '.html', '.htm', '.css', '.scss', '.yaml', '.yml', '.xml', '.csv',
+                '.sh', '.bash', '.py', '.java', '.c', '.cpp', '.h', '.rs', '.go',
+                '.sql', '.log', '.env', '.ini', '.conf',
+            ];
+            return textExtensions.some((ext) => lowerName.endsWith(ext));
+        }
+        return false;
+    }
+
     /**
      * 读取外部/临时附件文件（用于主聊天图片或文档附件上传）
-     * 校验文件存在性、最大体积，并提供 UTF-8 文本与 Base64 回退读取
+     * 区分纯文本与二进制文档（PDF、Office、压缩包等），避免强行解码为损坏的 UTF-8 文本
      * @param uri 外部/缓存文件路径
      * @param maxSize 附件体积限制（默认 750KB，避免超出 WebSocket 传输安全阈值）
+     * @param mimeType 可选 MIME 类型
+     * @param fileName 可选文件名
      */
     async readAttachment(
         uri: string,
-        maxSize = 750 * 1024
+        maxSize = 750 * 1024,
+        mimeType?: string,
+        fileName?: string
     ): Promise<{ content?: string; data?: string; size: number }> {
         const info = await FileSystem.getInfoAsync(uri);
         if (!info.exists || info.isDirectory) {
@@ -314,20 +346,32 @@ class FileSystemService {
             throw new Error('ATTACHMENT_TOO_LARGE');
         }
 
+        const isText = this.isTextFile(mimeType, fileName || uri);
         let content: string | undefined;
         let data: string | undefined;
 
-        try {
-            content = await FileSystem.readAsStringAsync(uri, {
-                encoding: FileSystem.EncodingType.UTF8,
-            });
-        } catch {
+        if (isText) {
+            try {
+                content = await FileSystem.readAsStringAsync(uri, {
+                    encoding: FileSystem.EncodingType.UTF8,
+                });
+            } catch {
+                try {
+                    data = await FileSystem.readAsStringAsync(uri, {
+                        encoding: FileSystem.EncodingType.Base64,
+                    });
+                } catch (err) {
+                    console.error('[FileSystemService] 读取附件内容失败:', err);
+                    throw new Error('ATTACHMENT_READ_FAILED');
+                }
+            }
+        } else {
             try {
                 data = await FileSystem.readAsStringAsync(uri, {
                     encoding: FileSystem.EncodingType.Base64,
                 });
             } catch (err) {
-                console.error('[FileSystemService] 读取附件内容失败:', err);
+                console.error('[FileSystemService] 读取二进制附件失败:', err);
                 throw new Error('ATTACHMENT_READ_FAILED');
             }
         }

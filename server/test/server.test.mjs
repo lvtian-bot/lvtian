@@ -76,17 +76,21 @@ test('LvtianServer handles WebSocket connection error without crash', async () =
 
     const assignedPort = server.httpServer.address().port;
 
-    // 客户端发送超过 maxPayload (1MB) 的超大报文，切实触发服务端 accepted socket 的 RangeError
-    await new Promise((resolve) => {
+    // 客户端发送超过 maxPayload (5MB) 的超大报文，切实触发服务端 accepted socket 的 RangeError
+    await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error('超大报文未在预期时间内触发连接关闭'));
+        }, 5000);
         const ws = new WebSocket(`ws://127.0.0.1:${assignedPort}`);
         ws.on('open', () => {
-            const oversized = Buffer.alloc(1024 * 1024 + 1024);
+            const oversized = Buffer.alloc(5 * 1024 * 1024 + 1024);
             ws.send(oversized);
         });
         ws.on('error', () => {
             // 客户端侧网络重置
         });
         ws.on('close', () => {
+            clearTimeout(timer);
             resolve();
         });
     });
