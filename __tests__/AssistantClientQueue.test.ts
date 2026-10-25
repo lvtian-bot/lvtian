@@ -161,4 +161,48 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
 
         expect(useAssistantStore.getState().pendingSendQueue.length).toBe(0);
     });
+
+    test('收到 error 为 service_upgrading 的 message_ack 时，保持 sending 态并重新加入 pendingSendQueue', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'm-drain-1',
+                    seq: 0,
+                    role: 'user',
+                    content: '排空期在途消息',
+                    timestamp: 1000,
+                    status: 'sending',
+                },
+            ],
+            pendingSendQueue: [],
+            isServerUpgrading: false,
+        });
+
+        // 收到服务端排空期拒绝回执
+        handleServerMessage({
+            type: 'message_ack',
+            messageId: 'm-drain-1',
+            seq: 0,
+            status: 'error',
+            error: 'service_upgrading',
+        });
+
+        const state = useAssistantStore.getState();
+        // 1. 触发升级感知
+        expect(state.isServerUpgrading).toBe(true);
+
+        // 2. 消息气泡绝不展示为 error，保持 sending 等待重试
+        const msg = state.messages.find((m) => m.id === 'm-drain-1');
+        expect(msg?.status).toBe('sending');
+        expect(msg?.errorMessage).toBeUndefined();
+
+        // 3. 消息被安全补入 pendingSendQueue，等待对账恢复后自动补发
+        expect(state.pendingSendQueue.length).toBe(1);
+        expect(state.pendingSendQueue[0].messageId).toBe('m-drain-1');
+        expect(state.pendingSendQueue[0].content).toBe('排空期在途消息');
+    });
 });

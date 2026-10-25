@@ -467,6 +467,27 @@ export class AssistantClient {
             case 'message_ack': {
                 const existing = store.messages.find((m) => m.id === msg.messageId);
                 const isError = msg.status === 'error';
+
+                // 服务端在优雅停机排空期拒绝新任务：客户端将其重新加入本地排队队列并置为升级中态，不向用户报错
+                if (isError && msg.error === 'service_upgrading') {
+                    store.setIsServerUpgrading(true);
+                    this.reconnectAttempts = 0;
+                    store.addOrUpdateMessage({
+                        id: msg.messageId,
+                        seq: msg.seq,
+                        role: 'user',
+                        content: existing ? existing.content : (msg.content || ''),
+                        timestamp: existing ? existing.timestamp : Date.now(),
+                        status: 'sending',
+                    });
+                    store.addToPendingSendQueue({
+                        sessionId: 'main',
+                        messageId: msg.messageId,
+                        content: existing ? existing.content : (msg.content || ''),
+                    });
+                    break;
+                }
+
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,

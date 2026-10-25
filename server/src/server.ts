@@ -710,10 +710,11 @@ export class LvtianServer {
     /**
      * 优雅避让与升级停机：
      * 1. 标记 isDraining = true，拒绝新的高开销后台长期任务；
-     * 2. 若当前有任务正在生成，等待本轮对话完成（带超时熔断兜底）；
-     * 3. 向所有在线客户端广播即将升级通知；
-     * 4. 等待 500ms 确保网络缓冲区刷出；
-     * 5. 安全关闭服务。
+     * 2. 第一时间向所有在线客户端广播即将升级通知，让客户端提前获悉状态并进入排队态；
+     * 3. 若当前有任务正在生成，等待本轮对话完成（带超时熔断兜底）；
+     * 4. 再次向在线客户端广播确认（覆盖避让期间新建立连接的客户端）；
+     * 5. 等待 500ms 确保网络缓冲区刷出；
+     * 6. 安全关闭服务。
      */
     public async gracefulDrainAndStop(options?: {
         estimatedSeconds?: number;
@@ -727,21 +728,29 @@ export class LvtianServer {
         this.isDraining = true;
         console.log('[Server] 开始执行优雅停机避让流程 (Graceful Drain)...');
 
-        if (this.acpEngine.hasActiveTasks()) {
-            const timeout = options?.timeoutMs ?? 30000;
-            console.log(`[Server] 检测到当前有活跃生成任务，等待本轮对话完成（最多 ${timeout / 1000}s 熔断保护）...`);
-            await this.acpEngine.waitForIdle(timeout);
-            console.log('[Server] 活跃生成任务已结束或已达超时熔断点');
-        }
-
         const estimatedSeconds = options?.estimatedSeconds ?? 5;
-        console.log(`[Server] 向所有在线客户端广播即将升级通知 (预计 ${estimatedSeconds} 秒)...`);
+        console.log(`[Server] 第一时间向所有在线客户端广播即将升级通知 (预计 ${estimatedSeconds} 秒)...`);
         this.broadcastAll({
             type: 'service_upgrading',
             estimatedSeconds,
             targetVersion: options?.targetVersion,
             reason: options?.reason,
         });
+
+        if (this.acpEngine.hasActiveTasks()) {
+            const timeout = options?.timeoutMs ?? 30000;
+            console.log(`[Server] 检测到当前有活跃生成任务，等待本轮对话完成（最多 ${timeout / 1000}s 熔断保护）...`);
+            await this.acpEngine.waitForIdle(timeout);
+            console.log('[Server] 活跃生成任务已结束或已达超时熔断点');
+
+            // 避让等待结束后，再次广播确保期间新连上的客户端也收到升级通知
+            this.broadcastAll({
+                type: 'service_upgrading',
+                estimatedSeconds,
+                targetVersion: options?.targetVersion,
+                reason: options?.reason,
+            });
+        }
 
         // 等待 500ms 确保网络缓冲区完全刷出给所有连接的客户端
         await new Promise((resolve) => setTimeout(resolve, 500));
