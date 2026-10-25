@@ -704,11 +704,16 @@ export class SessionManager {
                 if (!msg.toolCalls) {
                     msg.toolCalls = [];
                 }
+                // 旧消息没有时间线锚点：保留原有工具在正文前的展示顺序。
+                if (!msg.toolCallPositions) {
+                    msg.toolCallPositions = msg.toolCalls.map((tool) => ({ toolCallId: tool.id, textOffset: 0 }));
+                }
                 const existingIdx = msg.toolCalls.findIndex((t) => t.id === toolCall.id);
                 if (existingIdx >= 0) {
                     msg.toolCalls[existingIdx] = toolCall;
                 } else {
                     msg.toolCalls.push(toolCall);
+                    msg.toolCallPositions.push({ toolCallId: toolCall.id, textOffset: msg.content.length });
                 }
             },
             true,

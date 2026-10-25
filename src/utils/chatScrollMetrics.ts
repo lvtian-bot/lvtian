@@ -22,3 +22,15 @@ export function getInvertedDistanceFromBottom(offsetY: number, topInset = 0, pla
     }
     return offsetY + Math.max(0, topInset);
 }
+
+/** Only an intentional history drag can reveal the button; layout events cannot. */
+export function shouldShowChatScrollBottom(
+    visible: boolean,
+    distance: number,
+    isDragging: boolean,
+    dragStartDistance: number,
+): boolean {
+    if (distance <= 32) return false;
+    if (visible) return true;
+    return isDragging && distance > 100 && distance - dragStartDistance > 100;
+}

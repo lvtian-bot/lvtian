@@ -454,6 +454,10 @@
     "toolActionEdit": "编辑",
     "toolActionSearch": "搜索",
     "toolActionFetch": "访问",
-    "toolActionFile": "文件"
+    "toolActionFile": "文件",
+    "toolStatusFailed": "失败",
+    "toolDetailSummary": "摘要",
+    "toolDetailInput": "输入",
+    "toolDetailOutput": "输出"
   }
 }
