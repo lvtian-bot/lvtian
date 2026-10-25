@@ -1067,4 +1067,279 @@ test('服务端优雅停机避让：等待活跃任务完成后再广播升级�
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('并发发送消息自动排队，前序任务完成后按序流水推进', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 2, chunkDelayMs: 60 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 1. 发送第一条消息
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '第一条指令' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u1', 'u1 ack');
+
+    // 2. 在第一条正在执行时，连续发送第二条与第三条消息
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '第二条指令' }));
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u3', content: '第三条指令' }));
+
+    // 验证第二条和第三条消息收到排队回执 status: 'queued'
+    const ack2 = await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'queued', 'u2 排队回执');
+    const ack3 = await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u3' && m.status === 'queued', 'u3 排队回执');
+    assert.ok(ack2);
+    assert.ok(ack3);
+
+    // 3. 等待第一条任务自然完成
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '首个任务完成');
+
+    // 4. 第一条完成后，第二条应自动开始执行（广播 message_ack 状态更新为 sent 并开始 thinking）
+    const u2Started = await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'sent', 'u2 开始执行');
+    assert.ok(u2Started);
+
+    // 5. 等待第二条完成，第三条也自动开始执行
+    const secondDone = await waitForMsg(
+        received,
+        (m, idx) => m.type === 'task_status' && m.state === 'completed' && idx > received.indexOf(u2Started),
+        '第二条完成'
+    );
+    assert.ok(secondDone);
+
+    const u3Started = await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u3' && m.status === 'sent', 'u3 开始执行');
+    assert.ok(u3Started);
+
+    // 6. 等待第三条任务完成
+    await waitForMsg(
+        received,
+        (m, idx) => m.type === 'task_status' && m.state === 'completed' && idx > received.indexOf(u3Started),
+        '第三条完成'
+    );
+
+    const session = sessionManager.getOrCreateSession('main');
+    // 验证所有排队消息均已顺利完成，无残留排队
+    assert.equal(session.messages.filter((m) => m.status === 'queued').length, 0);
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('撤销排队消息：cancel_queued 将排队中消息标记为取消且不执行', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 3, chunkDelayMs: 80 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 发送第一条
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '正在执行' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u1', 'u1 ack');
+
+    // 发送第二条进入排队
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '待撤销的排队消息' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'queued', 'u2 排队');
+
+    // 发送撤销排队报文
+    ws.send(JSON.stringify({ type: 'cancel_queued', sessionId: 'main', messageId: 'u2' }));
+
+    // 验证收到取消回执
+    const cancelAck = await waitForMsg(
+        received,
+        (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'error' && m.error === 'task_cancelled',
+        'u2 取消回执'
+    );
+    assert.ok(cancelAck);
+
+    // 等待第一条任务自然结束
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '首个任务完成');
+
+    // 等待一段时间，确保 u2 不会被意外启动
+    await delay(200);
+    assert.ok(!received.some((m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'sent'));
+
+    const session = sessionManager.getOrCreateSession('main');
+    const u2 = session.messages.find((m) => m.id === 'u2');
+    assert.equal(u2.status, 'error');
+    assert.equal(u2.errorMessage, 'task_cancelled');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('手动终止 stop：同时终止运行中任务与排队中的消息', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 4, chunkDelayMs: 80 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '执行中' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u1', 'u1 ack');
+
+    // 入队两个消息
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '排队1' }));
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u3', content: '排队2' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u3' && m.status === 'queued', 'u3 排队');
+
+    // 点击停止
+    ws.send(JSON.stringify({ type: 'stop', sessionId: 'main' }));
+
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'stopped', '停止终态');
+
+    const session = sessionManager.getOrCreateSession('main');
+    assert.equal(session.taskState, 'stopped');
+    const u2 = session.messages.find((m) => m.id === 'u2');
+    const u3 = session.messages.find((m) => m.id === 'u3');
+    assert.equal(u2.status, 'error');
+    assert.equal(u2.errorMessage, 'task_stopped');
+    assert.equal(u3.status, 'error');
+    assert.equal(u3.errorMessage, 'task_stopped');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('SessionManager repairAfterLoad：服务重启时未执行的排队消息标记为 service_restarted', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-queue-'));
+    const sm = new SessionManager(tmpDir);
+
+    sm.addMessage('test-session', {
+        id: 'u-queued',
+        role: 'user',
+        content: '排队中但在重启时未执行的消息',
+        timestamp: Date.now(),
+        status: 'queued',
+    });
+
+    // 重新创建 SessionManager 模拟重启加载
+    const sm2 = new SessionManager(tmpDir);
+    const session = sm2.getOrCreateSession('test-session');
+    const msg = session.messages.find((m) => m.id === 'u-queued');
+    assert.equal(msg.status, 'error');
+    assert.equal(msg.errorMessage, 'service_restarted');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('SessionManager: getHistoryDialogue 与 getVerbatimExcerpts 自动过滤 queued 状态消息', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-filter-'));
+    const sm = new SessionManager(tmpDir);
+
+    sm.addMessage('test-session', {
+        id: 'u1',
+        role: 'user',
+        content: '第一条指令',
+        timestamp: Date.now(),
+        status: 'done',
+    });
+    sm.addMessage('test-session', {
+        id: 'a1',
+        role: 'assistant',
+        content: '第一条回复',
+        timestamp: Date.now() + 1,
+        status: 'done',
+    });
+    sm.addMessage('test-session', {
+        id: 'u2-queued',
+        role: 'user',
+        content: '排队中的未来指令',
+        timestamp: Date.now() + 2,
+        status: 'queued',
+    });
+
+    const history = sm.getHistoryDialogue('test-session');
+    assert.ok(history.includes('第一条指令'));
+    assert.ok(history.includes('第一条回复'));
+    assert.ok(!history.includes('排队中的未来指令'), '未执行的排队消息不应出现在历史对话中');
+
+    const verbatim = sm.getVerbatimExcerpts('test-session');
+    assert.ok(verbatim.includes('第一条指令'));
+    assert.ok(verbatim.includes('第一条回复'));
+    assert.ok(!verbatim.includes('排队中的未来指令'), '未执行的排队消息不应出现在物理锚定摘要中');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('排队保序：队列中有未处理消息时，新到达消息保持 queued 状态而不插队', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 3, chunkDelayMs: 60 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 1. 发送 u1，并在执行期间发送 u2 排队
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '任务1' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u1', 'u1 ack');
+
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '任务2' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'queued', 'u2 queued');
+
+    // 2. 发送 u3，验证即使此时队列有待处理消息 u2，u3 必须入队而非插队直接执行
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u3', content: '任务3' }));
+    const ack3 = await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u3', 'u3 ack');
+    assert.equal(ack3.status, 'queued', 'u3 应进入排队而不是插队直接执行');
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('SessionManager: addMessage 落盘失败时回滚内存队列与序号', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-rollback-'));
+    const sm = new SessionManager(tmpDir);
+
+    const session = sm.getOrCreateSession('test-session');
+    const initialSeq = session.currentSeq;
+
+    // 篡改 appendEvent 模拟磁盘写入失败
+    sm.appendEvent = () => false;
+
+    assert.throws(
+        () => {
+            sm.addMessage('test-session', {
+                id: 'fail-msg',
+                role: 'user',
+                content: '写入失败的消息',
+                timestamp: Date.now(),
+                status: 'queued',
+            });
+        },
+        /持久化会话消息失败/
+    );
+
+    // 验证内存中该失败消息已被回滚移出，序号未递增
+    assert.equal(session.messages.length, 0);
+    assert.equal(session.currentSeq, initialSeq);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('排队幂等去重：相同 messageId 重复到达时不重复追加排队项', async () => {
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 2, chunkDelayMs: 60 });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+
+    // 1. 发送 u1 启动任务
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '正在执行' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u1', 'u1 ack');
+
+    // 2. 发送排队消息 u2
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '排队指令' }));
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'queued', 'u2 排队首发');
+
+    // 3. 模拟弱网重发相同 messageId: u2
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u2', content: '排队指令' }));
+    await delay(100);
+
+    const session = sessionManager.getOrCreateSession('main');
+    const u2Matches = session.messages.filter((m) => m.id === 'u2');
+    assert.equal(u2Matches.length, 1, '相同 messageId 绝不能在会话中重复插入两条记录');
+
+    // 4. 等待第一条和第二条均顺利执行完成，验证不会因重复项引发死循环
+    await waitForMsg(received, (m) => m.type === 'task_status' && m.state === 'completed', '首个任务完成');
+    await waitForMsg(received, (m) => m.type === 'message_ack' && m.messageId === 'u2' && m.status === 'sent', 'u2 开始执行');
+    await waitForMsg(
+        received,
+        (m, idx) => m.type === 'task_status' && m.state === 'completed' && idx > received.findIndex((x) => x.messageId === 'u2' && x.status === 'sent'),
+        'u2 完成'
+    );
+
+    assert.equal(session.messages.filter((m) => m.status === 'queued').length, 0);
+
+    ws.close();
+    await server.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+});
 

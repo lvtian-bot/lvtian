@@ -513,6 +513,19 @@ export class AssistantClient {
     }
 
     /**
+     * 取消排队中的消息
+     * 注意：不作本地乐观状态修改，等待服务端校验并下发 message_ack 确认后再收敛状态，
+     * 避免撤销与服务端刚好开始执行发生状态错乱。
+     */
+    public cancelQueued(messageId: string): boolean {
+        return this.sendRaw({
+            type: 'cancel_queued',
+            sessionId: 'main',
+            messageId,
+        });
+    }
+
+    /**
      * 处理服务端下发的事件报文
      */
     private handleServerMessage(msg: ServerMessage): void {
@@ -607,7 +620,6 @@ export class AssistantClient {
             case 'message_ack': {
                 const existing = store.messages.find((m) => m.id === msg.messageId);
                 const isError = msg.status === 'error';
-
                 // 服务端在优雅停机排空期拒绝新任务：客户端将其重新加入本地排队队列并置为升级中态，不向用户报错
                 if (isError && msg.error === 'service_upgrading') {
                     store.setIsServerUpgrading(true);
@@ -653,13 +665,14 @@ export class AssistantClient {
                     break;
                 }
 
+                const isQueued = msg.status === 'queued';
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
                     role: 'user',
                     content: existing ? existing.content : (msg.content || ''),
                     timestamp: existing ? existing.timestamp : Date.now(),
-                    status: isError ? 'error' : 'sent',
+                    status: isError ? 'error' : isQueued ? 'queued' : 'sent',
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
                     attachments: existing?.attachments || msg.attachments,
                 });

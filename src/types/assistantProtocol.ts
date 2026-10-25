@@ -38,7 +38,7 @@ export interface AssistantMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
     timestamp: number;
-    status: 'sending' | 'sent' | 'processing' | 'done' | 'error';
+    status: 'sending' | 'sent' | 'queued' | 'processing' | 'done' | 'error';
     toolCalls?: ToolCallState[];
     approval?: ApprovalRequest;
     errorMessage?: string;
@@ -58,6 +58,7 @@ export type ClientMessage =
           content: string;
           attachments?: ChatAttachment[];
       }
+    | { type: 'cancel_queued'; sessionId: string; messageId: string }
     | { type: 'approval_response'; approvalId: string; approved: boolean; reason?: string }
     | { type: 'stop'; sessionId: string }
     | { type: 'ping' };
@@ -101,7 +102,7 @@ export type ServerMessage =
           type: 'message_ack';
           messageId: string;
           seq: number;
-          status?: 'sent' | 'error';
+          status?: 'sent' | 'queued' | 'error';
           role?: 'user';
           content?: string;
           error?: string;

@@ -485,6 +485,33 @@ export class LvtianServer {
                 break;
             }
 
+            case 'cancel_queued': {
+                const rawSessionId = msg.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(rawSessionId)) {
+                    console.warn(`[Server] 拒绝非法 sessionId 撤销排队报文: ${rawSessionId}`);
+                    break;
+                }
+                const sessionId = rawSessionId;
+                const session = this.sessionManager.getOrCreateSession(sessionId);
+                const target = session.messages.find((m) => m.id === msg.messageId);
+                if (target && target.status === 'queued') {
+                    this.sessionManager.updateMessage(sessionId, msg.messageId, (m) => {
+                        m.status = 'error';
+                        m.errorMessage = 'task_cancelled';
+                    });
+                    this.broadcastSession(sessionId, {
+                        type: 'message_ack',
+                        messageId: msg.messageId,
+                        seq: session.currentSeq,
+                        role: 'user',
+                        content: target.content,
+                        status: 'error',
+                        error: 'task_cancelled',
+                    });
+                }
+                break;
+            }
+
             case 'stop': {
                 const rawSessionId = msg.sessionId || 'main';
                 if (!/^[a-zA-Z0-9_-]+$/.test(rawSessionId)) {
@@ -493,6 +520,25 @@ export class LvtianServer {
                 }
                 const sessionId = rawSessionId;
                 const stopped = this.acpEngine.stop(sessionId);
+                // 手动终止时，将该会话中处于排队中的消息一并终止，避免前序已停后排队任务意外冒头
+                const session = this.sessionManager.getOrCreateSession(sessionId);
+                for (const m of session.messages) {
+                    if (m.status === 'queued') {
+                        this.sessionManager.updateMessage(sessionId, m.id, (msgItem) => {
+                            msgItem.status = 'error';
+                            msgItem.errorMessage = 'task_stopped';
+                        });
+                        this.broadcastSession(sessionId, {
+                            type: 'message_ack',
+                            messageId: m.id,
+                            seq: session.currentSeq,
+                            role: 'user',
+                            content: m.content,
+                            status: 'error',
+                            error: 'task_stopped',
+                        });
+                    }
+                }
                 const seq = this.sessionManager.nextSeq(sessionId);
                 this.broadcastSession(sessionId, {
                     type: 'task_status',
@@ -545,31 +591,65 @@ export class LvtianServer {
             return;
         }
 
-        // 如果当前已有任务在执行，拒绝并发任务且通知客户端该消息发送失败
-        if (this.acpEngine.isRunning(sessionId)) {
-            const currentSession = this.sessionManager.getOrCreateSession(sessionId);
-            const errMsg = '上一个任务正在执行中，请等待其完成或点击停止';
-            this.send(ws, {
-                type: 'task_status',
-                seq: currentSession.currentSeq,
-                sessionId,
-                state: currentSession.taskState,
-                error: errMsg,
-            });
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+
+        // 幂等去重保护：如果会话中已存在相同 ID 的消息，直接回执当前已有状态，避免网络重传重复追加排队项引发死循环
+        const existing = session.messages.find((m) => m.id === userMessageId);
+        if (existing) {
             this.send(ws, {
                 type: 'message_ack',
                 messageId: userMessageId,
-                seq: currentSession.currentSeq,
-                status: 'error',
-                error: errMsg,
+                seq: existing.seq,
+                role: 'user',
+                content: existing.content,
+                attachments: existing.attachments,
+                status: existing.status === 'queued' ? 'queued' : existing.status === 'error' ? 'error' : 'sent',
+                error: existing.errorMessage,
             });
             return;
         }
 
-        // 1. 存入用户消息与助理回复占位 (包裹磁盘写入异常保护)
+        // 如果当前已有任务在执行或队列中已有等待处理的消息，将该消息存入排队队列（status: 'queued'），并向客户端确认排队
+        const hasQueued = session.messages.some((m) => m.role === 'user' && m.status === 'queued');
+        if (this.acpEngine.isRunning(sessionId) || hasQueued) {
+            let userMsg;
+            try {
+                userMsg = this.sessionManager.addMessage(sessionId, {
+                    id: userMessageId,
+                    role: 'user',
+                    content,
+                    timestamp: Date.now(),
+                    status: 'queued',
+                    attachments,
+                });
+            } catch (addErr) {
+                const errStr = addErr instanceof Error ? addErr.message : String(addErr);
+                console.error(`[Server] 保存排队消息失败:`, addErr);
+                this.send(ws, {
+                    type: 'message_ack',
+                    messageId: userMessageId,
+                    seq: 0,
+                    status: 'error',
+                    error: errStr,
+                });
+                return;
+            }
+
+            // 广播排队受理确认，多端时间线与视图同步为排队中
+            this.broadcastSession(sessionId, {
+                type: 'message_ack',
+                messageId: userMessageId,
+                seq: userMsg.seq,
+                role: 'user',
+                content,
+                attachments,
+                status: 'queued',
+            });
+            return;
+        }
+
+        // 1. 存入用户消息 (包裹磁盘写入异常保护)
         let userMsg;
-        let asstMsg;
-        const assistantMessageId = `asst-${Date.now()}`;
         try {
             userMsg = this.sessionManager.addMessage(sessionId, {
                 id: userMessageId,
@@ -578,13 +658,6 @@ export class LvtianServer {
                 timestamp: Date.now(),
                 status: 'sent',
                 attachments,
-            });
-            asstMsg = this.sessionManager.addMessage(sessionId, {
-                id: assistantMessageId,
-                role: 'assistant',
-                content: '',
-                timestamp: Date.now(),
-                status: 'processing',
             });
         } catch (addErr) {
             const errStr = addErr instanceof Error ? addErr.message : String(addErr);
@@ -599,7 +672,7 @@ export class LvtianServer {
             return;
         }
 
-        // 2. 向该会话所有活跃连接广播用户消息受理确认，并携带提问内容，确保多端时间线完全同步
+        // 2. 向该会话所有活跃连接广播用户消息受理确认
         this.broadcastSession(sessionId, {
             type: 'message_ack',
             messageId: userMessageId,
@@ -607,9 +680,44 @@ export class LvtianServer {
             role: 'user',
             content,
             attachments,
+            status: 'sent',
         });
 
-        // 3. 广播助理消息占位
+        // 3. 执行助理任务
+        this.executeAssistantPrompt(sessionId, content, attachments);
+    }
+
+    private executeAssistantPrompt(
+        sessionId: string,
+        content: string,
+        attachments?: ChatAttachment[]
+    ): void {
+        const assistantMessageId = `asst-${Date.now()}`;
+        let asstMsg;
+        try {
+            asstMsg = this.sessionManager.addMessage(sessionId, {
+                id: assistantMessageId,
+                role: 'assistant',
+                content: '',
+                timestamp: Date.now(),
+                status: 'processing',
+            });
+        } catch (err) {
+            const errStr = err instanceof Error ? err.message : String(err);
+            console.error(`[Server] 添加助理消息失败:`, err);
+            const seq = this.sessionManager.setTaskState(sessionId, 'error');
+            this.broadcastSession(sessionId, {
+                type: 'task_status',
+                seq,
+                sessionId,
+                state: 'error',
+                error: errStr,
+            });
+            this.scheduleProcessQueue(sessionId);
+            return;
+        }
+
+        // 广播助理消息占位（思考中）
         this.broadcastSession(sessionId, {
             type: 'event_chunk',
             seq: asstMsg.seq,
@@ -663,15 +771,15 @@ export class LvtianServer {
                 });
             },
             onStatusChange: (status, payload?: EngineStatusPayload) => {
-                // 过渡态（思考中/执行工具）已由占位 event_chunk 与工具活动广播承载，
-                // 任务状态也已由引擎管理器在执行入口落盘，这里不重复推进 seq
                 if (status === 'thinking' || status === 'running_tool') {
                     return;
                 }
-                // stopped 为引擎管理器内部终态（如审批超时自动拒绝），持久化已由管理器完成，
-                // 这里广播结构化错误码以修正客户端实时视图
                 if (status === 'stopped') {
-                    const seq = this.sessionManager.nextSeq(sessionId);
+                    this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
+                        m.status = 'error';
+                        m.errorMessage = payload?.code || 'task_stopped';
+                    });
+                    const seq = this.sessionManager.setTaskState(sessionId, 'stopped');
                     this.broadcastSession(sessionId, {
                         type: 'task_status',
                         seq,
@@ -679,12 +787,10 @@ export class LvtianServer {
                         state: 'stopped',
                         error: payload?.code,
                     });
+                    this.scheduleProcessQueue(sessionId);
                     return;
                 }
 
-                // done/error 终态：消息状态与稳定错误码由此处落盘（引擎管理器只终态化任务状态），
-                // error 字段与持久化一致存稳定码，客户端按码本地化渲染、未知码按原文兜底；
-                // stopReason 一并持久化，重连对账后截断提示不丢失
                 this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
                     m.status = status === 'done' ? 'done' : 'error';
                     if (payload?.code) m.errorMessage = payload.code;
@@ -701,6 +807,9 @@ export class LvtianServer {
                     error: payload?.code,
                     stopReason: payload?.stopReason,
                 });
+
+                // 本轮结束，检查会话排队队列并推进下一项
+                this.scheduleProcessQueue(sessionId);
             },
         },
         attachments,
@@ -719,7 +828,46 @@ export class LvtianServer {
                 state: 'error',
                 error: errorMsg,
             });
+            this.scheduleProcessQueue(sessionId);
         });
+    }
+
+    private scheduleProcessQueue(sessionId: string): void {
+        setTimeout(() => {
+            this.processNextQueuedMessage(sessionId);
+        }, 50);
+    }
+
+    private processNextQueuedMessage(sessionId: string): void {
+        if (this.isDraining || this.acpEngine.isRunning(sessionId)) {
+            return;
+        }
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        const nextQueued = session.messages.find(
+            (m) => m.role === 'user' && m.status === 'queued'
+        );
+        if (!nextQueued) {
+            return;
+        }
+
+        // 1. 将该排队消息转为已发送
+        this.sessionManager.updateMessage(sessionId, nextQueued.id, (m) => {
+            m.status = 'sent';
+        });
+
+        // 2. 广播消息受理状态变更，通知前端该排队消息已开始流转
+        this.broadcastSession(sessionId, {
+            type: 'message_ack',
+            messageId: nextQueued.id,
+            seq: session.currentSeq,
+            role: 'user',
+            content: nextQueued.content,
+            attachments: nextQueued.attachments,
+            status: 'sent',
+        });
+
+        // 3. 启动助理执行
+        this.executeAssistantPrompt(sessionId, nextQueued.content, nextQueued.attachments);
     }
 
     private send(ws: WebSocket, msg: ServerMessage): void {

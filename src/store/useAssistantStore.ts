@@ -38,6 +38,7 @@ interface AssistantState {
     setConnectionState: (state: ConnectionState, error?: string | null) => void;
     setMessages: (messages: AssistantMessage[]) => void;
     addOrUpdateMessage: (message: AssistantMessage) => void;
+    removeMessage: (messageId: string) => void;
     appendDeltaToMessage: (messageId: string, delta: string) => void;
     setToolCallForMessage: (messageId: string, toolCall: ToolCallState) => void;
     setTaskState: (state: TaskExecutionState) => void;
@@ -144,6 +145,12 @@ export const useAssistantStore = create<AssistantState>()(
                     }
                     return { messages: [...state.messages, message] };
                 }),
+
+            removeMessage: (messageId) =>
+                set((state) => ({
+                    messages: state.messages.filter((m) => m.id !== messageId),
+                    pendingSendQueue: state.pendingSendQueue.filter((item) => item.messageId !== messageId),
+                })),
 
             appendDeltaToMessage: (messageId, delta) =>
                 set((state) => {

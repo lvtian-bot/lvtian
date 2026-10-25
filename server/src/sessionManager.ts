@@ -448,6 +448,17 @@ export class SessionManager {
                     seq: m.seq,
                     m,
                 });
+            } else if (m.status === 'queued') {
+                m.status = 'error';
+                m.errorMessage = 'service_restarted';
+                session.currentSeq += 1;
+                m.seq = session.currentSeq;
+                this.appendEvent(session.sessionId, {
+                    t: 'msg',
+                    at: Date.now(),
+                    seq: m.seq,
+                    m,
+                });
             }
         }
     }
@@ -612,9 +623,18 @@ export class SessionManager {
             seq: session.currentSeq,
         };
         session.messages.push(fullMsg);
-        const saved = this.appendEvent(sessionId, { t: 'msg', at: Date.now(), seq: fullMsg.seq, m: fullMsg });
-        if (!saved) {
-            throw new Error(`持久化会话消息失败 (存储满或权限受限): ${sessionId}`);
+        try {
+            const saved = this.appendEvent(sessionId, { t: 'msg', at: Date.now(), seq: fullMsg.seq, m: fullMsg });
+            if (!saved) {
+                throw new Error(`持久化会话消息失败 (存储满或权限受限): ${sessionId}`);
+            }
+        } catch (err) {
+            const idx = session.messages.lastIndexOf(fullMsg);
+            if (idx !== -1) {
+                session.messages.splice(idx, 1);
+            }
+            session.currentSeq -= 1;
+            throw err;
         }
         return fullMsg;
     }
@@ -976,7 +996,7 @@ export class SessionManager {
         const lines: string[] = [];
         for (const m of session.messages) {
             if (m.role !== 'user' && m.role !== 'assistant') continue;
-            if (m.status === 'error') continue;
+            if (m.status === 'error' || m.status === 'queued') continue;
             const text = this.formatMessageWithAttachments(m);
             if (!text) continue;
             lines.push(`${m.role === 'user' ? '主人' : '助理'}: ${text}`);
@@ -1002,7 +1022,8 @@ export class SessionManager {
             (m) =>
                 (m.role === 'user' || m.role === 'assistant') &&
                 this.formatMessageWithAttachments(m).length > 0 &&
-                m.status !== 'error'
+                m.status !== 'error' &&
+                m.status !== 'queued'
         );
         if (dialogue.length === 0) {
             return '';
