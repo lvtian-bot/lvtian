@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useContext, useMemo, forwardRef, type ComponentRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useContext, useMemo, forwardRef, type ComponentRef } from 'react';
 import {
     View,
     Text,
@@ -408,7 +408,7 @@ export const ChatScreen = () => {
         return null;
     }, [renderedCount, reversedMessages.length, t]);
 
-    const handlePlusAction = useCallback(() => {
+    const handleHeaderMenu = useCallback(() => {
         Alert.alert(
             t('common.actions', '快捷操作'),
             undefined,
@@ -446,6 +446,24 @@ export const ChatScreen = () => {
             ],
         );
     }, [clearChat, navigation, t, taskState]);
+
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            headerRight: serverUrl
+                ? () => (
+                      <TouchableOpacity
+                          style={styles.headerRightBtn}
+                          onPress={handleHeaderMenu}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel={t('common.actions', '快捷操作')}
+                      >
+                          <Icon name="more-vert" size={24} color="#374151" />
+                      </TouchableOpacity>
+                  )
+                : undefined,
+        });
+    }, [navigation, handleHeaderMenu, serverUrl, t]);
 
     useEffect(() => {
         // 自动连接
@@ -754,13 +772,6 @@ export const ChatScreen = () => {
             {/* 底部输入区 */}
             <View style={styles.inputArea}>
                 <View style={styles.inputCapsule}>
-                    <TouchableOpacity
-                        style={styles.plusBtn}
-                        onPress={handlePlusAction}
-                        activeOpacity={0.7}
-                    >
-                        <Icon name="add" size={24} color="#374151" />
-                    </TouchableOpacity>
                     <TextInput
                         ref={chatInputRef}
                         autoFocus={false}
@@ -781,11 +792,7 @@ export const ChatScreen = () => {
                         >
                             <Icon name="arrow-upward" size={18} color="#fff" />
                         </TouchableOpacity>
-                    ) : (
-                        <View style={styles.micBtn}>
-                            <Icon name="mic" size={22} color="#4B5563" />
-                        </View>
-                    )}
+                    ) : null}
                 </View>
             </View>
             </KeyboardStickyView>
@@ -1255,6 +1262,12 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         marginLeft: 4,
     },
+    headerRightBtn: {
+        padding: 6,
+        marginRight: 4,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
     inputArea: {
         paddingHorizontal: 14,
         paddingVertical: 8,
@@ -1267,31 +1280,16 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         backgroundColor: '#F0F2F5',
         borderRadius: 24,
-        paddingHorizontal: 8,
+        paddingLeft: 14,
+        paddingRight: 8,
         paddingVertical: Platform.OS === 'ios' ? 6 : 2,
         minHeight: 46,
-    },
-    plusBtn: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 4,
-    },
-    micBtn: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginLeft: 4,
     },
     chatInput: {
         flex: 1,
         maxHeight: 120,
         minHeight: 36,
-        paddingHorizontal: 8,
+        paddingHorizontal: 4,
         paddingVertical: 6,
         fontSize: 15,
         color: '#111827',
@@ -1304,7 +1302,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.primary,
         justifyContent: 'center',
         alignItems: 'center',
-        marginLeft: 4,
+        marginLeft: 6,
     },
     scrollBottomContainer: {
         position: 'absolute',
