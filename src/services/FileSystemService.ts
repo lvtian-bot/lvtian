@@ -14,7 +14,7 @@ class FileSystemService {
 
     constructor() {
         // Initialize root directory
-        this.rootDir = new Directory(Paths.document, 'mdnote_docs');
+        this.rootDir = new Directory(Paths.document, 'lvtian_docs');
         this.rootPath = this.rootDir.uri;
 
         // Ensure the root directory exists

@@ -4,7 +4,7 @@ import { fsService } from '../src/services/FileSystemService';
 jest.mock('expo-file-system', () => ({
   Paths: { document: 'file:///documents' },
   Directory: class {
-    uri = 'file:///documents/mdnote_docs';
+    uri = 'file:///documents/lvtian_docs';
     exists = true;
   },
   File: jest.fn(),

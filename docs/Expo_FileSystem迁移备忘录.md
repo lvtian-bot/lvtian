@@ -9,7 +9,7 @@
 1. **唯一 IO 入口铁律**：应用内所有文件读写、创建、删除、目录枚举操作，**严禁直接调用第三方库（如 react-native-fs）或在 UI 组件中随意调用文件 API**，必须统一通过 `src/services/FileSystemService.ts` 进行下沉封装。
 2. **新老 API 混用状态**：
    - Expo SDK 演进过程中，`expo-file-system` 推出了基于现代化对象式的文件系统新 API（如 `File`, `Directory` 等），同时保留了经典的静态异步方法（如 `FileSystem.readAsStringAsync`, `FileSystem.writeAsStringAsync`, `FileSystem.getInfoAsync`）。
-   - 当前 MDNote 处于混合过渡期。业务逻辑核心依赖成熟的静态异步方法，辅以部分新语法。
+   - 当前应用处于混合过渡期。业务逻辑核心依赖成熟的静态异步方法，辅以部分新语法。
 3. **安全防护规则**：
    - 禁止在未确认生产环境兼容性和单元测试覆盖的情况下，贸然重构 `FileSystemService.ts`。
    - 所有文件操作必须处理 Android Scoped Storage（分区存储）的沙盒路径限制，统一使用 `FileSystem.documentDirectory` 作为安全根路径。

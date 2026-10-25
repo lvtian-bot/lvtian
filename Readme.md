@@ -1,6 +1,6 @@
 # 绿天 (Lvtian)
 
-个人 AI 助理产品：安卓 APP + 可独立部署的服务端。安卓端提供流式 AI 主聊天、闪念速记、待办管理与云端笔记同步；服务端作为个人助理中枢常驻运行，承载对话、记忆与文件能力。
+基于 DeepSeek Harness 的个人 AI 代理（Personal AI Agent）系统：跨平台常驻服务端 + React Native 随身控制台。安卓端提供流式交互、工具调用审批、闪念速记与云协同；服务端作为代理中枢常驻运行，基于 ACP 协议调度工具链自主执行任务。
 
 ## 功能特性
 
@@ -66,6 +66,22 @@ node dist/index.js
 
 后台守护：使用 `scripts/start.sh` / `stop.sh` 启停，或按 `scripts/lvtian-server@.service` 模板注册 systemd 服务。配置文件位于 `~/.config/lvtian/config.json`（首次启动自动生成，权限 0600）。
 
+### 公网安全与 HTTPS / WSS 加密配置
+
+> ⚠️ **安全警告**：若将服务端部署在公网 VPS 上，**切勿直接将未加密的 1999 端口暴露公网裸连**，以免访问令牌（Token）与私人对话在传输中被截获。强烈建议通过反向代理配置权威 SSL/TLS 证书。
+
+- **推荐方案（域名 + 自动申请证书）**：
+  在 VPS 前端部署 Caddy（或其他反向代理），Caddyfile 仅需 3 行即可实现全自动申请与续签免费 SSL 证书：
+  ```caddyfile
+  your-domain.com {
+      reverse_proxy 127.0.0.1:1999
+  }
+  ```
+  配置后，移动端服务地址直接填写 `https://your-domain.com` 即可。长连接（WSS）与 API 请求将自动获得最高级别的 TLS 1.3 传输加密，且无需手动输入端口号。
+
+- **无独立域名方案（Tailscale 虚拟私网）**：
+  若 VPS 仅有公网 IP 暂无独立域名，推荐手机与服务端共同加入 Tailscale，流量全程通过底层 WireGuard 强加密隧道直连，兼顾免公网暴露与银行级安全。
+
 ## 构建与发布
 
 - **整包发版**：主分支递增版本号后打 `v*` tag 推送，GitHub Actions 云端自动构建 APK 并发布 Release；原生变更（依赖、包名、图标、版本号）必须走整包发版
@@ -91,7 +107,6 @@ node dist/index.js
 
 ## 文档
 
-- **[AGENTS.md](AGENTS.md)**：工作规范、项目信息与技术概况（先读）
-- **[docs/技术架构.md](docs/技术架构.md)**：详细架构与各模块文档索引
-- **[docs/TODO.md](docs/TODO.md)**：待办与任务跟踪
-- **[docs/产品/PRD.md](docs/产品/PRD.md)**：产品需求定义
+- **[docs/技术架构.md](docs/技术架构.md)**：系统技术架构、分层设计与模块文档入口（推荐先读）
+- **[docs/产品/PRD.md](docs/产品/PRD.md)**：产品愿景、核心特性与演进规划
+- **[docs/TODO.md](docs/TODO.md)**：开发待办与演进记录

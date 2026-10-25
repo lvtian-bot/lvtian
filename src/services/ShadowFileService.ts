@@ -5,7 +5,7 @@ import { normalizePath } from '../utils/pathUtils';
 class ShadowFileService {
     private getShadowPath(filePath: string): string {
         const normalized = normalizePath(filePath);
-        // Store shadows in a hidden directory in the app's private storage, outside of mdnote_docs
+        // Store shadows in a hidden directory in the app's private storage, outside of lvtian_docs
         // e.g., /data/user/0/com.lvtian/files/.shadows/hash_filename.md
 
         const filename = normalized.split('/').pop() || 'unknown';
