@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useContext, useMemo, forwardRef, type ComponentRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useContext, useMemo, forwardRef, type ComponentRef } from 'react';
 import {
     View,
     Text,
@@ -355,7 +355,6 @@ export const ChatScreen = () => {
         taskState,
         pendingApprovals,
         setServerConfig,
-        clearChat,
     } = useAssistantStore();
 
     const [inputContent, setInputContent] = useState('');
@@ -407,63 +406,6 @@ export const ChatScreen = () => {
         }
         return null;
     }, [renderedCount, reversedMessages.length, t]);
-
-    const handleHeaderMenu = useCallback(() => {
-        Alert.alert(
-            t('common.actions', '快捷操作'),
-            undefined,
-            [
-                {
-                    text: t('assistant.clearHistory', '清空聊天记录'),
-                    style: 'destructive',
-                    onPress: () => {
-                        if (taskState === 'processing' || taskState === 'awaiting_approval') {
-                            Alert.alert(
-                                t('common.notice', '提示'),
-                                t('assistant.taskRunningRejection', '上一个任务正在执行中，请等待其完成或点击停止'),
-                            );
-                            return;
-                        }
-                        Alert.alert(
-                            t('assistant.clearHistory', '清空聊天记录'),
-                            t('assistant.clearConfirm', '确定要清空当前的聊天记录吗？这不会影响服务端的记忆文件。'),
-                            [
-                                { text: t('common.cancel', '取消'), style: 'cancel' },
-                                {
-                                    text: t('common.confirm', '确定'),
-                                    style: 'destructive',
-                                    onPress: () => clearChat(),
-                                },
-                            ],
-                        );
-                    },
-                },
-                {
-                    text: t('settings.assistantConfig', '助理服务配置'),
-                    onPress: () => navigation.navigate('AssistantConfig'),
-                },
-                { text: t('common.cancel', '取消'), style: 'cancel' },
-            ],
-        );
-    }, [clearChat, navigation, t, taskState]);
-
-    useLayoutEffect(() => {
-        navigation.setOptions({
-            headerRight: serverUrl
-                ? () => (
-                      <TouchableOpacity
-                          style={styles.headerRightBtn}
-                          onPress={handleHeaderMenu}
-                          activeOpacity={0.7}
-                          accessibilityRole="button"
-                          accessibilityLabel={t('common.actions', '快捷操作')}
-                      >
-                          <Icon name="more-vert" size={24} color="#374151" />
-                      </TouchableOpacity>
-                  )
-                : undefined,
-        });
-    }, [navigation, handleHeaderMenu, serverUrl, t]);
 
     useEffect(() => {
         // 自动连接
@@ -1261,12 +1203,6 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: 'bold',
         marginLeft: 4,
-    },
-    headerRightBtn: {
-        padding: 6,
-        marginRight: 4,
-        justifyContent: 'center',
-        alignItems: 'center',
     },
     inputArea: {
         paddingHorizontal: 14,
