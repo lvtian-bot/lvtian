@@ -454,6 +454,10 @@
     "toolActionEdit": "Edit",
     "toolActionSearch": "Search",
     "toolActionFetch": "Fetch",
-    "toolActionFile": "File"
+    "toolActionFile": "File",
+    "toolStatusFailed": "Failed",
+    "toolDetailSummary": "Summary",
+    "toolDetailInput": "Input",
+    "toolDetailOutput": "Output"
   }
 }

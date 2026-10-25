@@ -40,6 +40,8 @@ export interface AssistantMessage {
     timestamp: number;
     status: 'sending' | 'sent' | 'queued' | 'processing' | 'done' | 'error';
     toolCalls?: ToolCallState[];
+    /** 工具首次出现时在 content 中的 UTF-16 偏移；保留正文与工具的交错顺序。 */
+    toolCallPositions?: Array<{ toolCallId: string; textOffset: number }>;
     approval?: ApprovalRequest;
     errorMessage?: string;
     /** 引擎结束原因（如 max_tokens），客户端据此本地化展示截断提示 */

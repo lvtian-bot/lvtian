@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { Text, TextInput, TouchableOpacity } from 'react-native';
+import { FlatList, Keyboard, Text, TextInput, TouchableOpacity } from 'react-native';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
@@ -241,4 +241,62 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(allTexts.some((t) => typeof t === 'string' && /服务端正在升级|Server is updating/.test(t))).toBe(true);
         expect(allTexts.some((t) => typeof t === 'string' && /服务未连接|Disconnected/.test(t))).toBe(false);
     });
+    it('键盘位移不显示回底箭头，连续主动上滑达到距离才显示并可回底隐藏', async () => {
+        const keyboardCallbacks = new Map<string, () => void>();
+        jest.spyOn(Keyboard, 'addListener').mockImplementation((name, callback) => {
+            keyboardCallbacks.set(name, callback as () => void);
+            return { remove: jest.fn() };
+        });
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const root = currentRenderer!.root;
+        const list = () => root.findByType(FlatList);
+        const event = (y: number) => ({ nativeEvent: { contentOffset: { y } } });
+        const hasArrow = () => root.findAllByType(Text).some((node) => node.props.children === 'arrow-downward');
+        await ReactTestRenderer.act(async () => {
+            keyboardCallbacks.get('keyboardDidShow')?.();
+            list().props.onScroll(event(320));
+        });
+        expect(hasArrow()).toBe(false);
+        await ReactTestRenderer.act(async () => {
+            list().props.onScrollBeginDrag(event(320));
+            list().props.onScroll(event(380));
+            list().props.onScrollEndDrag();
+        });
+        expect(hasArrow()).toBe(false);
+        await ReactTestRenderer.act(async () => {
+            list().props.onScrollBeginDrag(event(380));
+            list().props.onScroll(event(430));
+            list().props.onScrollEndDrag();
+        });
+        expect(hasArrow()).toBe(true);
+        await ReactTestRenderer.act(async () => {
+            keyboardCallbacks.get('keyboardDidHide')?.();
+            list().props.onScroll(event(200));
+        });
+        expect(hasArrow()).toBe(true);
+        const arrowButton = root.findAllByType(TouchableOpacity).find((button) =>
+            button.findAllByType(Text).some((node) => node.props.children === 'arrow-downward'));
+        await ReactTestRenderer.act(async () => arrowButton!.props.onPress());
+        expect(hasArrow()).toBe(false);
+
+        // Interactive dismissal must rebase keyboard movement, not cancel the ongoing drag.
+        await ReactTestRenderer.act(async () => {
+            list().props.onScrollBeginDrag(event(0));
+            keyboardCallbacks.get('keyboardWillHide')?.();
+            list().props.onScroll(event(320));
+            keyboardCallbacks.get('keyboardDidHide')?.();
+            list().props.onScroll(event(350));
+        });
+        expect(hasArrow()).toBe(false);
+        await ReactTestRenderer.act(async () => list().props.onScroll(event(451)));
+        expect(hasArrow()).toBe(true);
+        await ReactTestRenderer.act(async () => {
+            list().props.onScrollEndDrag();
+            list().props.onScroll(event(0));
+        });
+        expect(hasArrow()).toBe(false);
+    });
+
 });

@@ -1,5 +1,6 @@
 import {
     getChatListEndOffset,
+    shouldShowChatScrollBottom,
     getInvertedChatScrollTarget,
     getInvertedDistanceFromBottom,
 } from '../src/utils/chatScrollMetrics';
@@ -36,5 +37,23 @@ describe('getInvertedChatScrollTarget and getInvertedDistanceFromBottom', () => 
         expect(getInvertedDistanceFromBottom(-320, 320, 'ios')).toBe(0);
         // 用户往上翻阅历史到了 contentOffset.y 为 50
         expect(getInvertedDistanceFromBottom(50, 320, 'ios')).toBe(370);
+    });
+});
+
+describe('scroll-to-bottom visibility', () => {
+    it('ignores keyboard and programmatic movement', () => {
+        expect(shouldShowChatScrollBottom(false, 340, false, 0)).toBe(false);
+    });
+    it('requires an intentional history drag beyond 100 logical pixels', () => {
+        expect(shouldShowChatScrollBottom(false, 380, true, 320)).toBe(false);
+        expect(shouldShowChatScrollBottom(false, 100, true, 0)).toBe(false);
+        expect(shouldShowChatScrollBottom(false, 421, true, 320)).toBe(true);
+    });
+    it('retains the button during layout changes while reading history', () => {
+        expect(shouldShowChatScrollBottom(true, 200, false, 0)).toBe(true);
+    });
+    it('hides near the latest messages and avoids boundary flicker', () => {
+        expect(shouldShowChatScrollBottom(true, 32, false, 0)).toBe(false);
+        expect(shouldShowChatScrollBottom(true, 80, true, 200)).toBe(true);
     });
 });
