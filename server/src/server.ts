@@ -9,6 +9,7 @@ import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
+import { getDshPermissionMode, setDshPermissionMode, DshPermissionMode } from './dshConfigManager.js';
 import {
     ClientMessage,
     ServerMessage,
@@ -190,8 +191,67 @@ export class LvtianServer {
                     assistantName: this.config.assistantName,
                     version: '0.1.0',
                     workspace: this.config.workspace,
+                    permissionMode: getDshPermissionMode(this.config.dshProfileDir),
                 })
             );
+            return;
+        }
+
+        // 查询当前 DSH 权限模式
+        if (pathname === '/api/permission' && req.method === 'GET') {
+            const mode = getDshPermissionMode(this.config.dshProfileDir);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ permissionMode: mode }));
+            return;
+        }
+
+        // 修改当前 DSH 权限模式并触发统一会话交接
+        if (pathname === '/api/permission' && req.method === 'POST') {
+            try {
+                const body = await this.readJsonBody<{ permissionMode?: string }>(req, 1024);
+                const targetMode = body.permissionMode;
+                if (targetMode !== 'workspace-write' && targetMode !== 'danger-full-access') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(
+                        JSON.stringify({
+                            error: '无效的 permissionMode，必须为 workspace-write 或 danger-full-access',
+                            code: 'PARAM_INVALID',
+                        })
+                    );
+                    return;
+                }
+
+                // 门禁检查：仅当权限模式真正发生变动时，才检查并禁止在任务执行中途切换
+                const currentMode = getDshPermissionMode(this.config.dshProfileDir);
+                if (targetMode !== currentMode && this.acpEngine.isRunning('main')) {
+                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    res.end(
+                        JSON.stringify({
+                            error: '当前有正在执行的任务，请先停止任务后再切换权限模式',
+                            code: 'TASK_RUNNING',
+                        })
+                    );
+                    return;
+                }
+
+                // 1. 原子更新 DSH 官方配置文件 cordis.patch.yml（由配置管理器验证语法并返回是否发生真正变更）
+                const changed = setDshPermissionMode(targetMode as DshPermissionMode, this.config.dshProfileDir);
+
+                // 2. 仅当配置真正发生变更时触发会话交接，避免无谓中断与提炼开销
+                if (changed) {
+                    await this.acpEngine.triggerHandover('main', `permission_switch_to_${targetMode}`);
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, permissionMode: targetMode, changed }));
+            } catch (err: unknown) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(
+                    JSON.stringify({
+                        error: `修改权限模式失败: ${err instanceof Error ? err.message : String(err)}`,
+                    })
+                );
+            }
             return;
         }
 

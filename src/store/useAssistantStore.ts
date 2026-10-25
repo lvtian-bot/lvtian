@@ -24,6 +24,7 @@ interface AssistantState {
     pendingApprovals: ApprovalRequest[];
     currentSeq: number;
     hasHydrated: boolean;
+    permissionMode: 'workspace-write' | 'danger-full-access';
     /** 服务端是否正在优雅升级中 */
     isServerUpgrading: boolean;
     /** 待发送消息队列（离线/升级期间乐观入队，重连对账后自动静默补发） */
@@ -31,6 +32,7 @@ interface AssistantState {
 
     // Actions
     setHasHydrated: (hydrated: boolean) => void;
+    setPermissionMode: (mode: 'workspace-write' | 'danger-full-access') => void;
     setServerConfig: (url: string, token: string) => Promise<void>;
     loadSavedCredentials: () => Promise<{ url: string; token: string }>;
     setConnectionState: (state: ConnectionState, error?: string | null) => void;
@@ -64,10 +66,12 @@ export const useAssistantStore = create<AssistantState>()(
             currentSeq: 0,
             clearedSeq: 0,
             hasHydrated: false,
+            permissionMode: 'workspace-write',
             isServerUpgrading: false,
             pendingSendQueue: [],
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
+            setPermissionMode: (mode) => set({ permissionMode: mode }),
 
             setServerConfig: async (url, token) => {
                 const cleanUrl = url.trim().replace(/\/+$/, '');
@@ -291,6 +295,7 @@ export const useAssistantStore = create<AssistantState>()(
                     currentSeq: durableSeq,
                     clearedSeq: state.clearedSeq ?? 0,
                     pendingSendQueue: sanitizedPendingSendQueue,
+                    permissionMode: state.permissionMode ?? 'workspace-write',
                 };
             },
             onRehydrateStorage: () => (state) => {

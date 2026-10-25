@@ -21,7 +21,8 @@
     "@agentclientprotocol/sdk": "1.4.0",
     "@deepseek-ai/dsh": "0.2.1-rc.3",
     "@deepseek-ai/dsh-acp": "0.2.1-rc.3",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
