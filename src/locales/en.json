@@ -349,6 +349,7 @@
     "statusReconnecting": "Reconnecting...",
     "statusDisconnected": "Disconnected",
     "statusError": "Connection Error",
+    "serverUpgradingBanner": "⚡ Server is updating to a new version, back online in a few seconds",
     "inputPlaceholder": "Message",
     "approvalRequired": "Approval Required",
     "toolRequested": "Requested Tool",

@@ -1,0 +1,84 @@
+name: 服务端优雅自动部署
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: server-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 部署至生产服务器
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 SSH 专用通道
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: 远程拉取、构建并优雅重启
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
+          SERVER_USER: ${{ secrets.SERVER_USER || 'ubuntu' }}
+        run: |
+          ssh -i ~/.ssh/id_rsa -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" 'bash -s' << 'EOF'
+            set -euo pipefail
+            DEPLOY_DIR="/home/ubuntu/lvtian-server"
+            echo "=== 进入部署目录: ${DEPLOY_DIR} ==="
+            cd "${DEPLOY_DIR}"
+
+            echo "=== 同步主分支代码 ==="
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "=== 构建服务端产物 ==="
+            cd "${DEPLOY_DIR}/server"
+            npm ci
+            npm run build
+
+            echo "=== 发送优雅升级信号 ==="
+            npm run upgrade-notify || true
+
+            # 确保 systemd user service 正常运行
+            systemctl --user restart lvtian-server || true
+
+            echo "=== 健康检查（等待服务拉起） ==="
+            HEALTH_URL="http://127.0.0.1:3000/health"
+            SUCCESS=0
+            for i in $(seq 1 30); do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${HEALTH_URL}" || true)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✅ 健康检查通过 (HTTP 200)！耗时约 $((i * 2)) 秒。"
+                SUCCESS=1
+                break
+              fi
+              echo "等待服务就绪... (${i}/30) HTTP: ${HTTP_CODE}"
+              sleep 2
+            done
+
+            if [ "$SUCCESS" -ne 1 ]; then
+              echo "❌ 60 秒内服务健康检查失败！输出最近系统日志:"
+              journalctl --user -u lvtian-server.service -n 50 --no-pager || true
+              exit 1
+            fi
+            echo "🎉 绿天独立服务端优雅升级部署成功！"
+          EOF

@@ -349,6 +349,7 @@
     "statusReconnecting": "正在重连...",
     "statusDisconnected": "服务未连接",
     "statusError": "连接异常",
+    "serverUpgradingBanner": "⚡ 服务端正在升级新版本，稍候数秒自动恢复",
     "inputPlaceholder": "消息",
     "approvalRequired": "需要人工审批",
     "toolRequested": "请求调用的工具",

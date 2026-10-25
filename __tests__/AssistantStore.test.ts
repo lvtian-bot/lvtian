@@ -110,4 +110,52 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(useAssistantStore.getState().clearedSeq).toBe(0);
         expect(useAssistantStore.getState().currentSeq).toBe(0);
     });
+
+    test('pendingSendQueue and isServerUpgrading lifecycle', async () => {
+        const store = useAssistantStore.getState();
+
+        expect(store.isServerUpgrading).toBe(false);
+        expect(store.pendingSendQueue).toEqual([]);
+
+        // 升级态设置
+        store.setIsServerUpgrading(true);
+        expect(useAssistantStore.getState().isServerUpgrading).toBe(true);
+
+        // 消息排队与去重
+        store.addToPendingSendQueue({ sessionId: 'main', messageId: 'm1', content: 'hello' });
+        store.addToPendingSendQueue({ sessionId: 'main', messageId: 'm2', content: 'world' });
+        store.addToPendingSendQueue({ sessionId: 'main', messageId: 'm1', content: 'hello updated' });
+
+        const queue = useAssistantStore.getState().pendingSendQueue;
+        expect(queue.length).toBe(2);
+        expect(queue[0].messageId).toBe('m2');
+        expect(queue[1].messageId).toBe('m1');
+        expect(queue[1].content).toBe('hello updated');
+
+        // partialize 包含 pendingSendQueue
+        const persistOptions = (
+            useAssistantStore as unknown as {
+                persist: {
+                    getOptions: () => {
+                        partialize: (state: unknown) => {
+                            pendingSendQueue: Array<{ sessionId: string; messageId: string; content: string }>;
+                        };
+                    };
+                };
+            }
+        ).persist.getOptions();
+
+        const partial = persistOptions.partialize(useAssistantStore.getState());
+        expect(partial.pendingSendQueue.length).toBe(2);
+
+        // 出队
+        store.removeFromPendingSendQueue('m2');
+        expect(useAssistantStore.getState().pendingSendQueue.length).toBe(1);
+        expect(useAssistantStore.getState().pendingSendQueue[0].messageId).toBe('m1');
+
+        // 切换服务器清空队列与升级态
+        await store.setServerConfig('https://server-c.example.com', 'token-c');
+        expect(useAssistantStore.getState().isServerUpgrading).toBe(false);
+        expect(useAssistantStore.getState().pendingSendQueue).toEqual([]);
+    });
 });

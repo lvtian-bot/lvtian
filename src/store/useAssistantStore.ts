@@ -23,6 +23,10 @@ interface AssistantState {
     pendingApprovals: ApprovalRequest[];
     currentSeq: number;
     hasHydrated: boolean;
+    /** 服务端是否正在优雅升级中 */
+    isServerUpgrading: boolean;
+    /** 待发送消息队列（离线/升级期间乐观入队，重连对账后自动静默补发） */
+    pendingSendQueue: Array<{ sessionId: string; messageId: string; content: string }>;
 
     // Actions
     setHasHydrated: (hydrated: boolean) => void;
@@ -40,6 +44,10 @@ interface AssistantState {
     setCurrentSeq: (seq: number) => void;
     clearedSeq: number;
     clearChat: () => void;
+    setIsServerUpgrading: (upgrading: boolean) => void;
+    addToPendingSendQueue: (item: { sessionId: string; messageId: string; content: string }) => void;
+    removeFromPendingSendQueue: (messageId: string) => void;
+    clearPendingSendQueue: () => void;
 }
 
 export const useAssistantStore = create<AssistantState>()(
@@ -55,6 +63,8 @@ export const useAssistantStore = create<AssistantState>()(
             currentSeq: 0,
             clearedSeq: 0,
             hasHydrated: false,
+            isServerUpgrading: false,
+            pendingSendQueue: [],
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
 
@@ -86,6 +96,8 @@ export const useAssistantStore = create<AssistantState>()(
                         clearedSeq: 0,
                         taskState: 'idle',
                         pendingApprovals: [],
+                        isServerUpgrading: false,
+                        pendingSendQueue: [],
                     });
                 } else {
                     set({ serverUrl: cleanUrl, serverToken: cleanToken });
@@ -197,8 +209,24 @@ export const useAssistantStore = create<AssistantState>()(
                         clearedSeq: maxSeq,
                         taskState: 'idle',
                         pendingApprovals: [],
+                        pendingSendQueue: [],
                     };
                 }),
+
+            setIsServerUpgrading: (isServerUpgrading) => set({ isServerUpgrading }),
+
+            addToPendingSendQueue: (item) =>
+                set((state) => {
+                    const filtered = state.pendingSendQueue.filter((q) => q.messageId !== item.messageId);
+                    return { pendingSendQueue: [...filtered, item] };
+                }),
+
+            removeFromPendingSendQueue: (messageId) =>
+                set((state) => ({
+                    pendingSendQueue: state.pendingSendQueue.filter((q) => q.messageId !== messageId),
+                })),
+
+            clearPendingSendQueue: () => set({ pendingSendQueue: [] }),
         }),
         {
             name: 'lvtian-assistant-storage',
@@ -220,6 +248,7 @@ export const useAssistantStore = create<AssistantState>()(
                     messages: persistedMessages,
                     currentSeq: durableSeq,
                     clearedSeq: state.clearedSeq ?? 0,
+                    pendingSendQueue: state.pendingSendQueue,
                 };
             },
             onRehydrateStorage: () => (state) => {

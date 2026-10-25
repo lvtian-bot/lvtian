@@ -351,6 +351,7 @@ export const ChatScreen = () => {
         serverUrl,
         connectionState,
         connectionError,
+        isServerUpgrading,
         messages,
         taskState,
         pendingApprovals,
@@ -556,8 +557,14 @@ export const ChatScreen = () => {
     // 聊天消息列表与输入区分别使用库提供的聊天滚动视图和键盘粘附视图
     return (
         <View style={styles.chatContainer}>
-            {/* 连接异常时才显示状态提示条；已连接时保持界面干净 */}
-            {connectionState !== 'connected' && (
+            {/* 服务端升级中温和提示横幅；升级期间隐藏普通未连接条，消除断网误解 */}
+            {isServerUpgrading ? (
+                <View style={styles.upgradingBanner}>
+                    <Text style={styles.upgradingBannerText}>
+                        {t('assistant.serverUpgradingBanner', '⚡ 服务端正在升级新版本，稍候数秒自动恢复')}
+                    </Text>
+                </View>
+            ) : connectionState !== 'connected' ? (
                 <View style={styles.statusBar}>
                     <View
                         style={[
@@ -580,7 +587,7 @@ export const ChatScreen = () => {
                         <Text style={styles.reconnectBtnText}>{t('browser.retry', '重试')}</Text>
                     </TouchableOpacity>
                 </View>
-            )}
+            ) : null}
 
             {/* 消息流列表：倒序模型 (inverted)，最新消息处于视口物理原点 0，冷启动无需滚动即在最新 */}
             <FlatList
@@ -959,6 +966,21 @@ const styles = StyleSheet.create({
     },
     keyboardSticky: {
         backgroundColor: theme.colors.background,
+    },
+    upgradingBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: theme.colors.warnBgStrong,
+        paddingHorizontal: 16,
+        paddingVertical: 9,
+        borderBottomWidth: 1,
+        borderBottomColor: theme.colors.warnBorder,
+    },
+    upgradingBannerText: {
+        fontSize: 13,
+        color: theme.colors.warnText,
+        fontWeight: '500',
     },
     statusBar: {
         flexDirection: 'row',

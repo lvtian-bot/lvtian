@@ -217,8 +217,14 @@ export class AssistantClient {
         if (this.isExplicitlyClosed || this.reconnectTimer) return;
 
         this.reconnectAttempts += 1;
-        // 指数退避: 1s, 2s, 4s, 最大 10s
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
+        const isUpgrading = useAssistantStore.getState().isServerUpgrading;
+        // 升级期间前 5 次尝试采用 1 秒快速重连，使服务秒级重启就绪后即刻重连；常规断开采用指数退避
+        let delay: number;
+        if (isUpgrading && this.reconnectAttempts <= 5) {
+            delay = 1000;
+        } else {
+            delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
+        }
 
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
@@ -250,10 +256,12 @@ export class AssistantClient {
 
     /**
      * 发送聊天消息
+     * 遵循产品铁律：无论离线、断线还是服务端升级期间，绝不弹窗报错或中断心流，
+     * 消息乐观上屏并在本地队列排队，连上对账后自动静默补发。
      */
-    public sendMessage(content: string): string {
+    public sendMessage(content: string, customMessageId?: string): string {
         const store = useAssistantStore.getState();
-        const messageId = `msg-${Date.now()}`;
+        const messageId = customMessageId || `msg-${Date.now()}`;
 
         const localMessage: AssistantMessage = {
             id: messageId,
@@ -266,6 +274,22 @@ export class AssistantClient {
 
         store.addOrUpdateMessage(localMessage);
 
+        const isConnected = this.ws && this.ws.readyState === WebSocket.OPEN && store.connectionState === 'connected';
+        const isUpgrading = store.isServerUpgrading;
+
+        // 若处于升级中或连接未就绪：自动进入本地待发队列排队，状态保持 sending（微小等待图标），不报任何网络错误
+        if (!isConnected || isUpgrading) {
+            store.addToPendingSendQueue({
+                sessionId: 'main',
+                messageId,
+                content,
+            });
+            if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
+                this.connect();
+            }
+            return messageId;
+        }
+
         const sent = this.sendRaw({
             type: 'chat',
             sessionId: 'main',
@@ -274,14 +298,39 @@ export class AssistantClient {
         });
 
         if (!sent) {
-            store.addOrUpdateMessage({
-                ...localMessage,
-                status: 'error',
-                errorMessage: i18n.t('assistant.sendFailedOffline', '网络连接未就绪，消息已暂存，连上后可重试'),
+            // 发送失败兜底入队
+            store.addToPendingSendQueue({
+                sessionId: 'main',
+                messageId,
+                content,
             });
         }
 
         return messageId;
+    }
+
+    /**
+     * 自动静默补发待发队列中的积压消息（FIFO 顺序）
+     */
+    public flushPendingSendQueue(): void {
+        const store = useAssistantStore.getState();
+        const queue = [...store.pendingSendQueue];
+        if (queue.length === 0) return;
+
+        for (const item of queue) {
+            const sent = this.sendRaw({
+                type: 'chat',
+                sessionId: item.sessionId || 'main',
+                messageId: item.messageId,
+                content: item.content,
+            });
+            if (sent) {
+                store.removeFromPendingSendQueue(item.messageId);
+            } else {
+                // 网络或连接尚未完全就绪，留存后续继续发
+                break;
+            }
+        }
     }
 
     /**
@@ -342,7 +391,16 @@ export class AssistantClient {
                 break;
             }
 
+            case 'service_upgrading': {
+                store.setIsServerUpgrading(true);
+                // 收到升级预告，重置重连计数以便进入 1 秒快速重连周期
+                this.reconnectAttempts = 0;
+                break;
+            }
+
             case 'sync_result': {
+                // 重连并完成对账，服务端已恢复正常，解除升级态
+                store.setIsServerUpgrading(false);
                 store.setCurrentSeq(msg.currentSeq);
                 store.setTaskState(msg.taskState);
                 // 队列字段优先；回退兼容仅返回单审批的旧服务端
@@ -363,16 +421,22 @@ export class AssistantClient {
                 );
                 const serverIdSet = new Set(validServerMessages.map((m) => m.id));
                 const localMessages = store.messages;
+                const pendingIds = new Set(store.pendingSendQueue.map((q) => q.messageId));
 
                 const msgMap = new Map<string, AssistantMessage>();
-                // 先写入本地已有的所有消息；若原本处于 sending 的消息未在服务端返回列表中，转为 error 状态以激活重试按钮
+                // 先写入本地已有的所有消息；排队中消息保持 sending 态，其余未确认消息转 error
                 for (const m of localMessages) {
                     if (m.status === 'sending' && !serverIdSet.has(m.id)) {
-                        msgMap.set(m.id, {
-                            ...m,
-                            status: 'error',
-                            errorMessage: m.errorMessage || i18n.t('assistant.sendInterrupted', '发送中断，请重试'),
-                        });
+                        if (pendingIds.has(m.id)) {
+                            // 消息仍在本地队列中等待补发，保持 sending 态，不报错
+                            msgMap.set(m.id, m);
+                        } else {
+                            msgMap.set(m.id, {
+                                ...m,
+                                status: 'error',
+                                errorMessage: m.errorMessage || i18n.t('assistant.sendInterrupted', '发送中断，请重试'),
+                            });
+                        }
                     } else {
                         msgMap.set(m.id, m);
                     }
@@ -386,6 +450,9 @@ export class AssistantClient {
                     (a, b) => a.timestamp - b.timestamp
                 );
                 store.setMessages(merged);
+
+                // 对账完成后，自动静默补发待发队列中的排队消息
+                this.flushPendingSendQueue();
                 break;
             }
 
@@ -402,6 +469,10 @@ export class AssistantClient {
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
                 });
                 store.setCurrentSeq(msg.seq);
+                // 成功送达服务端，确保移出本地待发队列
+                if (!isError) {
+                    store.removeFromPendingSendQueue(msg.messageId);
+                }
                 break;
             }
 

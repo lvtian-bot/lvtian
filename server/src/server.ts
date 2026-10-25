@@ -41,6 +41,7 @@ export class LvtianServer {
     private wss: WebSocketServer;
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     private consolidationInterval: ReturnType<typeof setInterval> | null = null;
+    private isDraining = false;
 
     constructor(
         config: ServerConfig,
@@ -470,6 +471,19 @@ export class LvtianServer {
         userMessageId: string,
         content: string
     ): void {
+        // 服务端正在优雅停机升级中，拒绝受理新任务
+        if (this.isDraining) {
+            const errMsg = '服务端正在升级维护中，请稍候';
+            this.send(ws, {
+                type: 'message_ack',
+                messageId: userMessageId,
+                seq: 0,
+                status: 'error',
+                error: errMsg,
+            });
+            return;
+        }
+
         // 如果当前已有任务在执行，拒绝并发任务且通知客户端该消息发送失败
         if (this.acpEngine.isRunning(sessionId)) {
             const currentSession = this.sessionManager.getOrCreateSession(sessionId);
@@ -669,6 +683,73 @@ export class LvtianServer {
                 }
             }
         });
+    }
+
+    /** 向所有已通过认证且处于连接状态的客户端广播报文（跨会话全局广播） */
+    public broadcastAll(msg: ServerMessage): void {
+        const payload = JSON.stringify(msg);
+        this.wss.clients.forEach((client: WebSocket) => {
+            const ws = client as AuthenticatedSocket;
+            if (ws.isAuthenticated && ws.readyState === WS.OPEN) {
+                try {
+                    ws.send(payload, (err) => {
+                        if (err) {
+                            console.warn(`[Server] 全局广播消息失败: ${err.message}`);
+                        }
+                    });
+                } catch (err) {
+                    console.warn(`[Server] 调用 broadcastAll send 抛出异常: ${err}`);
+                }
+            }
+        });
+    }
+
+    public isShuttingDownOrDraining(): boolean {
+        return this.isDraining;
+    }
+
+    /**
+     * 优雅避让与升级停机：
+     * 1. 标记 isDraining = true，拒绝新的高开销后台长期任务；
+     * 2. 若当前有任务正在生成，等待本轮对话完成（带超时熔断兜底）；
+     * 3. 向所有在线客户端广播即将升级通知；
+     * 4. 等待 500ms 确保网络缓冲区刷出；
+     * 5. 安全关闭服务。
+     */
+    public async gracefulDrainAndStop(options?: {
+        estimatedSeconds?: number;
+        targetVersion?: string;
+        reason?: string;
+        timeoutMs?: number;
+    }): Promise<void> {
+        if (this.isDraining) {
+            return;
+        }
+        this.isDraining = true;
+        console.log('[Server] 开始执行优雅停机避让流程 (Graceful Drain)...');
+
+        if (this.acpEngine.hasActiveTasks()) {
+            const timeout = options?.timeoutMs ?? 30000;
+            console.log(`[Server] 检测到当前有活跃生成任务，等待本轮对话完成（最多 ${timeout / 1000}s 熔断保护）...`);
+            await this.acpEngine.waitForIdle(timeout);
+            console.log('[Server] 活跃生成任务已结束或已达超时熔断点');
+        }
+
+        const estimatedSeconds = options?.estimatedSeconds ?? 5;
+        console.log(`[Server] 向所有在线客户端广播即将升级通知 (预计 ${estimatedSeconds} 秒)...`);
+        this.broadcastAll({
+            type: 'service_upgrading',
+            estimatedSeconds,
+            targetVersion: options?.targetVersion,
+            reason: options?.reason,
+        });
+
+        // 等待 500ms 确保网络缓冲区完全刷出给所有连接的客户端
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        console.log('[Server] 正在停止服务与回收资源...');
+        await this.stop();
+        console.log('[Server] 服务已优雅停机');
     }
 
     public start(): Promise<void> {
