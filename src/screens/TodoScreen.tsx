@@ -24,6 +24,7 @@ export const TodoScreen = () => {
     const [loaded, setLoaded] = useState(false);
     const [error, setError] = useState<string>();
     const [selectedId, setSelectedId] = useState<string>();
+    const [catalogRevision, setCatalogRevision] = useState(0);
     const request = useRef<AbortController | undefined>(undefined);
     const focused = useRef(false);
     const selected = tasks.find(task => task.id === selectedId);
@@ -42,6 +43,7 @@ export const TodoScreen = () => {
             if (response.generation !== service.generation) throw new AutomaticTaskError('connection_changed');
             const active = response.tasks.filter(task => task.status === 'active');
             setTasks(active);
+            setCatalogRevision(value => value + 1);
             setSelectedId(previous => active.some(task => task.id === previous) ? previous : undefined);
             setLoaded(true);
         } catch (failure: unknown) {
@@ -107,7 +109,8 @@ export const TodoScreen = () => {
                 <Text accessible={false} style={styles.chevron}>›</Text>
             </TouchableOpacity>} />
         <Modal visible={!!selected} animationType="slide" onRequestClose={closeDetail}>
-            {selected && <AutomaticTaskDetail key={`${service.generation}:${selected.id}`} task={selected} onClose={closeDetail} />}
+            {selected && <AutomaticTaskDetail key={`${service.generation}:${selected.id}`} task={selected} onClose={closeDetail}
+                catalogRevision={catalogRevision} catalogRefreshing={loading} catalogError={error} onRefreshCatalog={() => { refresh(); }} />}
         </Modal>
     </View>;
 };

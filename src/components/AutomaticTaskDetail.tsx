@@ -74,7 +74,16 @@ function ActivityRow({ task, receipt, latest, revision }: { task: AutomaticTask;
     </View>;
 }
 
-export function AutomaticTaskDetail({ task, onClose }: { task: AutomaticTask; onClose: () => void }) {
+interface TaskDetailProps {
+    task: AutomaticTask;
+    onClose: () => void;
+    onRefreshCatalog: () => void;
+    catalogRevision: number;
+    catalogRefreshing: boolean;
+    catalogError?: string;
+}
+
+export function AutomaticTaskDetail({ task, onClose, onRefreshCatalog, catalogRevision, catalogRefreshing, catalogError }: TaskDetailProps) {
     const { t, i18n } = useTranslation();
     const metrics = getFontSizeMetrics(useSettingsStore(state => state.fontSize));
     const body = { fontSize: metrics.flashBody, lineHeight: metrics.flashLineHeight };
@@ -111,8 +120,10 @@ export function AutomaticTaskDetail({ task, onClose }: { task: AutomaticTask; on
     useEffect(() => {
         load();
         return () => { request.current?.abort(); };
-    }, [load, task]);
-    const records = history?.records ?? (task.lastDelivery ? [task.lastDelivery] : []);
+    }, [load, task, catalogRevision]);
+    // Some retained/legacy catalogs still have a latest receipt after history becomes empty.
+    // Nonempty native history remains authoritative: a stale catalog receipt must not be prepended.
+    const records = history?.records.length ? history.records : (task.lastDelivery ? [task.lastDelivery] : []);
     const zone = taskTimeZone(task);
     return <SafeAreaView style={styles.container}>
         <View style={styles.header}>
@@ -123,8 +134,14 @@ export function AutomaticTaskDetail({ task, onClose }: { task: AutomaticTask; on
             <View style={styles.headerBalance} />
         </View>
         <FlatList data={records} keyExtractor={row => row.messageId} style={styles.container}
-            contentContainerStyle={styles.content} refreshing={loading} onRefresh={() => { load(); }}
+            contentContainerStyle={styles.content} refreshing={loading || catalogRefreshing} onRefresh={onRefreshCatalog}
             ListHeaderComponent={<View>
+                {catalogError && <View style={styles.notice}>
+                    <Text accessibilityRole="alert" style={[body, styles.secondary]}>{t(catalogError)}</Text>
+                    <TouchableOpacity accessibilityRole="button" accessibilityLabel={t('automaticTasks.retry')} style={styles.action} onPress={onRefreshCatalog}>
+                        <Text style={[body, styles.link]}>{t('automaticTasks.retry')}</Text>
+                    </TouchableOpacity>
+                </View>}
                 <Text accessibilityRole="header" style={[body, styles.taskTitle]}>{task.title}</Text>
                 <Text accessibilityRole="header" style={[body, styles.sectionTitle]}>{t('automaticTasks.instruction')}</Text>
                 <Text selectable style={[body, styles.text]}>{task.prompt}</Text>

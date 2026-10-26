@@ -240,6 +240,63 @@ describe('TodoScreen 服务器只读自动任务', () => {
         expect(texts()).not.toContain('过期未完成结果');
     });
 
+    it('详情下拉刷新目录后更新标题说明计划和下次时间', async () => {
+        await mount(); await press(task.title);
+        catalog.mockResolvedValueOnce({ tasks: [{ ...task, title: '更新标题', prompt: '更新说明', time: '15:45', scheduledAt: '2026-11-03T07:45:00Z' }], generation: 0 });
+        await act(async () => { renderer.root.findAllByType(FlatList)[1].props.onRefresh(); });
+        expect(catalog).toHaveBeenCalledTimes(2);
+        expect(texts()).toEqual(expect.arrayContaining(['更新标题', '更新说明', '每天 15:45', '下次执行：2026年11月3日 15:45']));
+        expect(texts()).not.toContain(task.prompt);
+        expect(history).toHaveBeenCalledTimes(2);
+    });
+
+    it('详情刷新发现任务转为inactive时关闭详情并移出活动列表', async () => {
+        await mount(); await press(task.title);
+        catalog.mockResolvedValueOnce({ tasks: [{ ...task, status: 'inactive' }], generation: 0 });
+        await act(async () => { renderer.root.findAllByType(FlatList)[1].props.onRefresh(); });
+        expect(catalog).toHaveBeenCalledTimes(2);
+        expect(texts()).not.toContain('任务详情');
+        expect(texts()).not.toContain(task.title);
+        expect(texts()).toContain('暂无开启的任务');
+    });
+
+    it('详情目录刷新失败保留内容并在详情内提示重试，成功重试更新下次执行', async () => {
+        await mount(); await press(task.title);
+        catalog.mockRejectedValueOnce(new AutomaticTaskError('network'));
+        await act(async () => { renderer.root.findAllByType(FlatList)[1].props.onRefresh(); });
+        expect(history).toHaveBeenCalledTimes(1);
+        const detailList = renderer.root.findAllByType(FlatList)[1];
+        const detailTexts = detailList.findAllByType(Text).map(node => node.props.children);
+        expect(detailTexts).toContain(task.prompt);
+        expect(detailTexts).toContain('无法读取服务器任务，请检查连接后重试。已有内容可能不是最新状态。');
+        const retry = detailList.findAllByType(TouchableOpacity).find(node => node.props.accessibilityLabel === '重试')!;
+        expect(retry).toBeDefined();
+        catalog.mockResolvedValueOnce({ tasks: [{ ...task, scheduledAt: '2026-11-04T01:00:00Z' }], generation: 0 });
+        await act(async () => { retry.props.onPress({ nativeEvent: { timestamp: 1 } }); });
+        expect(catalog).toHaveBeenCalledTimes(3);
+        expect(texts()).toContain('下次执行：2026年11月4日 09:00');
+        expect(renderer.root.findAllByType(FlatList)[1].findAllByType(Text).map(node => node.props.children)).not.toContain('无法读取服务器任务，请检查连接后重试。已有内容可能不是最新状态。');
+    });
+
+    it('空原生历史保留目录最近投递结果，非空原生历史不混入过期目录投递', async () => {
+        catalog.mockResolvedValue({ tasks: [{ ...task, lastDelivery: delivery }], generation: 0 });
+        result.mockResolvedValue({ result: { taskId: task.id, status: 'ended', endReason: 'completed', assistantText: ['最近投递结果'], truncated: false, delivery }, generation: 0 });
+        await mount(); await press(task.title);
+        expect(renderer.root.findAllByType(FlatList)[1].props.data).toEqual([delivery]);
+        expect(texts()).toContain('最近投递结果');
+        expect(texts()).not.toContain('尚无执行记录，等待首次触发。');
+        const authoritative = { ...delivery, messageId: 'native-latest' };
+        history.mockResolvedValueOnce({ history: { id: task.id, records: [authoritative], retention: { days: 30, records: 100 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false }, generation: 0 });
+        await act(async () => { renderer.root.findAllByType(FlatList)[1].props.onRefresh(); });
+        expect(renderer.root.findAllByType(FlatList)[1].props.data).toEqual([authoritative]);
+    });
+
+    it('没有任何投递的首次任务详情显示真正空历史且不读取结果', async () => {
+        await mount(); await press(task.title);
+        expect(texts()).toContain('尚无执行记录，等待首次触发。');
+        expect(result).not.toHaveBeenCalled();
+    });
+
     it('动态显示实际投递时刻，不使用计划时刻', async () => {
         const receipt = { ...delivery, scheduledAt: '2026-10-01T01:00:00Z', deliveredAt: '2026-10-02T02:15:00Z' };
         history.mockResolvedValueOnce({ history: { id: task.id, records: [receipt], retention: { days: 30, records: 100 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false }, generation: 0 });
