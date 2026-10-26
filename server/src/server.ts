@@ -84,7 +84,7 @@ export class LvtianServer {
 
         this.wss = new WS.Server({
             server: this.httpServer,
-            maxPayload: 5 * 1024 * 1024, // 限制单条报文 5MB 上限，防止超大报文消耗内存，同时为图片/文件 Base64 预留充裕空间
+            maxPayload: 20 * 1024 * 1024, // 限制单条报文 20MB 上限，防止超大报文消耗内存，同时为多图或高清图 Base64 预留充裕空间
         }) as WebSocketServer;
         this.setupWebSocket();
     }
@@ -98,7 +98,7 @@ export class LvtianServer {
         return token === this.config.token;
     }
 
-    private async readJsonBody<T>(req: http.IncomingMessage, maxBytes = 10 * 1024 * 1024): Promise<T> {
+    private async readJsonBody<T>(req: http.IncomingMessage, maxBytes = 20 * 1024 * 1024): Promise<T> {
         return new Promise<T>((resolve, reject) => {
             let totalBytes = 0;
             const chunks: Buffer[] = [];

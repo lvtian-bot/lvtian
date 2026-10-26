@@ -28,9 +28,10 @@
     "attachedFile": "Sent a file",
     "pickImageError": "Failed to pick image",
     "pickDocumentError": "Failed to pick file",
-    "attachmentTooLarge": "Attachment is too large (limit: 750KB)",
+    "attachmentTooLarge": "Attachment is too large (limit: 10MB)",
     "attachmentReadError": "Failed to read attachment file",
-    "retryAttachmentFailed": "Attachment file is no longer available, cannot resend"
+    "retryAttachmentFailed": "Attachment file is no longer available, cannot resend",
+    "previewImage": "Preview image"
   },
   "moments": {
     "placeholderTitle": "Moments & Digest",

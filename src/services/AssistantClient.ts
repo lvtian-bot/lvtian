@@ -529,7 +529,7 @@ export class AssistantClient {
                         const isImg = att.type === 'image';
                         const res = await fsService.readAttachment(
                             att.uri,
-                            750 * 1024,
+                            10 * 1024 * 1024,
                             isImg ? 'image/jpeg' : att.mimeType,
                             att.name
                         );

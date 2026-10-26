@@ -135,8 +135,8 @@ describe('聊天附件待发送', () => {
         expect(send).not.toHaveBeenCalled();
     });
     it('附件超限时保留已有草稿，不加入超限文件', async () => {
-        jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValueOnce(imageResult('first.jpg', 500 * 1024))
-            .mockResolvedValueOnce(imageResult('second.jpg', 300 * 1024));
+        jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValueOnce(imageResult('first.jpg', 2 * 1024 * 1024))
+            .mockResolvedValueOnce(imageResult('second.jpg', 12 * 1024 * 1024));
         await choose('pickImage');
         await choose('pickImage');
         expect(drafts()).toHaveLength(1);
