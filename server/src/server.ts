@@ -9,7 +9,7 @@ import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
-import { getDshPermissionMode, setDshPermissionMode, DshPermissionMode } from './dshConfigManager.js';
+import { getDshPermissionMode, setDshPermissionMode, willDshPermissionChange, DshPermissionMode } from './dshConfigManager.js';
 import {
     ClientMessage,
     ServerMessage,
@@ -221,9 +221,9 @@ export class LvtianServer {
                     return;
                 }
 
-                // 门禁检查：仅当权限模式真正发生变动时，才检查并禁止在任务执行中途切换
-                const currentMode = getDshPermissionMode(this.config.dshProfileDir);
-                if (targetMode !== currentMode && this.acpEngine.isRunning('main')) {
+                // 门禁检查：若该次操作将导致任何配置变动或会话交接（含旧配置清理迁移），严格禁止在任务执行中途切换
+                const willChange = willDshPermissionChange(targetMode as DshPermissionMode, this.config.dshProfileDir);
+                if (willChange && this.acpEngine.isRunning('main')) {
                     res.writeHead(409, { 'Content-Type': 'application/json' });
                     res.end(
                         JSON.stringify({
@@ -463,6 +463,7 @@ export class LvtianServer {
                     type: 'sync_result',
                     sessionId,
                     messages: reconcile.messages,
+                    deletedMessageIds: reconcile.deletedMessageIds,
                     taskState: reconcile.taskState,
                     pendingApprovals: reconcile.pendingApprovals,
                     pendingApproval: reconcile.pendingApproval,
@@ -498,18 +499,18 @@ export class LvtianServer {
                 const session = this.sessionManager.getOrCreateSession(sessionId);
                 const target = session.messages.find((m) => m.id === msg.messageId);
                 if (target && target.status === 'queued') {
-                    this.sessionManager.updateMessage(sessionId, msg.messageId, (m) => {
-                        m.status = 'error';
-                        m.errorMessage = 'task_cancelled';
-                    });
+                    this.sessionManager.deleteMessage(sessionId, msg.messageId);
                     this.broadcastSession(sessionId, {
-                        type: 'message_ack',
+                        type: 'message_deleted',
+                        sessionId,
                         messageId: msg.messageId,
-                        seq: session.currentSeq,
-                        role: 'user',
-                        content: target.content,
-                        status: 'error',
-                        error: 'task_cancelled',
+                    });
+                } else {
+                    this.send(ws, {
+                        type: 'cancel_failed',
+                        sessionId,
+                        messageId: msg.messageId,
+                        reason: target ? 'already_started' : 'not_found',
                     });
                 }
                 break;
@@ -728,6 +729,15 @@ export class LvtianServer {
             messageId: assistantMessageId,
             delta: '',
             status: 'thinking',
+        });
+
+        // 设置会话状态为 processing 并向所有连接广播，确保移动端稳定维持执行态
+        const statusSeq = this.sessionManager.setTaskState(sessionId, 'processing');
+        this.broadcastSession(sessionId, {
+            type: 'task_status',
+            seq: statusSeq,
+            sessionId,
+            state: 'processing',
         });
 
         // 4. 调用 ACP 引擎管理器驱动底层任务 (捕获异步异常，避免 unhandled rejection 导致主进程崩溃)

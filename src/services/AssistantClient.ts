@@ -20,6 +20,7 @@ export class AssistantClient {
     private isExplicitlyClosed = false;
     private activeUrl: string | null = null;
     private activeToken: string | null = null;
+    private cancellingMessages: Map<string, AssistantMessage> = new Map();
     private currentAppState: AppStateStatus = (AppState.currentState as AppStateStatus) || 'active';
     private lastBackgroundTimestamp = 0;
     private appStateSubscription: { remove: () => void } | null = null;
@@ -623,15 +624,43 @@ export class AssistantClient {
 
     /**
      * 取消排队中的消息
-     * 注意：不作本地乐观状态修改，等待服务端校验并下发 message_ack 确认后再收敛状态，
-     * 避免撤销与服务端刚好开始执行发生状态错乱。
+     * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录；
+     * 无条件将撤销请求纳入 pendingCancelQueue 持久化队列，待收到服务端确认回执（message_deleted、增量对账剔除或 cancel_failed）后才出队；
+     * 若处于离线或网络半开假死状态，待网络恢复重连对账后自动静默补发。
+     * 支持传入 backupMessage 暂存，在服务端因任务已启动而拒绝撤销时自动安全恢复消息。
      */
-    public cancelQueued(messageId: string): boolean {
+    public cancelQueued(messageId: string, backupMessage?: AssistantMessage): boolean {
+        const store = useAssistantStore.getState();
+        const current = backupMessage || store.messages.find((m) => m.id === messageId);
+        if (current) {
+            this.cancellingMessages.set(messageId, current);
+        }
+        store.removeMessage(messageId);
+        // 无条件先入持久化待撤销队列，杜绝半开连接下本地误判发送成功但服务端未收到导致漏撤销
+        store.addToPendingCancelQueue(messageId);
         return this.sendRaw({
             type: 'cancel_queued',
             sessionId: 'main',
             messageId,
         });
+    }
+
+    /**
+     * 自动静默补发离线期间积压的撤销排队报文
+     * 注意：此处仅执行发送，不立即从 pendingCancelQueue 移除；
+     * 必须等待服务端下发 message_deleted、sync_result(deletedMessageIds) 或 cancel_failed 确认后再真正出队。
+     */
+    public flushPendingCancelQueue(): void {
+        const store = useAssistantStore.getState();
+        const queue = store.pendingCancelQueue;
+        if (queue.length === 0) return;
+        for (const messageId of queue) {
+            this.sendRaw({
+                type: 'cancel_queued',
+                sessionId: 'main',
+                messageId,
+            });
+        }
     }
 
     /**
@@ -719,12 +748,23 @@ export class AssistantClient {
                     }
                 }
 
+                // 服务端增量删除对账：剔除服务端已删除的排队消息，并同步清理本地待发队列与撤销暂存副本
+                if (msg.deletedMessageIds && msg.deletedMessageIds.length > 0) {
+                    for (const delId of msg.deletedMessageIds) {
+                        msgMap.delete(delId);
+                        store.removeFromPendingCancelQueue(delId);
+                        store.removeFromPendingSendQueue(delId);
+                        this.cancellingMessages.delete(delId);
+                    }
+                }
+
                 const merged = Array.from(msgMap.values()).sort(
                     (a, b) => a.timestamp - b.timestamp
                 );
                 store.setMessages(merged);
 
-                // 对账完成后，自动静默补发待发队列中的排队消息
+                // 对账完成后，自动静默补发待撤销队列与待发队列
+                this.flushPendingCancelQueue();
                 this.flushPendingSendQueue();
                 break;
             }
@@ -875,6 +915,26 @@ export class AssistantClient {
                         this.flushPendingSendQueue();
                     }
                 }
+                break;
+            }
+
+            case 'message_deleted': {
+                this.cancellingMessages.delete(msg.messageId);
+                store.removeMessage(msg.messageId);
+                store.removeFromPendingCancelQueue(msg.messageId);
+                store.removeFromPendingSendQueue(msg.messageId);
+                break;
+            }
+
+            case 'cancel_failed': {
+                store.removeFromPendingCancelQueue(msg.messageId);
+                const backup = this.cancellingMessages.get(msg.messageId);
+                // 仅当失败原因是任务已开始执行 (already_started) 时才恢复备份气泡；
+                // 若原因是消息不存在 (not_found，如已被另一端成功撤销)，保持删除状态不复活
+                if (msg.reason === 'already_started' && backup && !store.messages.some((m) => m.id === msg.messageId)) {
+                    store.addOrUpdateMessage(backup);
+                }
+                this.cancellingMessages.delete(msg.messageId);
                 break;
             }
 

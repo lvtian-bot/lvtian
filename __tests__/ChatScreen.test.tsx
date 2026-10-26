@@ -135,7 +135,7 @@ describe('ChatScreen 输入区与操作菜单', () => {
         const allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts.some((t) => typeof t === 'string' && /助理正在执行任务/.test(t))).toBe(false);
 
-        // 2. 验证右侧存在停止正方形按钮
+        // 2. 验证右侧存在停止正方形按钮，且呈现浅蓝色圆形背景与内部白色方块
         const buttons = root.findAllByType(TouchableOpacity);
         const stopButton = buttons.find((btn) => /停止执行|Stop/i.test(btn.props.accessibilityLabel));
         expect(stopButton).toBeDefined();
@@ -143,10 +143,10 @@ describe('ChatScreen 输入区与操作菜单', () => {
             width: 32, height: 32, borderRadius: 16, backgroundColor: '#60A5FA',
         });
         const square = stopButton!.findAllByType(View).find((node) =>
-            StyleSheet.flatten(node.props.style)?.width === 14);
+            StyleSheet.flatten(node.props.style)?.width === 12);
         expect(square).toBeDefined();
         expect(StyleSheet.flatten(square!.props.style)).toMatchObject({
-            width: 14, height: 14, borderRadius: 2, backgroundColor: '#FFFFFF',
+            width: 12, height: 12, borderRadius: 2, backgroundColor: '#FFFFFF',
         });
 
         // 3. 点击停止按钮触发 stopExecution

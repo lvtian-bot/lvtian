@@ -432,6 +432,7 @@
     "cancelQueuedTitle": "Queued Message",
     "cancelQueuedPrompt": "Cancel this queued message? The text will return to the input box.",
     "cancelQueuedConfirm": "Cancel queue",
+    "cancelFailedAlreadyStarted": "The task has started executing and cannot be cancelled.",
     "replyTruncated": "Reply was truncated at maximum length",
     "loadingEarlierMessages": "Loading earlier messages...",
     "stop": "Stop Execution",

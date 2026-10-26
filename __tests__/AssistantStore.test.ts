@@ -180,4 +180,25 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(useAssistantStore.getState().isServerUpgrading).toBe(false);
         expect(useAssistantStore.getState().pendingSendQueue).toEqual([]);
     });
+
+    test('partialize 包含 pendingCancelQueue 待撤销队列持久化快照', () => {
+        const store = useAssistantStore.getState();
+        store.addToPendingCancelQueue('del-msg-1');
+        store.addToPendingCancelQueue('del-msg-2');
+
+        const persistOptions = (
+            useAssistantStore as unknown as {
+                persist: {
+                    getOptions: () => {
+                        partialize: (state: unknown) => {
+                            pendingCancelQueue: string[];
+                        };
+                    };
+                };
+            }
+        ).persist.getOptions();
+
+        const partial = persistOptions.partialize(useAssistantStore.getState());
+        expect(partial.pendingCancelQueue).toEqual(['del-msg-1', 'del-msg-2']);
+    });
 });

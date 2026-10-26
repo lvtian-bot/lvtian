@@ -432,6 +432,7 @@
     "cancelQueuedTitle": "排队中消息",
     "cancelQueuedPrompt": "是否取消该条排队消息？文字将退回输入框。",
     "cancelQueuedConfirm": "取消排队",
+    "cancelFailedAlreadyStarted": "该任务已开始执行，无法取消排队",
     "replyTruncated": "回复因达到最大长度被截断",
     "loadingEarlierMessages": "正在加载更早历史...",
     "stop": "停止执行",
