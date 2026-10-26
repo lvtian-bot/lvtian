@@ -4,19 +4,30 @@ import { ActivityIndicator, AppState, FlatList, Text, TouchableOpacity } from 'r
 import { TodoScreen } from '../src/screens/TodoScreen';
 import { automaticTaskService as service, AutomaticTaskError } from '../src/services/AutomaticTaskService';
 import { useAssistantStore } from '../src/store/useAssistantStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { automaticTaskCache, TASK_CACHE_TTL_MS } from '../src/services/AutomaticTaskCache';
 import type { AutomaticTask, AutomaticTaskResult, AutomaticTaskResponse } from '../src/types/automaticTasks';
 
 const mockNavigation = { setOptions: jest.fn() };
+const mockFocus = { current: undefined as (() => (() => void)) | undefined, cleanup: undefined as (() => void) | undefined };
+jest.mock('expo/fetch', () => ({ fetch: jest.fn() }));
 const mockNetwork = { listener: (_state: { isConnected: boolean }) => {}, remove: jest.fn() };
 jest.mock('@react-navigation/native', () => ({
     useNavigation: () => mockNavigation,
-    useFocusEffect: (callback: () => (() => void)) => { require('react').useEffect(callback, [callback]); },
+    useFocusEffect: (callback: () => (() => void)) => {
+        mockFocus.current = callback;
+        require('react').useEffect(() => {
+            mockFocus.cleanup = callback();
+            return () => { mockFocus.cleanup?.(); };
+        }, [callback]);
+    },
 }));
 jest.mock('expo-network', () => ({ addNetworkStateListener: (listener: typeof mockNetwork.listener) => {
     mockNetwork.listener = listener; return { remove: mockNetwork.remove };
 } }));
 jest.mock('../src/services/AutomaticTaskService', () => ({
     AutomaticTaskError: class extends Error { readonly code: string; constructor(code: string) { super(code); this.code = code; } },
+    isAutomaticTask: jest.requireActual('../src/services/AutomaticTaskService').isAutomaticTask,
     automaticTaskService: { generation: 0, catalog: jest.fn(), history: jest.fn(), getResult: jest.fn() },
 }));
 jest.mock('react-i18next', () => {
@@ -45,7 +56,9 @@ describe('TodoScreen 服务器只读自动任务', () => {
         await act(async () => { renderer.root.findAllByType(TouchableOpacity).filter(node => node.props.accessibilityLabel === label)[index].props.onPress(); });
     };
     const mount = async () => { await act(async () => { renderer = Renderer.create(<TodoScreen />); }); };
-    beforeEach(() => {
+    beforeEach(async () => {
+        await AsyncStorage.clear();
+        mockFocus.current = undefined; mockFocus.cleanup = undefined;
         jest.clearAllMocks();
         Object.defineProperty(service, 'generation', { configurable: true, value: 0 });
         useAssistantStore.setState({ serverUrl: 'http://server-a', serverToken: 'a', hasHydrated: true, connectionState: 'connected' });
@@ -383,16 +396,172 @@ describe('TodoScreen 服务器只读自动任务', () => {
         expect(texts()).toContain('暂时无法读取这次执行的结果。');
     });
 
+    it('首次无缓存仅一个加载圈，手动下拉仅刷新圈', async () => {
+        const pending = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(pending.promise);
+        await mount();
+        expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(1);
+        expect(renderer.root.findByType(FlatList).props.refreshing).toBe(false);
+        const manual = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(manual.promise);
+        await act(async () => { renderer.root.findByType(FlatList).props.onRefresh(); });
+        expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
+        expect(renderer.root.findByType(FlatList).props.refreshing).toBe(true);
+        await act(async () => { manual.resolve({ tasks: [task], generation: 0 }); });
+        expect(renderer.root.findByType(FlatList).props.refreshing).toBe(false);
+        expect(texts()).toContain(task.title);
+    });
+
+    it.each([false, true])('切回页保留%s空列表缓存，TTL内不重读，过期静默更新', async empty => {
+        let now = Date.now();
+        jest.spyOn(Date, 'now').mockImplementation(() => now);
+        catalog.mockResolvedValue({ tasks: empty ? [] : [task], generation: 0 });
+        await mount();
+        const content = empty ? '暂无开启的任务' : task.title;
+        await act(async () => { mockFocus.cleanup!(); });
+        await act(async () => { mockFocus.cleanup = mockFocus.current!(); });
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(texts()).toContain(content);
+        now += TASK_CACHE_TTL_MS + 1;
+        const pending = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(pending.promise);
+        await act(async () => { mockFocus.cleanup!(); mockFocus.cleanup = mockFocus.current!(); });
+        expect(catalog).toHaveBeenCalledTimes(2);
+        expect(texts()).toContain(content);
+        expect(renderer.root.findByType(FlatList).props.refreshing).toBe(false);
+        expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
+        await act(async () => { pending.resolve({ tasks: [task], generation: 0 }); });
+    });
+
+    it('重新挂载先读磁盘快照，刷新失败保留旧列表并提示，不标成新鲜数据', async () => {
+        await automaticTaskCache.write('http://server-a', 'a', { tasks: [task], fetchedAt: Date.now() - TASK_CACHE_TTL_MS - 1 });
+        const pending = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(pending.promise);
+        await mount();
+        expect(texts()).toContain(task.title);
+        expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
+        await act(async () => { pending.resolve({ tasks: [{ ...task, title: '新列表' }], generation: 0 }); });
+        await act(async () => { renderer.unmount(); });
+        await mount();
+        expect(texts()).toContain('新列表');
+        expect(catalog).toHaveBeenCalledTimes(1);
+        catalog.mockRejectedValueOnce(new AutomaticTaskError('unauthorized'));
+        await act(async () => { renderer.root.findByType(FlatList).props.onRefresh(); });
+        expect(texts()).toContain('新列表');
+        expect(texts().some(text => text.includes('已有内容可能不是最新状态'))).toBe(true);
+        // A previous denial must not be hidden by TTL on the next focus.
+        await act(async () => { mockFocus.cleanup!(); mockFocus.cleanup = mockFocus.current!(); });
+        expect(catalog).toHaveBeenCalledTimes(3);
+    });
+
+    it('失焦时切换URL或token不回显旧列表，旧缓存读取迟到也不覆盖新身份', async () => {
+        await mount();
+        await act(async () => { mockFocus.cleanup!(); });
+        await act(async () => { useAssistantStore.setState({ serverToken: 'new-token' }); });
+        expect(texts()).not.toContain(task.title);
+        const cached = deferred<import('../src/services/AutomaticTaskCache').TaskCatalogSnapshot | undefined>();
+        jest.spyOn(automaticTaskCache, 'read').mockReturnValueOnce(cached.promise);
+        await act(async () => { mockFocus.cleanup = mockFocus.current!(); });
+        Object.defineProperty(service, 'generation', { configurable: true, value: 1 });
+        catalog.mockResolvedValueOnce({ tasks: [{ ...task, title: '新身份任务' }], generation: 1 });
+        await act(async () => { useAssistantStore.setState({ serverUrl: 'http://server-b', serverToken: 'b' }); });
+        expect(texts()).toContain('新身份任务');
+        await act(async () => { cached.resolve({ tasks: [task], fetchedAt: Date.now() }); });
+        expect(texts()).toContain('新身份任务');
+        expect(texts()).not.toContain(task.title);
+    });
+
+    it('同身份慢缓存读取被手动刷新替代后不能覆盖新响应', async () => {
+        const cached = deferred<import('../src/services/AutomaticTaskCache').TaskCatalogSnapshot | undefined>();
+        jest.spyOn(automaticTaskCache, 'read').mockReturnValueOnce(cached.promise);
+        await mount();
+        catalog.mockResolvedValueOnce({ tasks: [{ ...task, title: '手动读取新任务' }], generation: 0 });
+        await act(async () => { renderer.root.findByType(FlatList).props.onRefresh(); });
+        expect(texts()).toContain('手动读取新任务');
+        await act(async () => { cached.resolve({ tasks: [task], fetchedAt: Date.now() }); });
+        expect(texts()).not.toContain(task.title);
+        expect(catalog).toHaveBeenCalledTimes(1);
+    });
+
+    it('恢复网络和连接同时触发仅一个请求，后台刷新不显示下拉圈', async () => {
+        await mount();
+        const pending = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(pending.promise);
+        await act(async () => {
+            mockNetwork.listener({ isConnected: false });
+            mockNetwork.listener({ isConnected: true });
+            useAssistantStore.setState({ connectionState: 'disconnected' });
+            useAssistantStore.setState({ connectionState: 'connected' });
+        });
+        expect(catalog).toHaveBeenCalledTimes(2);
+        expect(renderer.root.findByType(FlatList).props.refreshing).toBe(false);
+        expect(texts()).toContain(task.title);
+        await act(async () => { pending.resolve({ tasks: [task], generation: 0 }); });
+    });
+
+    it('慢缓存读取中连接恢复升级为强制更新，不被新鲜TTL吞掉也不重复请求', async () => {
+        const cached = deferred<import('../src/services/AutomaticTaskCache').TaskCatalogSnapshot | undefined>();
+        jest.spyOn(automaticTaskCache, 'read').mockReturnValueOnce(cached.promise);
+        await mount();
+        expect(catalog).not.toHaveBeenCalled();
+        await act(async () => {
+            useAssistantStore.setState({ connectionState: 'disconnected' });
+            useAssistantStore.setState({ connectionState: 'connected' });
+            mockNetwork.listener({ isConnected: false }); mockNetwork.listener({ isConnected: true });
+        });
+        catalog.mockResolvedValueOnce({ tasks: [{ ...task, title: '恢复后的服务器任务' }], generation: 0 });
+        await act(async () => { cached.resolve({ tasks: [task], fetchedAt: Date.now() }); });
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(texts()).toContain('恢复后的服务器任务');
+        expect(texts()).not.toContain(task.title);
+    });
+
+    it('磁盘读取失败仍请求网络，禁用任务的拒绝不能被旧缓存掩盖', async () => {
+        jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk unavailable'));
+        await mount();
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(texts()).toContain(task.title);
+        catalog.mockRejectedValueOnce(new AutomaticTaskError('native_tasks_unavailable'));
+        await act(async () => { renderer.root.findByType(FlatList).props.onRefresh(); });
+        expect(texts()).toContain('服务器尚未启用自动任务。');
+        expect(texts()).toContain(task.title);
+    });
+
+    it('token从空恢复后读取匹配缓存且取消旧身份请求', async () => {
+        await automaticTaskCache.write('http://server-a', 'restored', { tasks: [task], fetchedAt: Date.now() });
+        useAssistantStore.setState({ serverToken: '' });
+        catalog.mockImplementationOnce(async () => {
+            useAssistantStore.setState({ serverToken: 'restored' });
+            return { tasks: [{ ...task, title: '旧请求不得显示' }], generation: 0 };
+        });
+        await mount();
+        expect(texts()).toContain(task.title);
+        expect(texts()).not.toContain('旧请求不得显示');
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(catalog.mock.calls[0][0]!.signal!.aborted).toBe(true);
+    });
+
+    it('首次详情历史加载没有下拉刷新圈', async () => {
+        const pending = deferred<AutomaticTaskResponse<{ history: import('../src/types/automaticTasks').AutomaticTaskHistory }>>();
+        history.mockReturnValueOnce(pending.promise);
+        await mount(); await press(task.title);
+        expect(renderer.root.findAllByType(FlatList)[1].props.refreshing).toBe(false);
+        expect(renderer.root.findAllByType(ActivityIndicator).filter(node => node.props.accessibilityLabel === '正在读取执行记录')).toHaveLength(1);
+    });
+
     it('App回前台、网络恢复和连接恢复重新查询，卸载清理监听及请求', async () => {
         let appListener: ((state: import('react-native').AppStateStatus) => void) | undefined;
         const removeApp = jest.fn();
         jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => { appListener = listener; return { remove: removeApp }; });
         await mount();
         await act(async () => { appListener!('background'); appListener!('active'); });
+        expect(catalog).toHaveBeenCalledTimes(1); // Fresh cache needs no foreground request.
         await act(async () => { mockNetwork.listener({ isConnected: false }); mockNetwork.listener({ isConnected: true }); });
+        const pending = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(pending.promise);
         await act(async () => { useAssistantStore.setState({ connectionState: 'disconnected' }); useAssistantStore.setState({ connectionState: 'connected' }); });
-        expect(catalog).toHaveBeenCalledTimes(4);
-        const signal = catalog.mock.calls[3][0]!.signal!;
+        expect(catalog).toHaveBeenCalledTimes(3);
+        const signal = catalog.mock.calls[2][0]!.signal!;
         await act(async () => { renderer.unmount(); });
         expect(signal.aborted).toBe(true); expect(removeApp).toHaveBeenCalled(); expect(mockNetwork.remove).toHaveBeenCalled();
     });

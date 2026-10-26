@@ -50,7 +50,7 @@ function record(value: unknown): value is AutomaticTaskRecord {
         default: return false;
     }
 }
-function task(value: unknown): value is AutomaticTask {
+export function isAutomaticTask(value: unknown): value is AutomaticTask {
     return record(value) && 'sessionId' in value && text(value.sessionId) && 'status' in value
         && (value.status === 'active' || value.status === 'inactive')
         && (!('lastDelivery' in value) || value.lastDelivery === undefined || delivery(value.lastDelivery));
@@ -209,7 +209,7 @@ export class AutomaticTaskService {
     }
     catalog(options: AutomaticTaskRequestOptions = {}): Promise<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>> {
         return this.request('/api/tasks', body => {
-            if (!object(body) || !Array.isArray(body.tasks) || !body.tasks.every(task)) return this.invalid();
+            if (!object(body) || !Array.isArray(body.tasks) || !body.tasks.every(isAutomaticTask)) return this.invalid();
             return { tasks: body.tasks };
         }, options);
     }

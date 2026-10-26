@@ -4,6 +4,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as Network from 'expo-network';
 import { useTranslation } from 'react-i18next';
 import { automaticTaskService as service, AutomaticTaskError } from '../services/AutomaticTaskService';
+import { automaticTaskCache, TASK_CACHE_TTL_MS, type TaskCatalogSnapshot } from '../services/AutomaticTaskCache';
 import type { AutomaticTask } from '../types/automaticTasks';
 import { AutomaticTaskDetail } from '../components/AutomaticTaskDetail';
 import { useAssistantStore } from '../store/useAssistantStore';
@@ -13,69 +14,121 @@ import { taskDateTime, taskFrequency, taskTimeZone, taskZoneLabel } from '../uti
 import { theme } from '../utils/theme';
 
 const TaskSeparator = () => <View style={styles.separator} />;
+const connectionIdentity = () => {
+    const state = useAssistantStore.getState();
+    return JSON.stringify([state.serverUrl, state.serverToken, state.hasHydrated]);
+};
+type RefreshMode = 'normal' | 'force' | 'manual';
 
 export const TodoScreen = () => {
     const { t, i18n } = useTranslation();
     const navigation = useNavigation();
     const metrics = getFontSizeMetrics(useSettingsStore(state => state.fontSize));
     const body = { fontSize: metrics.flashBody, lineHeight: metrics.flashLineHeight };
+    const renderIdentity = useAssistantStore(state => JSON.stringify([state.serverUrl, state.serverToken, state.hasHydrated]));
     const [tasks, setTasks] = useState<AutomaticTask[]>([]);
+    const [viewIdentity, setViewIdentity] = useState(renderIdentity);
     const [loading, setLoading] = useState(true);
+    const [manualRefreshing, setManualRefreshing] = useState(false);
     const [loaded, setLoaded] = useState(false);
     const [error, setError] = useState<string>();
     const [selectedId, setSelectedId] = useState<string>();
     const [catalogRevision, setCatalogRevision] = useState(0);
-    const request = useRef<AbortController | undefined>(undefined);
+    const request = useRef<{ controller: AbortController; identity: string; force: boolean } | undefined>(undefined);
+    const snapshot = useRef<(TaskCatalogSnapshot & { identity: string }) | undefined>(undefined);
     const focused = useRef(false);
-    const selected = tasks.find(task => task.id === selectedId);
+    const selectedRef = useRef(selectedId);
+    selectedRef.current = selectedId;
+    // Also hide old data immediately when identity changes while this tab is unfocused.
+    const visibleTasks = viewIdentity === renderIdentity ? tasks : [];
+    const selected = visibleTasks.find(task => task.id === selectedId);
 
     useLayoutEffect(() => { navigation.setOptions({ title: t('tabs.todo') }); }, [navigation, t]);
     const closeDetail = useCallback(() => { setSelectedId(undefined); }, []);
-    const refresh = useCallback(async (clear = false) => {
-        request.current?.abort();
+    const refresh = useCallback(async (mode: RefreshMode = 'normal') => {
+        const identity = connectionIdentity();
+        if (request.current?.identity === identity && mode !== 'manual') {
+            if (mode === 'force') request.current.force = true;
+            return;
+        }
+        request.current?.controller.abort();
         const controller = new AbortController();
-        request.current = controller;
-        if (clear) { setTasks([]); setLoaded(false); setSelectedId(undefined); }
-        setLoading(true); setError(undefined);
+        const current = { controller, identity, force: mode !== 'normal' };
+        request.current = current;
+        const valid = () => !controller.signal.aborted && focused.current && connectionIdentity() === identity;
+        if (snapshot.current?.identity !== identity) {
+            snapshot.current = undefined;
+            setTasks([]); setLoaded(false); setSelectedId(undefined); setViewIdentity(identity);
+        }
+        setLoading(true); setManualRefreshing(mode === 'manual'); setError(undefined);
         try {
+            const state = useAssistantStore.getState();
+            if (!state.hasHydrated) throw new AutomaticTaskError('connection_not_ready');
+            const { serverUrl, serverToken } = useAssistantStore.getState();
+            if (!snapshot.current) {
+                const cached = await automaticTaskCache.read(serverUrl, serverToken);
+                if (!valid()) return;
+                if (cached) {
+                    snapshot.current = { ...cached, identity };
+                    setTasks(cached.tasks); setLoaded(true);
+                }
+            }
+            const cachedAt = snapshot.current?.fetchedAt;
+            if (!current.force && cachedAt !== undefined && cachedAt > 0 && Date.now() >= cachedAt && Date.now() - cachedAt < TASK_CACHE_TTL_MS) return;
             const response = await service.catalog({ signal: controller.signal });
-            if (controller.signal.aborted || !focused.current) return;
+            if (!valid()) return;
             if (response.generation !== service.generation) throw new AutomaticTaskError('connection_changed');
             const active = response.tasks.filter(task => task.status === 'active');
+            const next = { tasks: active, fetchedAt: Date.now() };
+            snapshot.current = { ...next, identity };
             setTasks(active);
             setCatalogRevision(value => value + 1);
             setSelectedId(previous => active.some(task => task.id === previous) ? previous : undefined);
             setLoaded(true);
+            automaticTaskCache.write(serverUrl, serverToken, next);
         } catch (failure: unknown) {
-            if (!controller.signal.aborted && focused.current) setError(failure instanceof AutomaticTaskError && failure.code === 'native_tasks_unavailable'
-                ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed');
+            if (valid()) {
+                if (snapshot.current) {
+                    snapshot.current = { ...snapshot.current, fetchedAt: 0 };
+                    const { serverUrl, serverToken } = useAssistantStore.getState();
+                    automaticTaskCache.write(serverUrl, serverToken, snapshot.current);
+                }
+                setError(failure instanceof AutomaticTaskError && failure.code === 'native_tasks_unavailable'
+                    ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed');
+            }
         } finally {
-            if (!controller.signal.aborted && focused.current) setLoading(false);
+            if (valid() && request.current === current) {
+                request.current = undefined;
+                setLoading(false); setManualRefreshing(false);
+            }
         }
     }, []);
 
     useFocusEffect(useCallback(() => {
         focused.current = true;
-        refresh(true);
+        refresh();
         const stop = useAssistantStore.subscribe((next, previous) => {
             const changed = next.serverUrl !== previous.serverUrl || next.serverToken !== previous.serverToken
                 || next.hasHydrated !== previous.hasHydrated;
-            if (changed || (next.connectionState === 'connected' && previous.connectionState !== 'connected')) refresh(changed);
+            if (changed) refresh();
+            else if (next.connectionState === 'connected' && previous.connectionState !== 'connected') refresh('force');
         });
         let appState = AppState.currentState;
         const app = AppState.addEventListener('change', next => {
-            if (next === 'active' && appState !== 'active') refresh();
+            if (next === 'active' && appState !== 'active') refresh(selectedRef.current ? 'force' : 'normal');
             appState = next;
         });
         let wasOnline: boolean | undefined;
         const network = Network.addNetworkStateListener(state => {
             const online = state.isConnected === true && state.isInternetReachable !== false;
-            if (online && wasOnline === false) refresh();
+            if (online && wasOnline === false) refresh('force');
             wasOnline = online;
         });
         return () => {
             focused.current = false;
-            request.current?.abort();
+            request.current?.controller.abort();
+            request.current = undefined;
+            setLoading(false); setManualRefreshing(false);
             // Unmount detail readers even if the navigator keeps the list screen mounted off-tab.
             setSelectedId(undefined);
             stop(); app.remove(); network.remove();
@@ -83,19 +136,19 @@ export const TodoScreen = () => {
     }, [refresh]));
 
     return <View style={styles.container}>
-        <FlatList data={tasks} keyExtractor={task => task.id} contentContainerStyle={styles.content}
-            refreshing={loading} onRefresh={() => { refresh(); }}
+        <FlatList data={visibleTasks} keyExtractor={task => task.id} contentContainerStyle={styles.content}
+            refreshing={manualRefreshing} onRefresh={() => { refresh('manual'); }}
             ItemSeparatorComponent={TaskSeparator}
             ListHeaderComponent={<View>
-                {loading && !loaded && <ActivityIndicator accessibilityLabel={t('automaticTasks.loading')} color={theme.colors.primaryDark} />}
+                {loading && !loaded && !manualRefreshing && <ActivityIndicator accessibilityLabel={t('automaticTasks.loading')} color={theme.colors.primaryDark} />}
                 {error && <View style={styles.notice}>
                     <Text accessibilityRole="alert" style={[body, styles.secondary]}>{t(error)}</Text>
-                    <TouchableOpacity accessibilityRole="button" accessibilityLabel={t('automaticTasks.retry')} style={styles.action} onPress={() => { refresh(); }}>
+                    <TouchableOpacity accessibilityRole="button" accessibilityLabel={t('automaticTasks.retry')} style={styles.action} onPress={() => { refresh('force'); }}>
                         <Text style={[body, styles.link]}>{t('automaticTasks.retry')}</Text>
                     </TouchableOpacity>
                 </View>}
             </View>}
-            ListEmptyComponent={!loading && loaded && !error ? <View style={styles.empty}>
+            ListEmptyComponent={viewIdentity === renderIdentity && loaded && !error ? <View style={styles.empty}>
                 <Text style={[body, styles.title]}>{t('automaticTasks.empty')}</Text>
                 <Text style={[body, styles.secondary, styles.emptyHint]}>{t('automaticTasks.emptyHint')}</Text>
             </View> : undefined}
@@ -110,7 +163,7 @@ export const TodoScreen = () => {
             </TouchableOpacity>} />
         <Modal visible={!!selected} animationType="slide" onRequestClose={closeDetail}>
             {selected && <AutomaticTaskDetail key={`${service.generation}:${selected.id}`} task={selected} onClose={closeDetail}
-                catalogRevision={catalogRevision} catalogRefreshing={loading} catalogError={error} onRefreshCatalog={() => { refresh(); }} />}
+                catalogRevision={catalogRevision} catalogRefreshing={manualRefreshing} catalogError={error} onRefreshCatalog={() => { refresh('manual'); }} />}
         </Modal>
     </View>;
 };
