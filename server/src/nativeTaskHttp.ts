@@ -47,7 +47,11 @@ export async function handleNativeTaskHttp(
         if (taskMatch) {
             const id = decodeURIComponent(taskMatch[1]);
             const action = taskMatch[2];
-            if (action === 'result' && req.method === 'GET') { json(res, 200, { result: await service.getResult(id) }); return; }
+            if (action === 'result' && req.method === 'GET') {
+                const messageIds = url.searchParams.getAll('messageId');
+                if (messageIds.length > 1) throw new NativeTaskServiceError('invalid_input');
+                json(res, 200, { result: await service.getResult(id, messageIds[0]) }); return;
+            }
             if (action === 'history' && req.method === 'GET') {
                 const before = url.searchParams.get('before');
                 const limit = url.searchParams.get('limit');

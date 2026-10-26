@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ScheduleCatalogEntry, ScheduleRecord, ScheduleTimingChange, ScheduleUpdateResult, ScheduleDeleteResult, ScheduleDeliveryHistoryResult, ScheduleDeliveryReceipt } from '@deepseek-ai/dsh-schedule';
 import type { SessionWireEvent } from '@deepseek-ai/dsh-api-session-controller';
-import type { NativeTaskClient } from './nativeTaskClient.js';
+import { NativeTaskClientError, type NativeTaskClient } from './nativeTaskClient.js';
 
 export type NativeTaskTiming = { kind: 'at'; at: string } | { kind: 'daily'; time: string; timeZone: string } | { kind: 'weekly'; time: string; timeZone: string; weekdays: number[] };
 export interface NativeTaskCreateInput { requestId: string; title: string; prompt: string; timing: NativeTaskTiming }
@@ -216,17 +216,40 @@ export class NativeTaskService {
     if (options.before !== undefined) text(options.before, 200);
     return (await this.options.clientFactory()).history({ id: row.id, sessionId: row.sessionId, limit, ...(options.before ? { before: options.before as NonNullable<Parameters<NativeTaskClient['history']>[0]['before']> } : {}) });
   }
-  async getResult(taskId: string): Promise<NativeTaskResult> {
+  private async selectedDelivery(row: ScheduleCatalogEntry, messageId: string): Promise<ScheduleDeliveryReceipt> {
+    if (row.lastDelivery?.messageId === messageId) return row.lastDelivery;
+    const client = await this.options.clientFactory();
+    let before: Parameters<NativeTaskClient['history']>[0]['before'];
+    const cursors = new Set<string>();
+    // Receipt ownership must come from this task's native history, not merely a
+    // matching user message in its session (which can also contain other tasks).
+    for (let count = 0; count < 20; count++) {
+      const page = await client.history({ id: row.id, sessionId: row.sessionId, limit: 100, ...(before !== undefined ? { before } : {}) });
+      if ('code' in page) {
+        if (page.code === 'schedule_not_found') return fail('not_found');
+        break; // A disappearing cursor cannot prove the selected receipt absent.
+      }
+      const receipt = page.records.find(record => record.messageId === messageId);
+      if (receipt) return { messageId: receipt.messageId, scheduledAt: receipt.scheduledAt, deliveredAt: receipt.deliveredAt };
+      if (!page.nextBefore) return fail('not_found');
+      if (cursors.has(page.nextBefore)) break;
+      cursors.add(page.nextBefore);
+      before = page.nextBefore;
+    }
+    throw new NativeTaskClientError('remote_failed', 'history');
+  }
+  async getResult(taskId: string, selectedMessageId?: string): Promise<NativeTaskResult> {
     const row = await this.owned(taskId);
-    const result: NativeTaskResult = { taskId, status: row.lastDelivery ? 'unknown' : 'not_delivered', assistantText: [], truncated: false, ...(row.lastDelivery ? { delivery: row.lastDelivery } : {}) };
-    if (!row.lastDelivery) return result;
+    const delivery = selectedMessageId === undefined ? row.lastDelivery : await this.selectedDelivery(row, text(selectedMessageId, 200));
+    const result: NativeTaskResult = { taskId, status: delivery ? 'unknown' : 'not_delivered', assistantText: [], truncated: false, ...(delivery ? { delivery } : {}) };
+    if (!delivery) return result;
     const client = await this.options.clientFactory(); const projection = await client.projections({ sessionId: row.sessionId });
     if (!projection || projection.kind !== 'sequenced') return result;
     let beforeSeq: number | undefined; const events: SessionWireEvent[] = [];
     for (let count = 0; count < 20; count++) {
       const page = await client.page({ address: { kind: 'session', sessionId: row.sessionId }, throughSeq: projection.asOfSeq, maxMessages: 100, ...(beforeSeq !== undefined ? { beforeSeq } : {}) });
       events.unshift(...page.records.map(record => record.event));
-      const delivered = events.find(event => event.type === 'user/message' && object(event.data).id === row.lastDelivery?.messageId);
+      const delivered = events.find(event => event.type === 'user/message' && object(event.data).id === delivery.messageId);
       if (delivered && events.some(event => event.type === 'turn/start' && event.seq < delivered.seq)) break;
       if (!page.hasMore) break;
       const next = page.records[0]?.event.seq;
@@ -234,7 +257,7 @@ export class NativeTaskService {
       beforeSeq = next; if (count === 19) result.truncated = true;
     }
     events.sort((a, b) => a.seq - b.seq);
-    const delivered = events.find(event => event.type === 'user/message' && object(event.data).id === row.lastDelivery?.messageId);
+    const delivered = events.find(event => event.type === 'user/message' && object(event.data).id === delivery.messageId);
     if (!delivered) return result;
     const start = events.filter(event => event.type === 'turn/start' && event.seq < delivered.seq).at(-1);
     const turn = object(start?.data).turn;

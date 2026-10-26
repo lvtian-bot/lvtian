@@ -224,9 +224,12 @@ export class AutomaticTaskService {
             return { history: body.history };
         }, options);
     }
-    getResult(id: string, options: AutomaticTaskRequestOptions = {}): Promise<AutomaticTaskResponse<{ result: AutomaticTaskResult }>> {
-        return this.request(`/api/tasks/${this.id(id)}/result`, body => {
+    getResult(id: string, options: AutomaticTaskRequestOptions & { messageId?: string } = {}): Promise<AutomaticTaskResponse<{ result: AutomaticTaskResult }>> {
+        const suffix = options.messageId === undefined ? '' : `?messageId=${this.id(options.messageId)}`;
+        return this.request(`/api/tasks/${this.id(id)}/result${suffix}`, body => {
             if (!object(body) || !result(body.result) || body.result.taskId !== id) return this.invalid();
+            // Older servers may ignore query parameters. Never label the latest result as an older run.
+            if (options.messageId !== undefined && body.result.delivery?.messageId !== options.messageId) return this.invalid();
             return { result: body.result };
         }, options);
     }
