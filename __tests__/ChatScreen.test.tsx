@@ -308,4 +308,107 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(hasArrow()).toBe(false);
     });
 
+    it('键入 / 弹出斜杠建议菜单（包含 /new 与技能列表），点击 /new 触发会话重置并展示 Toast', async () => {
+        const resetSpy = jest.spyOn(AssistantClient.getInstance(), 'resetSession').mockResolvedValue(true);
+
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({
+                skills: [
+                    { name: 'vps-ops', description: 'VPS 运维规程' },
+                    { name: 'expo-app-release', description: 'Expo 发版' },
+                ],
+            });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const input = root.findByType(TextInput);
+
+        // 未输入时不显示斜杠菜单
+        expect(root.findAll((node) => node.props.style && node.props.style.maxHeight === 220).length).toBe(0);
+
+        // 键入 /
+        await ReactTestRenderer.act(async () => {
+            input.props.onChangeText('/');
+        });
+
+        // 包含 /new、/vps-ops、/expo-app-release
+        const allTextsAfterSlash = root.findAllByType(Text).map((node) => node.props.children);
+        expect(allTextsAfterSlash).toContain('/new');
+        expect(allTextsAfterSlash).toContain('/vps-ops');
+        expect(allTextsAfterSlash).toContain('/expo-app-release');
+
+        // 点击 /new 菜单项
+        const newMenuItem = root.findAllByType(TouchableOpacity).find((touch) => {
+            return touch.findAllByType(Text).some((t) => t.props.children === '/new');
+        });
+        expect(newMenuItem).toBeDefined();
+
+        await ReactTestRenderer.act(async () => {
+            newMenuItem!.props.onPress();
+        });
+
+        expect(resetSpy).toHaveBeenCalledWith();
+        // 浮动 Toast 气泡弹出
+        const allTextsAfterReset = root.findAllByType(Text).map((node) => String(node.props.children));
+        expect(allTextsAfterReset.some((txt) => /上下文已重置|Context has been reset/i.test(txt))).toBe(true);
+    });
+
+    it('直接在输入框输入 /new 并点击发送，拦截为重置会话，不作为普通文本发送', async () => {
+        const resetSpy = jest.spyOn(AssistantClient.getInstance(), 'resetSession').mockResolvedValue(true);
+        const sendSpy = jest.spyOn(AssistantClient.getInstance(), 'sendMessage');
+
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const input = root.findByType(TextInput);
+
+        await ReactTestRenderer.act(async () => {
+            input.props.onChangeText('/new');
+        });
+
+        const sendBtn = root.findAllByType(TouchableOpacity).find((btn) => {
+            return /发送|Send/i.test(btn.props.accessibilityLabel);
+        });
+        expect(sendBtn).toBeDefined();
+
+        await ReactTestRenderer.act(async () => {
+            sendBtn!.props.onPress();
+        });
+
+        expect(resetSpy).toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+        const allTexts = root.findAllByType(Text).map((node) => String(node.props.children));
+        expect(allTexts.some((txt) => /上下文已重置|Context has been reset/i.test(txt))).toBe(true);
+    });
+
+    it('点击技能卡片自动补全命令名称及空格', async () => {
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({
+                skills: [{ name: 'vps-ops', description: 'VPS 运维规程' }],
+            });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const input = root.findByType(TextInput);
+
+        await ReactTestRenderer.act(async () => {
+            input.props.onChangeText('/vp');
+        });
+
+        const skillMenuItem = root.findAllByType(TouchableOpacity).find((touch) => {
+            return touch.findAllByType(Text).some((t) => t.props.children === '/vps-ops');
+        });
+        expect(skillMenuItem).toBeDefined();
+
+        await ReactTestRenderer.act(async () => {
+            skillMenuItem!.props.onPress();
+        });
+
+        expect(input.props.value).toBe('/vps-ops ');
+    });
+
 });

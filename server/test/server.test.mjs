@@ -9,6 +9,7 @@ import { LvtianServer } from '../dist/server.js';
 import { MemoryManager } from '../dist/memoryManager.js';
 import { AcpEngineManager } from '../dist/acpEngineManager.js';
 import { FileManager } from '../dist/fileManager.js';
+import { SkillManager } from '../dist/skillManager.js';
 import WebSocket from 'ws';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1445,5 +1446,105 @@ test('SessionManager deleteMessage 超过100条时完整保留删除历史，不
     assert.equal(reconcile.deletedMessageIds?.length, 120, '对账时返回全部120条删除ID');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('LvtianServer supports /api/skills, /api/session/reset, and WS reset_session', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-skills-reset-'));
+    const sm = new SessionManager(tmpDir);
+    const mm = new MemoryManager(tmpDir);
+    let handoverTriggeredReason = null;
+    let handoverSessionId = null;
+
+    const engine = new AcpEngineManager(tmpDir, mm, sm, {
+        connectEngine: async () => {
+            throw new Error('不启动真实引擎');
+        },
+    });
+    // Mock triggerHandover
+    engine.triggerHandover = async (sessionId, reason) => {
+        handoverSessionId = sessionId;
+        handoverTriggeredReason = reason;
+    };
+
+    const skillsDir = path.join(tmpDir, 'skills');
+    fs.mkdirSync(path.join(skillsDir, 'mock-skill'), { recursive: true });
+    fs.writeFileSync(
+        path.join(skillsDir, 'mock-skill', 'SKILL.md'),
+        `---\nname: "mock-skill"\ndescription: "模拟技能说明"\n---\n# Mock`
+    );
+    const skillManager = new SkillManager(tmpDir, [skillsDir]);
+
+    const config = {
+        port: 0,
+        host: '127.0.0.1',
+        token: 'test-token-skill-reset-1234567890',
+        workspace: tmpDir,
+        dataDir: tmpDir,
+        assistantName: 'TestBot',
+    };
+
+    const server = new LvtianServer(config, sm, mm, engine, undefined, undefined, undefined, skillManager);
+    await server.start();
+    const port = server.httpServer.address().port;
+
+    try {
+        // 1. GET /api/skills (未授权应返回 401)
+        const unauthRes = await fetch(`http://127.0.0.1:${port}/api/skills`);
+        assert.equal(unauthRes.status, 401);
+
+        // 2. GET /api/skills (授权成功应返回技能列表)
+        const authRes = await fetch(`http://127.0.0.1:${port}/api/skills`, {
+            headers: { Authorization: `Bearer ${config.token}` },
+        });
+        assert.equal(authRes.status, 200);
+        const data = await authRes.json();
+        assert.ok(Array.isArray(data.skills));
+        assert.equal(data.skills.length, 1);
+        assert.equal(data.skills[0].name, 'mock-skill');
+        assert.equal(data.skills[0].description, '模拟技能说明');
+
+        // 3. POST /api/session/reset
+        const resetRes = await fetch(`http://127.0.0.1:${port}/api/session/reset`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ sessionId: 'main' }),
+        });
+        assert.equal(resetRes.status, 200);
+        const resetData = await resetRes.json();
+        assert.equal(resetData.success, true);
+        assert.equal(handoverSessionId, 'main');
+        assert.equal(handoverTriggeredReason, 'manual_new_session');
+
+        // 4. WebSocket reset_session
+        handoverTriggeredReason = null;
+        handoverSessionId = null;
+
+        await new Promise((resolve, reject) => {
+            const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+            ws.on('open', () => {
+                ws.send(JSON.stringify({ type: 'auth', token: config.token }));
+            });
+            ws.on('message', (raw) => {
+                const msg = JSON.parse(raw.toString('utf8'));
+                if (msg.type === 'auth_result' && msg.success) {
+                    ws.send(JSON.stringify({ type: 'reset_session', sessionId: 'main' }));
+                } else if (msg.type === 'session_reset_ack') {
+                    assert.equal(msg.success, true);
+                    assert.equal(msg.sessionId, 'main');
+                    assert.equal(handoverSessionId, 'main');
+                    assert.equal(handoverTriggeredReason, 'manual_new_session');
+                    ws.close();
+                    resolve();
+                }
+            });
+            ws.on('error', reject);
+        });
+    } finally {
+        await server.stop();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
 });
 

@@ -7,6 +7,7 @@ import {
     ServerMessage,
     AssistantMessage,
     ChatAttachment,
+    AgentSkill,
 } from '../types/assistantProtocol';
 
 export class AssistantClient {
@@ -623,6 +624,70 @@ export class AssistantClient {
     }
 
     /**
+     * 重置会话上下文（无感新建会话，复用底层交接流水线）
+     */
+    public async resetSession(sessionId = 'main'): Promise<boolean> {
+        // 1. 优先通过 WebSocket 发送
+        const sentViaWs = this.sendRaw({
+            type: 'reset_session',
+            sessionId,
+        });
+        if (sentViaWs) {
+            return true;
+        }
+
+        // 2. 若 WebSocket 未就绪，走 HTTP 接口备用兜底
+        const store = useAssistantStore.getState();
+        const url = store.serverUrl;
+        const token = store.serverToken;
+        if (url && token) {
+            try {
+                const res = await fetch(`${url}/api/session/reset`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ sessionId }),
+                });
+                return res.ok;
+            } catch (err) {
+                console.warn('[AssistantClient] resetSession 异常:', err);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 获取服务端可用技能列表并更新 Store
+     */
+    public async fetchSkills(): Promise<AgentSkill[]> {
+        const store = useAssistantStore.getState();
+        const url = store.serverUrl;
+        const token = store.serverToken;
+        if (!url || !token) {
+            return [];
+        }
+
+        try {
+            const res = await fetch(`${url}/api/skills`, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+            if (res.ok) {
+                const data = (await res.json()) as { skills?: AgentSkill[] };
+                const skills = data.skills || [];
+                store.setSkills(skills);
+                return skills;
+            }
+        } catch (err) {
+            console.warn('[AssistantClient] 获取技能列表失败:', err);
+        }
+        return [];
+    }
+
+    /**
      * 取消排队中的消息
      * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录；
      * 无条件将撤销请求纳入 pendingCancelQueue 持久化队列，待收到服务端确认回执（message_deleted、增量对账剔除或 cancel_failed）后才出队；
@@ -677,6 +742,7 @@ export class AssistantClient {
                 if (msg.success) {
                     // 仅在鉴权真正成功后才重置重连尝试计数，防止闪断网络进入 1s 高频重试死循环
                     this.reconnectAttempts = 0;
+                    this.fetchSkills().catch(() => {});
                 } else {
                     store.setConnectionState('error', msg.error || '认证失败，请检查访问令牌');
                     this.isExplicitlyClosed = true;
@@ -936,6 +1002,11 @@ export class AssistantClient {
                     store.addOrUpdateMessage(backup);
                 }
                 this.cancellingMessages.delete(msg.messageId);
+                break;
+            }
+
+            case 'session_reset_ack': {
+                console.log('[AssistantClient] 会话上下文重置已完成:', msg.sessionId);
                 break;
             }
 
