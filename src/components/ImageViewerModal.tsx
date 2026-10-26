@@ -40,6 +40,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
     const initialScale = useRef(1);
     const lastTapTime = useRef(0);
     const singleTapTimeout = useRef<NodeJS.Timeout | null>(null);
+    const isMultiTouchGesture = useRef(false);
 
     useEffect(() => {
         const scaleSub = scale.addListener((v) => {
@@ -70,6 +71,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
             panValue.current = { x: 0, y: 0 };
             dragStartOffset.current = { x: 0, y: 0 };
             initialDistance.current = null;
+            isMultiTouchGesture.current = false;
             if (singleTapTimeout.current) {
                 clearTimeout(singleTapTimeout.current);
             }
@@ -91,18 +93,21 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
             onPanResponderGrant: (evt) => {
                 dragStartOffset.current = { x: panValue.current.x, y: panValue.current.y };
                 const touches = evt.nativeEvent.touches;
-                if (touches.length === 2) {
+                if (touches.length >= 2) {
+                    isMultiTouchGesture.current = true;
                     const dx = touches[0].pageX - touches[1].pageX;
                     const dy = touches[0].pageY - touches[1].pageY;
                     initialDistance.current = Math.sqrt(dx * dx + dy * dy);
                     initialScale.current = scaleValue.current;
                 } else {
+                    isMultiTouchGesture.current = false;
                     initialDistance.current = null;
                 }
             },
             onPanResponderMove: (evt, gestureState) => {
                 const touches = evt.nativeEvent.touches;
-                if (touches.length === 2) {
+                if (touches.length >= 2) {
+                    isMultiTouchGesture.current = true;
                     // 双指捏合缩放（支持先后落指的动态初始化）
                     const dx = touches[0].pageX - touches[1].pageX;
                     const dy = touches[0].pageY - touches[1].pageY;
@@ -125,11 +130,13 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
                 }
             },
             onPanResponderRelease: (_evt, gestureState) => {
+                const wasMultiTouch = isMultiTouchGesture.current;
+                isMultiTouchGesture.current = false;
                 initialDistance.current = null;
                 const now = Date.now();
 
-                // 点击判定：移动距离极小（< 8px）
-                if (Math.abs(gestureState.dx) < 8 && Math.abs(gestureState.dy) < 8) {
+                // 点击判定：仅在纯单指轻触且移动距离极小（< 8px）时触发
+                if (!wasMultiTouch && Math.abs(gestureState.dx) < 8 && Math.abs(gestureState.dy) < 8) {
                     if (now - lastTapTime.current < 280) {
                         // 双击判定：清除延时的单击关闭定时器，切换放大与复位
                         if (singleTapTimeout.current) {
@@ -158,6 +165,15 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
                 }
 
                 // 缩放边界回弹
+                if (scaleValue.current < 1) {
+                    resetPositionAndScale();
+                } else if (scaleValue.current > 3.5) {
+                    Animated.spring(scale, { toValue: 3.5, useNativeDriver: true }).start();
+                }
+            },
+            onPanResponderTerminate: () => {
+                isMultiTouchGesture.current = false;
+                initialDistance.current = null;
                 if (scaleValue.current < 1) {
                     resetPositionAndScale();
                 } else if (scaleValue.current > 3.5) {
