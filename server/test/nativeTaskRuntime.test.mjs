@@ -25,6 +25,10 @@ test('starts proactively, reuses checked connection, and disposes client before 
 });
 
 test('recovers an exited native host without a phone query or replaying task creation', { timeout: 3000 }, async t => {
+  // The mocked host has no server socket to keep its unref'ed recovery timer alive.
+  // Outlive the test deadline; the hook also clears this handle on failure/cancellation.
+  const keepAlive = setTimeout(() => {}, 5000);
+  t.after(() => clearTimeout(keepAlive));
   const runtime = await runtimeFixture();
   let starts = 0; let connects = 0;
   let recovered;

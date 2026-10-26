@@ -81,13 +81,15 @@ export class NativeTaskHost {
                 this.options.onUnexpectedExit?.();
             });
             const endpoint = await new Promise<NativeTaskHostEndpoint>((resolve, reject) => {
-                let buffer = '';
+                // stdout and stderr are independent byte streams. Diagnostics from one
+                // must never terminate a partial startup URL from the other.
+                const buffers = new Map<NodeJS.ReadableStream, string>();
                 let settled = false;
                 const timer = setTimeout(() => reject(new Error('native_host_startup_timeout')), this.options.startupTimeoutMs ?? 30000);
                 const settle = (result?: NativeTaskHostEndpoint, error?: Error) => {
                     if (settled) return;
                     settled = true;
-                    buffer = '';
+                    buffers.clear();
                     clearTimeout(timer);
                     if (error) reject(error);
                     else if (result) resolve(result);
@@ -97,7 +99,8 @@ export class NativeTaskHost {
                 for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk: Buffer) => {
                     if (settled) return;
                     // Keep startup credentials in memory only; discard other host diagnostics.
-                    buffer = (buffer + chunk.toString('utf8')).slice(-65536);
+                    const buffer = ((buffers.get(stream) ?? '') + chunk.toString('utf8')).slice(-65536);
+                    buffers.set(stream, buffer);
                     const match = buffer.match(/http:\/\/127\.0\.0\.1:(\d+)\/?\?token=([A-Za-z0-9_-]+)(?=[^A-Za-z0-9_-])/);
                     if (match) settle({ origin: `http://127.0.0.1:${match[1]}`, token: match[2] });
                 });

@@ -69,10 +69,18 @@ test('runner exits when the supervisor pipe closes', async () => {
   } finally { await host.stop(); }
 });
 
-test('waits for a full startup token across pipe chunks', async () => {
-  const host = new NativeTaskHost(await fixture("process.stdout.write('http://127.0.0.1:34567/?token=partial'); setTimeout(() => console.log('-complete'), 20); setInterval(() => {}, 1000);"));
-  try { assert.equal((await host.start()).token, 'partial-complete'); }
-  finally { await host.stop(); }
+test('waits for a full startup token across pipe chunks without mixing stdout and stderr', async () => {
+  for (const output of ['stdout', 'stderr']) {
+    const diagnostics = output === 'stdout' ? 'stderr' : 'stdout';
+    const host = new NativeTaskHost(await fixture(`
+      process.${output}.write('http://127.0.0.1:34567/?token=partial');
+      setTimeout(() => process.${diagnostics}.write('unrelated diagnostic\\n'), 20);
+      setTimeout(() => process.${output}.write('-complete\\n'), 80);
+      setInterval(() => {}, 1000);
+    `));
+    try { assert.equal((await host.start()).token, 'partial-complete'); }
+    finally { await host.stop(); }
+  }
 });
 
 test('does not overwrite a user-modified managed overlay', async () => {
