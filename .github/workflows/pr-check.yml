@@ -43,6 +43,27 @@ jobs:
         run: npx expo install --check
         continue-on-error: true
 
+  server-check:
+    name: 服务端检查（类型/测试）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: 安装服务端依赖
+        run: npm ci
+      - name: 服务端类型检查
+        run: npm run typecheck
+      - name: 服务端测试（隔离环境，无模型凭据）
+        run: npm test
+
   native-build:
     name: Android 原生编译（手动触发，调试变体，零凭据）
     if: github.event_name == 'workflow_dispatch'

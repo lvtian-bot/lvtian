@@ -10,6 +10,13 @@ import { SessionManager } from '../dist/sessionManager.js';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function keepEventLoopAlive(t) {
+    // 进程内 mock 没有真实服务端的 socket；让 unref 的回收/看门狗计时器有机会触发。
+    // 长于测试的 3s 超时，并在成功、失败或取消时由测试清理，避免掩盖挂死。
+    const keepAlive = setTimeout(() => {}, 5000);
+    t.after(() => clearTimeout(keepAlive));
+}
+
 /**
  * 进程内模拟引擎（仅用 SDK 公开 API，不依赖真实 dsh、模型与 API Key）。
  * 行为契约：prompt → chunkCount 个文本增量 →（可选）一次审批请求 → 终态 end_turn；
@@ -596,7 +603,8 @@ test('同一会话并发审批各自独立应答，互不覆盖', async () => {
     assert.ok(deltas(events).includes('double-selected-selected'), '两个审批均应收到各自的选择结果');
 });
 
-test('停止后引擎无响应：超时强制回收连接并释放会话占用', async () => {
+test('停止后引擎无响应：超时强制回收连接并释放会话占用', { timeout: 3000 }, async (t) => {
+    keepEventLoopAlive(t);
     const { manager, sessionManager } = buildManager(
         { promptNeverEnds: true },
         { stopTimeoutMs: 100 }
@@ -671,7 +679,8 @@ test('并发审批其一超时：其余审批一并取消，任务停止后不�
     assert.ok(stoppedEvent, '超时审批应广播 stopped 终态');
 });
 
-test('任务占用看门狗：占用超时强制回收连接，任务以错误终态释放会话', async () => {
+test('任务占用看门狗：占用超时强制回收连接，任务以错误终态释放会话', { timeout: 3000 }, async (t) => {
+    keepEventLoopAlive(t);
     const { manager, sessionManager } = buildManager(
         { promptNeverEnds: true },
         { taskTimeoutMs: 100 }
@@ -690,7 +699,8 @@ test('任务占用看门狗：占用超时强制回收连接，任务以错误�
     assert.strictEqual(lastStatus(events2), 'done', '看门狗回收后应能重建引擎并继续执行');
 });
 
-test('审批超时且引擎无响应：停止回收兜底释放会话占用', async () => {
+test('审批超时且引擎无响应：停止回收兜底释放会话占用', { timeout: 3000 }, async (t) => {
+    keepEventLoopAlive(t);
     const { manager, sessionManager } = buildManager(
         { chunkCount: 1, enablePermission: true, hangOnPermissionTimeout: true },
         { approvalTimeoutMs: 100, stopTimeoutMs: 100 }

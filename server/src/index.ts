@@ -1,4 +1,6 @@
 import os from 'node:os';
+import path from 'node:path';
+import { NativeTaskRuntime } from './nativeTaskRuntime.js';
 import { loadOrCreateConfig, ServerConfig } from './config.js';
 import { MemoryManager } from './memoryManager.js';
 import { SessionManager } from './sessionManager.js';
@@ -22,6 +24,10 @@ function parseArgs(): Partial<ServerConfig> {
             overrides.token = args[++i];
         } else if (arg === '--workspace' && i + 1 < args.length) {
             overrides.workspace = args[++i];
+        } else if (arg === '--native-tasks') {
+            overrides.nativeTasksEnabled = true;
+        } else if (arg === '--no-native-tasks') {
+            overrides.nativeTasksEnabled = false;
         }
     }
     return overrides;
@@ -66,13 +72,33 @@ async function main() {
     const memoryManager = new MemoryManager(config.workspace);
     const sessionManager = new SessionManager(config.dataDir);
     const contextConsolidator = new ContextConsolidator(sessionManager);
+    if (config.nativeTasksEnabled && !['0.0.0.0', '::', '127.0.0.1', '::1'].includes(config.host)) {
+        throw new Error('Native task bridge requires an existing loopback or wildcard server listener');
+    }
+    const taskApiHost = config.host === '::1' ? '[::1]' : '127.0.0.1';
+    const nativeTasks = config.nativeTasksEnabled ? new NativeTaskRuntime({
+        root: path.join(config.dataDir, 'native-tasks'),
+        workspace: config.workspace,
+        modelEnvironment: {
+            ...(process.env.DEEPSEEK_API_KEY ? { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY } : {}),
+            DSH_PERMISSION_MODE: getDshPermissionMode(config.dshProfileDir),
+        },
+    }) : undefined;
+    const taskOverlay = await nativeTasks?.prepareAcpOverlay();
     const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager, {
         contextConsolidator,
         dshProfileDir: config.dshProfileDir,
+        ...(taskOverlay ? {
+            additionalPatches: [taskOverlay],
+            privateEnvironment: {
+                LVTIAN_TASK_API_ORIGIN: `http://${taskApiHost}:${config.port}`,
+                LVTIAN_TASK_API_TOKEN: config.token,
+            },
+        } : {}),
     });
     const fileManager = new FileManager(config.workspace);
 
-    const server = new LvtianServer(config, sessionManager, memoryManager, acpEngine, fileManager, contextConsolidator);
+    const server = new LvtianServer(config, sessionManager, memoryManager, acpEngine, fileManager, contextConsolidator, nativeTasks);
     await server.start();
 
     const maskedToken = `${config.token.slice(0, 4)}****${config.token.slice(-4)}`;

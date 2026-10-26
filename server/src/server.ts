@@ -9,6 +9,8 @@ import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
+import { handleNativeTaskHttp, isNativeTaskPath } from './nativeTaskHttp.js';
+import type { NativeTaskRuntime } from './nativeTaskRuntime.js';
 import { getDshPermissionMode, setDshPermissionMode, willDshPermissionChange, DshPermissionMode } from './dshConfigManager.js';
 import {
     ClientMessage,
@@ -51,7 +53,8 @@ export class LvtianServer {
         memoryManager: MemoryManager,
         acpEngine: AcpEngineManager,
         fileManager?: FileManager,
-        contextConsolidator?: ContextConsolidator
+        contextConsolidator?: ContextConsolidator,
+        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'>
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
@@ -180,6 +183,12 @@ export class LvtianServer {
                 res.end(JSON.stringify({ error: '无效的访问令牌（Unauthorized）' }));
                 return;
             }
+        }
+
+        if (isNativeTaskPath(pathname)) {
+            await handleNativeTaskHttp(req, res, urlObj, this.nativeTasks?.service,
+                () => this.readJsonBody<unknown>(req, 128 * 1024), this.isDraining);
+            return;
         }
 
         // 实例连接信息验证
@@ -991,12 +1000,19 @@ export class LvtianServer {
         console.log('[Server] 服务已优雅停机');
     }
 
-    public start(): Promise<void> {
-        return new Promise((resolve) => {
+    public async start(): Promise<void> {
+        await new Promise<void>((resolve, reject) => {
+            this.httpServer.once('error', reject);
             this.httpServer.listen(this.config.port, this.config.host, () => {
+                this.httpServer.removeListener('error', reject);
                 resolve();
             });
         });
+        // Saved rules must resume even when no App or browser ever connects.
+        // Keep main chat available if the optional native host is temporarily unavailable.
+        if (this.nativeTasks) {
+            this.nativeTasks.start().catch(() => console.warn('[Server] Native task host unavailable; recovery remains active'));
+        }
     }
 
     public async stop(): Promise<void> {
@@ -1006,7 +1022,8 @@ export class LvtianServer {
         }
 
         // 优雅关停 ACP 引擎：停止全部受理中任务、关闭引擎连接并回收子进程，防止僵尸进程常驻
-        await this.acpEngine.stopAll();
+        try { await this.acpEngine.stopAll(); }
+        finally { await this.nativeTasks?.stop(); }
 
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);

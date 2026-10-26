@@ -64,6 +64,9 @@ yarn-error.log
 **/Pods/
 /vendor/bundle/
 
+# Isolated native Harness probe data (may include local authentication grants)
+/.schedule-probe/
+
 # Temporary files created by Metro to check the health of the file watcher
 .metro-health-check*
 

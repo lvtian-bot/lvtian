@@ -11,6 +11,7 @@ export interface ServerConfig {
     dataDir: string;
     assistantName: string;
     dshProfileDir?: string;
+    nativeTasksEnabled?: boolean;
 }
 
 export function resolveUserPath(p: string): string {
@@ -51,6 +52,7 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
     const dataDir = resolveUserPath(overrides?.dataDir || existing.dataDir || path.join(configDir, 'data'));
     const assistantName = overrides?.assistantName || existing.assistantName || '绿天';
     const dshProfileDir = overrides?.dshProfileDir || existing.dshProfileDir;
+    const nativeTasksEnabled = overrides?.nativeTasksEnabled ?? (existing.nativeTasksEnabled === true);
 
     const mergedConfig: ServerConfig = {
         host,
@@ -60,6 +62,7 @@ export function loadOrCreateConfig(overrides?: Partial<ServerConfig>): ServerCon
         dataDir,
         assistantName,
         ...(dshProfileDir ? { dshProfileDir } : {}),
+        nativeTasksEnabled,
     };
 
     // 确保工作区和数据目录存在
