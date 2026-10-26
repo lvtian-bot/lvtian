@@ -72,10 +72,16 @@ test('runner exits when the supervisor pipe closes', async () => {
 test('waits for a full startup token across pipe chunks without mixing stdout and stderr', async () => {
   for (const output of ['stdout', 'stderr']) {
     const diagnostics = output === 'stdout' ? 'stderr' : 'stdout';
+    // Let the runner's queued SQLite warning drain before deliberately splitting
+    // the fixture's URL. A diagnostic inserted into that SAME line is not a
+    // valid chunked URL; this regression exercises interference across streams.
     const host = new NativeTaskHost(await fixture(`
-      process.${output}.write('http://127.0.0.1:34567/?token=partial');
-      setTimeout(() => process.${diagnostics}.write('unrelated diagnostic\\n'), 20);
-      setTimeout(() => process.${output}.write('-complete\\n'), 80);
+      process.nextTick(() => process.stderr.write('queued startup diagnostic\\n'));
+      setImmediate(() => {
+        process.${output}.write('http://127.0.0.1:34567/?token=partial');
+        setTimeout(() => process.${diagnostics}.write('unrelated diagnostic\\n'), 20);
+        setTimeout(() => process.${output}.write('-complete\\n'), 80);
+      });
       setInterval(() => {}, 1000);
     `));
     try { assert.equal((await host.start()).token, 'partial-complete'); }
