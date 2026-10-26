@@ -838,8 +838,8 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
                 sessionId: 'main',
             });
 
-            // 快进 6 秒触发超时
-            jest.advanceTimersByTime(6000);
+            // 快进 60 秒触发超时（与修改权限模式统一放宽至 60 秒）
+            jest.advanceTimersByTime(60000);
 
             const ok = await resetPromise;
             expect(ok).toBe(false);

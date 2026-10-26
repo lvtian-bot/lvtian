@@ -653,10 +653,10 @@ export class AssistantClient {
                 };
 
                 const timer = setTimeout(() => {
-                    // WS 等待超时直接判定失败，不追加破坏性的 HTTP 重试，避免网络延迟引发二次重置
+                    // WS 等待超时直接判定失败（与修改权限模式统一放宽至 60 秒，覆盖即时心智提炼耗时），不追加破坏性的 HTTP 重试
                     console.warn('[AssistantClient] resetSession WS 回执超时');
                     finish(false);
-                }, 6000);
+                }, 60000);
 
                 const list = this.pendingResetCallbacks.get(sessionId) || [];
                 list.push(finish);
@@ -684,7 +684,8 @@ export class AssistantClient {
             try {
                 const httpUrl = AssistantClient.toHttpUrl(rawUrl);
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 6000);
+                // 与修改权限模式统一放宽至 60 秒，覆盖服务端心智提炼的最大耗时
+                const timeoutId = setTimeout(() => controller.abort(), 60000);
                 const res = await fetch(`${httpUrl}/api/session/reset`, {
                     method: 'POST',
                     headers: {

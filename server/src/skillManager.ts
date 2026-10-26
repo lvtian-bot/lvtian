@@ -92,6 +92,9 @@ export class SkillManager {
         }
         const name = (nameMatch ? nameMatch[1] : fallbackName).trim();
         if (!name) return null;
+        if (desc === '>' || desc === '|') {
+            desc = '';
+        }
         return { name, description: desc };
     }
 }
