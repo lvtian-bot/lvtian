@@ -406,11 +406,16 @@ export const ChatScreen = () => {
     const handleSelectSlashItem = useCallback(async (item: { name: string; type: 'command' | 'skill' }) => {
         if (item.name === 'new') {
             setInputContent('');
-            showToast(t('assistant.sessionResetToast', '上下文已重置'));
             try {
-                await AssistantClient.getInstance().resetSession();
+                const ok = await AssistantClient.getInstance().resetSession();
+                if (ok) {
+                    showToast(t('assistant.sessionResetToast', '上下文已重置'));
+                } else {
+                    showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
+                }
             } catch (err) {
                 console.warn('[ChatScreen] resetSession failed:', err);
+                showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
             }
         } else {
             setInputContent(`/${item.name} `);
@@ -655,10 +660,19 @@ export const ChatScreen = () => {
         const trimmed = inputContent.trim();
         if (trimmed === '/new') {
             setInputContent('');
-            showToast(t('assistant.sessionResetToast', '上下文已重置'));
-            AssistantClient.getInstance().resetSession().catch((err) => {
-                console.warn('[ChatScreen] resetSession failed:', err);
-            });
+            void (async () => {
+                try {
+                    const ok = await AssistantClient.getInstance().resetSession();
+                    if (ok) {
+                        showToast(t('assistant.sessionResetToast', '上下文已重置'));
+                    } else {
+                        showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
+                    }
+                } catch (err) {
+                    console.warn('[ChatScreen] resetSession failed:', err);
+                    showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
+                }
+            })();
             return;
         }
 

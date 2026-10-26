@@ -411,4 +411,31 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(input.props.value).toBe('/vps-ops ');
     });
 
+    it('/new 重置失败时提示失败 Toast，不误报成功', async () => {
+        jest.spyOn(AssistantClient.getInstance(), 'resetSession').mockResolvedValue(false);
+
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const input = root.findByType(TextInput);
+
+        await ReactTestRenderer.act(async () => {
+            input.props.onChangeText('/new');
+        });
+
+        const sendBtn = root.findAllByType(TouchableOpacity).find((btn) => {
+            return /发送|Send/i.test(btn.props.accessibilityLabel);
+        });
+
+        await ReactTestRenderer.act(async () => {
+            sendBtn!.props.onPress();
+        });
+
+        const allTexts = root.findAllByType(Text).map((node) => String(node.props.children));
+        expect(allTexts.some((txt) => /重置上下文失败|Failed to reset context/i.test(txt))).toBe(true);
+        expect(allTexts.some((txt) => /上下文已重置|Context has been reset/i.test(txt))).toBe(false);
+    });
+
 });

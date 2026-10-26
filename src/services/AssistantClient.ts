@@ -25,9 +25,18 @@ export class AssistantClient {
     private currentAppState: AppStateStatus = (AppState.currentState as AppStateStatus) || 'active';
     private lastBackgroundTimestamp = 0;
     private appStateSubscription: { remove: () => void } | null = null;
+    private pendingResetCallbacks: Map<string, Array<(success: boolean) => void>> = new Map();
 
     private constructor() {
         this.setupAppStateListener();
+    }
+
+    /**
+     * 将 ws:// / wss:// 协议头标准化转换为 fetch 支持的 http:// / https://
+     */
+    public static toHttpUrl(rawUrl: string): string {
+        const cleanUrl = rawUrl.trim().replace(/\/+$/, '');
+        return cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
     }
 
     public static getInstance(): AssistantClient {
@@ -627,22 +636,55 @@ export class AssistantClient {
      * 重置会话上下文（无感新建会话，复用底层交接流水线）
      */
     public async resetSession(sessionId = 'main'): Promise<boolean> {
-        // 1. 优先通过 WebSocket 发送
-        const sentViaWs = this.sendRaw({
-            type: 'reset_session',
-            sessionId,
-        });
-        if (sentViaWs) {
-            return true;
+        // 1. 若 WebSocket 处于连接状态，通过 WS 发送并等待 session_reset_ack 回执
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            return new Promise<boolean>((resolve) => {
+                let resolved = false;
+                const finish = (ok: boolean) => {
+                    if (resolved) return;
+                    resolved = true;
+                    clearTimeout(timer);
+                    const list = this.pendingResetCallbacks.get(sessionId) || [];
+                    this.pendingResetCallbacks.set(
+                        sessionId,
+                        list.filter((cb) => cb !== finish)
+                    );
+                    resolve(ok);
+                };
+
+                const timer = setTimeout(async () => {
+                    // WS 超时，回退尝试 HTTP
+                    const httpOk = await this.resetSessionHttpFallback(sessionId);
+                    finish(httpOk);
+                }, 4000);
+
+                const list = this.pendingResetCallbacks.get(sessionId) || [];
+                list.push(finish);
+                this.pendingResetCallbacks.set(sessionId, list);
+
+                const sent = this.sendRaw({
+                    type: 'reset_session',
+                    sessionId,
+                });
+                if (!sent) {
+                    clearTimeout(timer);
+                    this.resetSessionHttpFallback(sessionId).then(finish);
+                }
+            });
         }
 
-        // 2. 若 WebSocket 未就绪，走 HTTP 接口备用兜底
+        // 2. 若 WebSocket 未连接，直接走 HTTP 接口备用兜底
+        return this.resetSessionHttpFallback(sessionId);
+    }
+
+    private async resetSessionHttpFallback(sessionId: string): Promise<boolean> {
         const store = useAssistantStore.getState();
-        const url = store.serverUrl;
+        const rawUrl = store.serverUrl;
         const token = store.serverToken;
-        if (url && token) {
+        if (rawUrl && token) {
             try {
-                const res = await fetch(`${url}/api/session/reset`, {
+                const httpUrl = AssistantClient.toHttpUrl(rawUrl);
+                const res = await fetch(`${httpUrl}/api/session/reset`, {
                     method: 'POST',
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -663,14 +705,15 @@ export class AssistantClient {
      */
     public async fetchSkills(): Promise<AgentSkill[]> {
         const store = useAssistantStore.getState();
-        const url = store.serverUrl;
+        const rawUrl = store.serverUrl;
         const token = store.serverToken;
-        if (!url || !token) {
+        if (!rawUrl || !token) {
             return [];
         }
 
         try {
-            const res = await fetch(`${url}/api/skills`, {
+            const httpUrl = AssistantClient.toHttpUrl(rawUrl);
+            const res = await fetch(`${httpUrl}/api/skills`, {
                 headers: {
                     Authorization: `Bearer ${token}`,
                 },
@@ -1007,6 +1050,9 @@ export class AssistantClient {
 
             case 'session_reset_ack': {
                 console.log('[AssistantClient] 会话上下文重置已完成:', msg.sessionId);
+                const callbacks = this.pendingResetCallbacks.get(msg.sessionId) || [];
+                this.pendingResetCallbacks.delete(msg.sessionId);
+                callbacks.forEach((cb) => cb(msg.success !== false));
                 break;
             }
 

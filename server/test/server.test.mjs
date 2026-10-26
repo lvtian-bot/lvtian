@@ -1518,6 +1518,20 @@ test('LvtianServer supports /api/skills, /api/session/reset, and WS reset_sessio
         assert.equal(handoverSessionId, 'main');
         assert.equal(handoverTriggeredReason, 'manual_new_session');
 
+        // 3.1 畸形 JSON 请求被拒绝（400），且不触发交接
+        handoverTriggeredReason = null;
+        handoverSessionId = null;
+        const badJsonRes = await fetch(`http://127.0.0.1:${port}/api/session/reset`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: '{ malformed json ',
+        });
+        assert.equal(badJsonRes.status, 400);
+        assert.equal(handoverTriggeredReason, null);
+
         // 4. WebSocket reset_session
         handoverTriggeredReason = null;
         handoverSessionId = null;

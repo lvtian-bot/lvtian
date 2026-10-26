@@ -279,7 +279,7 @@ export class LvtianServer {
         // 手动重置会话上下文（复用统一会话交接流水线）
         if (pathname === '/api/session/reset' && req.method === 'POST') {
             try {
-                const body = await this.readJsonBody<{ sessionId?: string }>(req, 1024).catch(() => ({ sessionId: 'main' }));
+                const body = await this.readJsonBody<{ sessionId?: string }>(req, 1024);
                 const targetSessionId = body?.sessionId || 'main';
                 if (!/^[a-zA-Z0-9_-]+$/.test(targetSessionId)) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -287,13 +287,15 @@ export class LvtianServer {
                     return;
                 }
                 await this.acpEngine.triggerHandover(targetSessionId, 'manual_new_session');
+                this.scheduleProcessQueue(targetSessionId);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, sessionId: targetSessionId }));
             } catch (err: unknown) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(
                     JSON.stringify({
-                        error: `重置会话失败: ${err instanceof Error ? err.message : String(err)}`,
+                        error: `重置会话请求无效: ${err instanceof Error ? err.message : String(err)}`,
+                        code: 'BAD_REQUEST',
                     })
                 );
             }
@@ -629,6 +631,7 @@ export class LvtianServer {
                 }
                 const sessionId = rawSessionId;
                 await this.acpEngine.triggerHandover(sessionId, 'manual_new_session');
+                this.scheduleProcessQueue(sessionId);
                 this.send(ws, {
                     type: 'session_reset_ack',
                     sessionId,
