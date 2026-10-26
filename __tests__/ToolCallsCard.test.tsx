@@ -76,7 +76,7 @@ describe('ToolCallsCard', () => {
         expect(output.props.selectable).toBe(true);
         expect(output.props.numberOfLines).toBeUndefined();
         const title = renderer!.root.findAllByType(Text).find((node) => node.props.children === 'Check repository changes')!;
-        expect(title.props.numberOfLines).toBeUndefined();
+        expect(title.props.numberOfLines).toBe(2);
         await ReactTestRenderer.act(async () => buttons()[0].props.onPress());
         expect(texts()).not.toContain(command.output);
     });

@@ -30,3 +30,19 @@ export function getAssistantMessageParts(message: AssistantMessage): AssistantMe
     appendText(message.content.length);
     return parts;
 }
+
+export type AssistantDisplayPart =
+    | Extract<AssistantMessagePart, { type: 'text' }>
+    | { type: 'tools'; key: string; tools: ToolCallState[] };
+
+/** Adjacent calls share a surface; prose always breaks a tool group. */
+export function getAssistantDisplayParts(message: AssistantMessage): AssistantDisplayPart[] {
+    const groups: AssistantDisplayPart[] = [];
+    for (const part of getAssistantMessageParts(message)) {
+        const previous = groups[groups.length - 1];
+        if (part.type === 'text') groups.push(part);
+        else if (previous?.type === 'tools') previous.tools.push(part.tool);
+        else groups.push({ type: 'tools', key: part.key, tools: [part.tool] });
+    }
+    return groups;
+}

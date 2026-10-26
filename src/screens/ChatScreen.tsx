@@ -48,7 +48,9 @@ import {
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ToolCallState } from '../types/assistantProtocol';
-import { getAssistantMessageParts } from '../utils/assistantMessageParts';
+import { getAssistantDisplayParts } from '../utils/assistantMessageParts';
+import { ChatBubbleText } from '../components/ChatBubbleText';
+import { formatChatDate, formatChatTime, isPlainChatText, startsChatDay } from '../utils/chatDate';
 import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics, FontSizeMetrics } from '../utils/fontSize';
@@ -226,7 +228,7 @@ function ToolCallCard({ tool }: { tool: ToolCallState }) {
                 onPress={() => setExpanded((value) => !value)}
             >
                 <View style={styles.toolCardHeaderLeft}>
-                    <Text style={styles.toolCardHeaderTitle}>{formatToolSummaryLocalized(tool, t)}</Text>
+                    <Text style={styles.toolCardHeaderTitle} numberOfLines={2} ellipsizeMode="tail">{formatToolSummaryLocalized(tool, t)}</Text>
                     <View style={styles.toolItemStatusRow}>
                         {tool.status === 'running' ? (
                             <ActivityIndicator size="small" color={statusColor} style={styles.toolStatusIcon} />
@@ -267,13 +269,22 @@ function ToolCallCard({ tool }: { tool: ToolCallState }) {
 
 // Keep the public wrapper compatible; each keyed tool owns its disclosure state.
 export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls }) => (
-    <View style={styles.toolCallsList}>
+    <View style={styles.toolCallsList} testID="tool-call-group">
         {toolCalls.map((tool) => <ToolCallCard key={tool.id} tool={tool} />)}
     </View>
 );
 
 export const ChatScreen = () => {
-    const { t } = useTranslation();
+    const { t, i18n: chatI18n } = useTranslation();
+    const [dateNow, setDateNow] = useState(Date.now);
+    useEffect(() => {
+        const refresh = () => setDateNow(Date.now());
+        const timer = setInterval(refresh, 60_000);
+        const subscription = AppState.addEventListener('change', (state) => {
+            if (state === 'active') refresh();
+        });
+        return () => { clearInterval(timer); subscription.remove(); };
+    }, []);
     const navigation = useNavigation<NavigationProp>();
     const tabBarHeight = useContext(TabBarHeightContext);
     const { fontSize } = useSettingsStore();
@@ -730,13 +741,25 @@ export const ChatScreen = () => {
                 windowSize={11}
                 renderScrollComponent={renderChatScrollComponent}
                 ListFooterComponent={renderListFooter}
-                renderItem={({ item }) => {
+                extraData={`${dateNow}-${chatI18n.language}`}
+                renderItem={({ item, index }) => {
                     const isUser = item.role === 'user';
                     const hasTools = !isUser && Boolean(item.toolCalls?.length);
+                    const time = formatChatTime(item.timestamp, chatI18n.language);
+                    const inlineUserTime = isUser && Boolean(item.content) &&
+                        !item.errorMessage && !['sending', 'queued', 'error'].includes(item.status);
+                    // Data is newest-first, while each cell remains top-to-bottom.
+                    const showDate = startsChatDay(item.timestamp, displayMessages[index + 1]?.timestamp);
                     const hasProseBubble = isUser || Boolean(item.attachments?.length ||
                         item.errorMessage || (item.stopReason && item.stopReason !== 'end_turn') ||
                         (item.status === 'processing' && !hasTools && !item.content));
                     return (
+                        <View>
+                        {showDate && <View style={styles.dateSeparator} testID={`chat-date-${item.id}`}>
+                            <Text style={styles.dateSeparatorText}>
+                                {formatChatDate(item.timestamp, dateNow, chatI18n.language, t)}
+                            </Text>
+                        </View>}
                         <View
                             style={[
                                 styles.messageRow,
@@ -744,17 +767,21 @@ export const ChatScreen = () => {
                             ]}
                         >
                             <View style={isUser ? styles.userMessageGroup : styles.assistantMessageGroup}>
-                            {!isUser && getAssistantMessageParts(item).map((part) => part.type === 'tool' ? (
-                                <ToolCallsCard key={part.key} toolCalls={[part.tool]} />
+                            {!isUser && getAssistantDisplayParts(item).map((part) => part.type === 'tools' ? (
+                                <ToolCallsCard key={part.key} toolCalls={part.tools} />
                             ) : (
                                 <View
                                     key={part.key}
                                     testID={`assistant-prose-${item.id}-${part.key}`}
                                     style={[styles.bubble, styles.assistantBubble]}
                                 >
-                                    <Markdown style={dynamicMarkdownStyles} rules={markdownRules}>
-                                        {part.text}
-                                    </Markdown>
+                                    {isPlainChatText(part.text) ? (
+                                        <ChatBubbleText text={part.text} time={time}
+                                            textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} />
+                                    ) : <>
+                                        <Markdown style={dynamicMarkdownStyles} rules={markdownRules}>{part.text}</Markdown>
+                                        <Text style={styles.bubbleTime}>{time}</Text>
+                                    </>}
                                 </View>
                             ))}
                             {hasProseBubble && <View
@@ -801,7 +828,8 @@ export const ChatScreen = () => {
 
                                 {isUser ? (
                                     <View>
-                                        <Text
+                                        {inlineUserTime ? <ChatBubbleText text={item.content} time={time}
+                                            textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} /> : <Text
                                             style={[
                                                 styles.userText,
                                                 {
@@ -812,7 +840,7 @@ export const ChatScreen = () => {
                                             selectable={true}
                                         >
                                             {item.content}
-                                        </Text>
+                                        </Text>}
                                         {item.status === 'error' && item.errorMessage && (
                                             <Text style={styles.userErrorText}>
                                                 {translateErrorMessage(item.errorMessage)}
@@ -851,7 +879,7 @@ export const ChatScreen = () => {
                                 )}
 
                                 {/* 时间与状态 */}
-                                <View style={styles.msgFooter}>
+                                {!inlineUserTime && <View style={styles.msgFooter}>
                                     {isUser && item.status === 'queued' && (
                                         <TouchableOpacity
                                             style={styles.queuedBadge}
@@ -868,10 +896,7 @@ export const ChatScreen = () => {
                                             isUser ? styles.userTime : styles.assistantTime,
                                         ]}
                                     >
-                                        {new Date(item.timestamp).toLocaleTimeString([], {
-                                            hour: '2-digit',
-                                            minute: '2-digit',
-                                        })}
+                                        {time}
                                     </Text>
                                     {isUser && item.status === 'sending' && (
                                         <ActivityIndicator size={10} color={theme.colors.primaryDark} style={styles.statusMargin} />
@@ -890,12 +915,10 @@ export const ChatScreen = () => {
                                             />
                                         </TouchableOpacity>
                                     )}
-                                </View>
+                                </View>}
                             </View>}
-                            {!hasProseBubble && <Text style={[styles.timeText, styles.assistantTime]}>
-                                {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </Text>}
                             </View>
+                        </View>
                         </View>
                     );
                 }}
@@ -1285,6 +1308,9 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#9CA3AF',
     },
+    dateSeparator: { alignItems: 'center', marginTop: 4, marginBottom: 12 },
+    dateSeparatorText: { fontSize: 11, color: '#6B7280', backgroundColor: '#F0F2F5', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+    bubbleTime: { alignSelf: 'flex-end', fontSize: 10, color: '#6B7280', marginTop: 2 },
     messageRow: {
         flexDirection: 'row',
         marginBottom: 12,
@@ -1302,9 +1328,10 @@ const styles = StyleSheet.create({
     },
     userMessageGroup: {
         maxWidth: '85%',
+        flexShrink: 1,
     },
     assistantMessageGroup: {
-        maxWidth: '92%',
+        width: '92%',
         flexShrink: 1,
         alignItems: 'flex-start',
         gap: 6,
@@ -1313,6 +1340,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#D9EAFD',
     },
     assistantBubble: {
+        alignSelf: 'flex-start',
         backgroundColor: '#F0F2F5',
         maxWidth: '100%',
         minWidth: 48,
@@ -1326,14 +1354,17 @@ const styles = StyleSheet.create({
         lineHeight: 23,
     },
     toolCallsList: {
-        maxWidth: '100%',
+        width: '100%',
         alignSelf: 'stretch',
-        gap: 6,
-    },
-    toolCardContainer: {
-        maxWidth: '100%',
         backgroundColor: '#E5E7EB',
         borderRadius: 10,
+        overflow: 'hidden',
+    },
+    toolCardContainer: {
+        width: '100%',
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#D1D5DB',
+        backgroundColor: '#E5E7EB',
         overflow: 'hidden',
     },
     toolCardHeader: {
@@ -1344,9 +1375,8 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
     },
     toolCardHeaderLeft: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        alignItems: 'center',
+        flexDirection: 'column',
+        alignItems: 'stretch',
         flex: 1,
         minWidth: 0,
         gap: 6,
@@ -1363,7 +1393,6 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600',
         color: '#374151',
-        flexGrow: 1,
         flexShrink: 1,
         minWidth: 0,
         lineHeight: 19,
