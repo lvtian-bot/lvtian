@@ -1,73 +1,58 @@
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, FlatList, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, AppState, FlatList, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as Network from 'expo-network';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { automaticTaskService as service, AutomaticTaskError } from '../services/AutomaticTaskService';
-import type { AutomaticTask, AutomaticTaskHistory, AutomaticTaskResult } from '../types/automaticTasks';
+import type { AutomaticTask } from '../types/automaticTasks';
+import { AutomaticTaskDetail } from '../components/AutomaticTaskDetail';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics } from '../utils/fontSize';
+import { taskDateTime, taskFrequency, taskTimeZone, taskZoneLabel } from '../utils/automaticTaskPresentation';
 import { theme } from '../utils/theme';
 
-type Detail = { task: AutomaticTask; mode: 'history' | 'result' };
-type HistoryPage = Exclude<AutomaticTaskHistory, { code: string }>;
+const TaskSeparator = () => <View style={styles.separator} />;
 
 export const TodoScreen = () => {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const navigation = useNavigation();
-    const fontSize = useSettingsStore(state => state.fontSize);
-    const metrics = getFontSizeMetrics(fontSize);
-    const body = { fontSize: metrics.flashBody, lineHeight: metrics.flashLineHeight, color: theme.colors.text };
+    const metrics = getFontSizeMetrics(useSettingsStore(state => state.fontSize));
+    const body = { fontSize: metrics.flashBody, lineHeight: metrics.flashLineHeight };
     const [tasks, setTasks] = useState<AutomaticTask[]>([]);
     const [loading, setLoading] = useState(true);
     const [loaded, setLoaded] = useState(false);
     const [error, setError] = useState<string>();
-    const [detail, setDetail] = useState<Detail>();
-    const [history, setHistory] = useState<HistoryPage>();
-    const [result, setResult] = useState<AutomaticTaskResult>();
-    const [detailLoading, setDetailLoading] = useState(false);
-    const [detailError, setDetailError] = useState<string>();
-    const catalogRequest = useRef<AbortController | undefined>(undefined);
-    const detailRequest = useRef<AbortController | undefined>(undefined);
+    const [selectedId, setSelectedId] = useState<string>();
+    const [catalogRevision, setCatalogRevision] = useState(0);
+    const request = useRef<AbortController | undefined>(undefined);
     const focused = useRef(false);
+    const selected = tasks.find(task => task.id === selectedId);
 
-    useLayoutEffect(() => { navigation.setOptions({ title: t('automaticTasks.title') }); }, [navigation, t]);
-
-    const errorKey = (failure: unknown) => failure instanceof AutomaticTaskError && failure.code === 'native_tasks_unavailable'
-        ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed';
-
-    const closeDetail = useCallback(() => {
-        detailRequest.current?.abort();
-        setDetail(undefined);
-        setHistory(undefined);
-        setResult(undefined);
-        setDetailError(undefined);
-        setDetailLoading(false);
-    }, []);
-
+    useLayoutEffect(() => { navigation.setOptions({ title: t('tabs.todo') }); }, [navigation, t]);
+    const closeDetail = useCallback(() => { setSelectedId(undefined); }, []);
     const refresh = useCallback(async (clear = false) => {
-        catalogRequest.current?.abort();
-        closeDetail();
+        request.current?.abort();
         const controller = new AbortController();
-        catalogRequest.current = controller;
-        if (clear) { setTasks([]); setLoaded(false); }
-        setLoading(true);
-        setError(undefined);
+        request.current = controller;
+        if (clear) { setTasks([]); setLoaded(false); setSelectedId(undefined); }
+        setLoading(true); setError(undefined);
         try {
             const response = await service.catalog({ signal: controller.signal });
-            if (!controller.signal.aborted && focused.current && response.generation !== service.generation) throw new AutomaticTaskError('connection_changed');
-            if (!controller.signal.aborted && focused.current && response.generation === service.generation) {
-                setTasks(response.tasks);
-                setLoaded(true);
-            }
+            if (controller.signal.aborted || !focused.current) return;
+            if (response.generation !== service.generation) throw new AutomaticTaskError('connection_changed');
+            const active = response.tasks.filter(task => task.status === 'active');
+            setTasks(active);
+            setCatalogRevision(value => value + 1);
+            setSelectedId(previous => active.some(task => task.id === previous) ? previous : undefined);
+            setLoaded(true);
         } catch (failure: unknown) {
-            if (!controller.signal.aborted && focused.current) setError(errorKey(failure));
+            if (!controller.signal.aborted && focused.current) setError(failure instanceof AutomaticTaskError && failure.code === 'native_tasks_unavailable'
+                ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed');
         } finally {
             if (!controller.signal.aborted && focused.current) setLoading(false);
         }
-    }, [closeDetail]);
+    }, []);
 
     useFocusEffect(useCallback(() => {
         focused.current = true;
@@ -75,9 +60,7 @@ export const TodoScreen = () => {
         const stop = useAssistantStore.subscribe((next, previous) => {
             const changed = next.serverUrl !== previous.serverUrl || next.serverToken !== previous.serverToken
                 || next.hasHydrated !== previous.hasHydrated;
-            if (changed || (next.connectionState === 'connected' && previous.connectionState !== 'connected')) {
-                refresh(changed);
-            }
+            if (changed || (next.connectionState === 'connected' && previous.connectionState !== 'connected')) refresh(changed);
         });
         let appState = AppState.currentState;
         const app = AppState.addEventListener('change', next => {
@@ -92,131 +75,58 @@ export const TodoScreen = () => {
         });
         return () => {
             focused.current = false;
-            catalogRequest.current?.abort();
-            detailRequest.current?.abort();
+            request.current?.abort();
+            // Unmount detail readers even if the navigator keeps the list screen mounted off-tab.
+            setSelectedId(undefined);
             stop(); app.remove(); network.remove();
         };
     }, [refresh]));
 
-    const loadDetail = async (selection: Detail, before?: string) => {
-        detailRequest.current?.abort();
-        const controller = new AbortController();
-        detailRequest.current = controller;
-        setDetail(selection);
-        if (!before) { setHistory(undefined); setResult(undefined); }
-        setDetailLoading(true);
-        setDetailError(undefined);
-        const valid = (generation: number) => {
-            if (controller.signal.aborted || !focused.current) return false;
-            if (generation !== service.generation) throw new AutomaticTaskError('connection_changed');
-            return true;
-        };
-        try {
-            if (selection.mode === 'result') {
-                const response = await service.getResult(selection.task.id, { signal: controller.signal });
-                if (valid(response.generation)) setResult(response.result);
-            } else {
-                const response = await service.history(selection.task.id, { limit: 20, before }, { signal: controller.signal });
-                if (valid(response.generation)) {
-                    const page = response.history;
-                    if ('code' in page) setDetailError(`automaticTasks.${page.code}`);
-                    else setHistory(previous => ({ ...page, records: before && previous
-                        ? [...previous.records, ...page.records.filter(row => !previous.records.some(old => old.messageId === row.messageId))]
-                        : page.records }));
-                }
-            }
-        } catch (failure: unknown) {
-            if (!controller.signal.aborted && focused.current) setDetailError(errorKey(failure));
-        } finally {
-            if (!controller.signal.aborted && focused.current) setDetailLoading(false);
-        }
-    };
-
-    const button = (label: string, onPress: () => void, disabled = false) => (
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel={label} onPress={onPress} disabled={disabled} style={styles.button}>
-            <Text style={[body, styles.action]}>{label}</Text>
-        </TouchableOpacity>
-    );
-    const rule = (task: AutomaticTask) => {
-        switch (task.kind) {
-            case 'at': return t('automaticTasks.ruleAt');
-            case 'after': return t('automaticTasks.ruleAfter', { seconds: task.afterSeconds });
-            case 'every': return t('automaticTasks.ruleEvery', { seconds: task.everySeconds });
-            case 'daily': return t('automaticTasks.ruleDaily', { time: task.time });
-            case 'weekly': return t('automaticTasks.ruleWeekly', { time: task.time,
-                days: task.weekdays.map(day => t(`automaticTasks.weekday${day}`)).join(t('automaticTasks.separator')) });
-            case 'cron': return t('automaticTasks.ruleCron', { expression: task.expression });
-        }
-    };
-    const resultStatus = result && (result.status === 'ended'
-        ? result.endReason === 'completed' ? 'completed' : 'ended'
-        : result.status === 'not_delivered' ? 'notDelivered' : 'unknown');
-
-    return (
-        <View style={styles.container}>
-            <FlatList data={tasks} keyExtractor={task => task.id} contentContainerStyle={styles.content}
-                refreshing={loading} onRefresh={() => { refresh(); }}
-                ListHeaderComponent={<View>
-                    <Text style={[body, styles.secondary]}>{t('automaticTasks.readOnly')}</Text>
-                    {button(t('automaticTasks.refresh'), () => { refresh(); })}
-                    {loading && <ActivityIndicator accessibilityLabel={t('automaticTasks.loading')} color={theme.colors.primary} />}
-                    {error && <Text accessibilityRole="alert" style={[body, styles.secondary]}>{t(error)}</Text>}
-                    {error && button(t('automaticTasks.retry'), () => { refresh(); })}
+    return <View style={styles.container}>
+        <FlatList data={tasks} keyExtractor={task => task.id} contentContainerStyle={styles.content}
+            refreshing={loading} onRefresh={() => { refresh(); }}
+            ItemSeparatorComponent={TaskSeparator}
+            ListHeaderComponent={<View>
+                {loading && !loaded && <ActivityIndicator accessibilityLabel={t('automaticTasks.loading')} color={theme.colors.primaryDark} />}
+                {error && <View style={styles.notice}>
+                    <Text accessibilityRole="alert" style={[body, styles.secondary]}>{t(error)}</Text>
+                    <TouchableOpacity accessibilityRole="button" accessibilityLabel={t('automaticTasks.retry')} style={styles.action} onPress={() => { refresh(); }}>
+                        <Text style={[body, styles.link]}>{t('automaticTasks.retry')}</Text>
+                    </TouchableOpacity>
                 </View>}
-                ListEmptyComponent={!loading && loaded && !error ? <Text style={body}>{t('automaticTasks.empty')}</Text> : undefined}
-                renderItem={({ item }) => <View style={styles.card}>
-                    <Text style={[body, styles.title]}>{item.title}</Text>
-                    <Text style={[body, styles.secondary]}>{t(`automaticTasks.${item.status}`)}</Text>
-                    <Text selectable style={body}>{item.prompt}</Text>
-                    <Text style={body}>{rule(item)}</Text>
-                    <Text selectable style={body}>{t('automaticTasks.timeZone', { zone: 'timeZone' in item ? item.timeZone : t('automaticTasks.timestampZone') })}</Text>
-                    <Text selectable style={body}>{t('automaticTasks.scheduledAt', { time: item.scheduledAt })}</Text>
-                    <View style={styles.actions}>
-                        {button(t('automaticTasks.history'), () => { loadDetail({ task: item, mode: 'history' }); })}
-                        {button(t('automaticTasks.result'), () => { loadDetail({ task: item, mode: 'result' }); })}
-                    </View>
-                </View>} />
-            <Modal visible={!!detail} animationType="slide" onRequestClose={closeDetail}>
-                <SafeAreaView style={styles.container}>
-                <ScrollView contentContainerStyle={styles.content} style={styles.container}>
-                    {button(t('automaticTasks.close'), closeDetail)}
-                    <Text style={[body, styles.title]}>{detail?.task.title}</Text>
-                    <Text style={[body, styles.title]}>{t(detail?.mode === 'history' ? 'automaticTasks.history' : 'automaticTasks.result')}</Text>
-                    {detailLoading && <ActivityIndicator accessibilityLabel={t('automaticTasks.loading')} color={theme.colors.primary} />}
-                    {detailError && <Text accessibilityRole="alert" style={body}>{t(detailError)}</Text>}
-                    {detailError && detail && button(t('automaticTasks.retry'), () => { loadDetail(detail, history?.nextBefore); })}
-                    {result && <View style={styles.card}>
-                        <Text style={body}>{t(`automaticTasks.${resultStatus}`)}</Text>
-                        {result.assistantText.map((text, index) => <Text selectable key={index} style={body}>{text}</Text>)}
-                        {result.assistantText.length === 0 && <Text style={body}>{t('automaticTasks.noResultText')}</Text>}
-                        {result.truncated && <Text style={[body, styles.secondary]}>{t('automaticTasks.truncated')}</Text>}
-                    </View>}
-                    {history && <View>
-                        <Text style={[body, styles.secondary]}>{t('automaticTasks.deliveryOnly')}</Text>
-                        <Text style={[body, styles.secondary]}>{t('automaticTasks.retention', history.retention)}</Text>
-                        {(history.earlierRecordsPruned || history.earlierRecordsUnavailable) && <Text style={body}>{t('automaticTasks.earlierUnavailable')}</Text>}
-                        {history.records.length === 0 && <Text style={body}>{t('automaticTasks.noHistory')}</Text>}
-                        {history.records.map(row => <View key={row.messageId} style={styles.card}>
-                            <Text style={body}>{t('automaticTasks.delivered')}</Text>
-                            <Text selectable style={body}>{t('automaticTasks.scheduledAt', { time: row.scheduledAt })}</Text>
-                            <Text selectable style={body}>{t('automaticTasks.deliveredAt', { time: row.deliveredAt })}</Text>
-                        </View>)}
-                        {history.nextBefore && detail && button(t('automaticTasks.loadMore'), () => { loadDetail(detail, history.nextBefore); }, detailLoading)}
-                    </View>}
-                </ScrollView>
-                </SafeAreaView>
-            </Modal>
-        </View>
-    );
+            </View>}
+            ListEmptyComponent={!loading && loaded && !error ? <View style={styles.empty}>
+                <Text style={[body, styles.title]}>{t('automaticTasks.empty')}</Text>
+                <Text style={[body, styles.secondary, styles.emptyHint]}>{t('automaticTasks.emptyHint')}</Text>
+            </View> : undefined}
+            renderItem={({ item }) => <TouchableOpacity accessibilityRole="button" accessibilityLabel={item.title}
+                accessibilityHint={t('automaticTasks.openDetail')} style={styles.row} onPress={() => { setSelectedId(item.id); }}>
+                <View style={styles.rowContent}>
+                    <Text numberOfLines={2} style={[body, styles.title]}>{item.title}</Text>
+                    <Text style={[body, styles.secondary]}>{t('automaticTasks.frequencyWithZone', { frequency: taskFrequency(item, t), zone: taskZoneLabel(item, i18n.language) })}</Text>
+                    <Text style={[body, styles.secondary]}>{t('automaticTasks.nextRun', { time: taskDateTime(item.scheduledAt, i18n.language, taskTimeZone(item)) })}</Text>
+                </View>
+                <Text accessible={false} style={styles.chevron}>›</Text>
+            </TouchableOpacity>} />
+        <Modal visible={!!selected} animationType="slide" onRequestClose={closeDetail}>
+            {selected && <AutomaticTaskDetail key={`${service.generation}:${selected.id}`} task={selected} onClose={closeDetail}
+                catalogRevision={catalogRevision} catalogRefreshing={loading} catalogError={error} onRefreshCatalog={() => { refresh(); }} />}
+        </Modal>
+    </View>;
 };
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: theme.colors.background },
-    content: { padding: theme.spacing.md, paddingBottom: theme.spacing.xl, flexGrow: 1 },
-    card: { backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, padding: theme.spacing.md, marginVertical: theme.spacing.sm, gap: theme.spacing.sm },
-    title: { color: theme.colors.text, fontWeight: 'bold' },
+    container: { flex: 1, backgroundColor: theme.colors.surface },
+    content: { paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.xl, flexGrow: 1 },
+    row: { flexDirection: 'row', alignItems: 'center', paddingVertical: theme.spacing.lg, minHeight: 88 },
+    rowContent: { flex: 1, minWidth: 0, gap: theme.spacing.xs },
+    title: { color: theme.colors.text, fontWeight: '600' },
     secondary: { color: theme.colors.textSecondary },
-    actions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm },
-    button: { paddingVertical: theme.spacing.sm, paddingHorizontal: theme.spacing.sm, minHeight: 44, flexShrink: 1 },
-    action: { color: theme.colors.primaryDark },
+    chevron: { color: theme.colors.textSecondary, fontSize: 28, paddingLeft: theme.spacing.md },
+    separator: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.divider },
+    notice: { paddingTop: theme.spacing.md },
+    action: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', paddingVertical: theme.spacing.sm },
+    link: { color: theme.colors.primaryDark },
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: theme.spacing.xxl },
+    emptyHint: { textAlign: 'center', marginTop: theme.spacing.sm },
 });

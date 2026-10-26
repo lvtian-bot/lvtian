@@ -118,7 +118,7 @@ test('corrupt metadata is a failure, never an empty task list', async t => {
 test('unowned task/session cannot be read, updated, deleted or queried for results', async t => {
   const f = await fixture(t); f.setTasks([{ ...f.task, sessionId: 'main-chat' }]);
   assert.deepEqual(await f.service.catalog(), []);
-  for (const run of [() => f.service.history('task-1'), () => f.service.getResult('task-1'), () => f.service.delete('task-1'), () => f.service.update('task-1', { expected: f.task })]) await assert.rejects(run(), error => error.code === 'not_found');
+  for (const run of [() => f.service.history('task-1'), () => f.service.getResult('task-1'), () => f.service.getResult('task-1', 'foreign'), () => f.service.delete('task-1'), () => f.service.update('task-1', { expected: f.task })]) await assert.rejects(run(), error => error.code === 'not_found');
 });
 test('update forwards complete original expected record without re-reading it into expected', async t => {
   const f = await fixture(t); await f.service.create(input);
@@ -134,6 +134,67 @@ test('rejects invalid strings, time zones, wall times, weekdays and invalid abso
 test('receipt alone never implies execution completion and does not expose projections/header', async t => {
   const f = await fixture(t); await f.service.create(input); f.setTasks([{ ...f.task, status: 'inactive', lastDelivery: { messageId: 'delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt } }]);
   const result = await f.service.getResult(f.task.id); assert.equal(result.status, 'unknown'); assert.deepEqual(result.assistantText, []); assert.ok(!JSON.stringify(result).includes('NEVER_RETURN'));
+});
+test('historical result resolves a task-owned receipt across native history pages', async t => {
+  const f = await fixture(t); await f.service.create(input);
+  const old = { messageId: 'old-delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt };
+  const latest = { ...old, messageId: 'latest-delivery' };
+  f.setTasks([{ ...f.task, lastDelivery: latest }]);
+  const historyCalls = [];
+  f.client.history = async request => {
+    historyCalls.push(request);
+    return { id: f.task.id, records: request.before ? [{ ...old, prompt: 'PRIVATE_DELIVERY_PROMPT' }] : [latest],
+      ...(request.before ? {} : { nextBefore: latest.messageId }), retention: { days: 30, records: 200 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false };
+  };
+  f.calls.page.length = 0;
+  f.client.page = async request => {
+    f.calls.page.push(request);
+    return { records: [event('turn/start', 10, { turn: 1 }), event('user/message', 20, { id: old.messageId }),
+      event('assistant/message', 30, { turn: 1, message: { content: [{ type: 'text', text: 'old answer' }] } }),
+      event('turn/end', 40, { turn: 1, reason: { kind: 'completed' } }),
+      event('turn/start', 50, { turn: 2 }), event('user/message', 60, { id: latest.messageId }),
+      event('assistant/message', 70, { turn: 2, message: { content: [{ type: 'text', text: 'latest answer' }] } }),
+      event('turn/end', 80, { turn: 2, reason: { kind: 'cancelled' } })], hasMore: false };
+  };
+  const result = await f.service.getResult(f.task.id, old.messageId);
+  assert.deepEqual(result, { taskId: f.task.id, delivery: old, status: 'ended', turn: 1, endReason: 'completed', assistantText: ['old answer'], truncated: false });
+  assert.deepEqual(historyCalls, [{ id: f.task.id, sessionId: f.task.sessionId, limit: 100 }, { id: f.task.id, sessionId: f.task.sessionId, limit: 100, before: latest.messageId }]);
+  assert.ok(f.calls.page.every(request => request.address.sessionId === f.task.sessionId && request.throughSeq === 100));
+  historyCalls.length = 0;
+  const current = await f.service.getResult(f.task.id);
+  assert.equal(current.delivery.messageId, latest.messageId); assert.deepEqual(current.assistantText, ['latest answer']);
+  assert.equal(current.endReason, 'cancelled'); assert.equal(historyCalls.length, 0);
+});
+test('selected foreign, missing and pruned receipts never read arbitrary session messages or fall back', async t => {
+  const f = await fixture(t); await f.service.create(input);
+  f.setTasks([{ ...f.task, lastDelivery: { messageId: 'latest', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt } }]);
+  f.client.history = async () => ({ id: f.task.id, records: [], retention: { days: 30, records: 200 }, earlierRecordsUnavailable: true, earlierRecordsPruned: true });
+  f.client.projections = async () => { assert.fail('Unauthorized receipt must not read session'); };
+  for (const id of ['other-task-same-session', 'creation-message', 'missing', 'pruned']) {
+    await assert.rejects(f.service.getResult(f.task.id, id), error => error.code === 'not_found');
+  }
+  for (const id of ['', '   ', 'bad\0id', 'x'.repeat(201)]) {
+    await assert.rejects(f.service.getResult(f.task.id, id), error => error.code === 'invalid_input');
+  }
+});
+test('historical receipt with unavailable session facts stays unknown, not not_delivered', async t => {
+  const f = await fixture(t); await f.service.create(input);
+  const receipt = { messageId: 'old', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt };
+  f.client.history = async () => ({ id: f.task.id, records: [receipt], retention: { days: 30, records: 200 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false });
+  f.client.projections = async () => undefined;
+  const result = await f.service.getResult(f.task.id, receipt.messageId);
+  assert.equal(result.status, 'unknown'); assert.deepEqual(result.delivery, receipt);
+});
+test('historical lookup bounds broken or disappearing cursors without claiming a missing receipt', async t => {
+  const f = await fixture(t); await f.service.create(input);
+  let calls = 0;
+  f.client.history = async () => { calls++; return { id: f.task.id, records: [], nextBefore: 'same' }; };
+  await assert.rejects(f.service.getResult(f.task.id, 'old'), error => error.code === 'remote_failed');
+  assert.equal(calls, 2);
+  f.client.history = async () => ({ id: f.task.id, code: 'delivery_cursor_not_found' });
+  await assert.rejects(f.service.getResult(f.task.id, 'old'), error => error.code === 'remote_failed');
+  f.client.history = async () => ({ id: f.task.id, code: 'schedule_not_found' });
+  await assert.rejects(f.service.getResult(f.task.id, 'old'), error => error.code === 'not_found');
 });
 test('cold result uses projection cut and backwards pages, maps only associated assistant text/end', async t => {
   const f = await fixture(t); await f.service.create(input);
