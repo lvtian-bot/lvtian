@@ -618,6 +618,9 @@ test('DSH 引擎真实端到端集成：验证 DshConfigManager 写入的规范�
                 env: {
                     ...process.env,
                     HOME: tmpHome,
+                    // Harness runners inherit DSH_HOME; HOME alone does not isolate this test.
+                    DSH_HOME: path.join(tmpHome, '.dsh'),
+                    DSH_AGENTS_HOME: path.join(tmpHome, '.agents'),
                     DSH_PROFILE_DIR: profileDir,
                     DSH_WORKSPACE: tmpHome,
                     DSH_PERMISSION_MODE: 'danger-full-access',

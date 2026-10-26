@@ -63,6 +63,9 @@ export interface AcpEngineManagerOptions {
     contextConsolidator?: ContextConsolidator;
     /** DSH 配置文件自定义目录 (~/.dsh/profiles/acp)，用于测试隔离或非标准安装路径对齐 */
     dshProfileDir?: string;
+    /** Project-owned tool extensions, applied without rewriting the user's ACP profile. */
+    additionalPatches?: readonly string[];
+    privateEnvironment?: Readonly<Record<string, string>>;
 }
 
 /** 会话任务运行时状态：一次 prompt 执行期间的聚合上下文 */
@@ -302,6 +305,8 @@ export class AcpEngineManager {
     private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
     private contextConsolidator: ContextConsolidator | null = null;
     private dshProfileDir?: string;
+    private additionalPatches: readonly string[];
+    private privateEnvironment: Readonly<Record<string, string>>;
 
     private connection: EngineConnection | null = null;
     private engineStarting: Promise<void> | null = null;
@@ -354,6 +359,8 @@ export class AcpEngineManager {
         this.connectEngineImpl = options?.connectEngine ?? this.spawnDshEngine.bind(this);
         this.contextConsolidator = options?.contextConsolidator ?? null;
         this.dshProfileDir = options?.dshProfileDir;
+        this.additionalPatches = options?.additionalPatches ?? [];
+        this.privateEnvironment = options?.privateEnvironment ?? {};
     }
 
     public setContextConsolidator(cc: ContextConsolidator): void {
@@ -958,11 +965,12 @@ export class AcpEngineManager {
         }
         envExtra.DSH_PERMISSION_MODE = getDshPermissionMode(this.dshProfileDir);
 
-        const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp'], {
+        const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp', ...this.additionalPatches.flatMap(patch => ['--patch', patch])], {
             cwd: this.workspace,
             env: {
                 ...process.env,
                 ...envExtra,
+                ...this.privateEnvironment,
                 DSH_WORKSPACE: this.workspace,
                 DSH_SYSTEM_PROMPT: systemPrompt,
                 DEEPSEEK_SYSTEM_PROMPT: systemPrompt,
