@@ -2,7 +2,7 @@
   "tabs": {
     "chat": "Chat",
     "timeline": "Flash",
-    "todo": "Todo",
+    "todo": "Tasks",
     "moments": "Moments",
     "files": "Files",
     "browser": "Notes",
@@ -76,7 +76,7 @@
     "linkError": "Cannot open this link"
   },
   "automaticTasks": {
-    "title": "Automatic Tasks",
+    "title": "Tasks",
     "readOnly": "Tasks are stored on the server. This page is read-only.",
     "refresh": "Refresh",
     "retry": "Retry",

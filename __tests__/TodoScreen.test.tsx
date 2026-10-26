@@ -20,8 +20,9 @@ jest.mock('../src/services/AutomaticTaskService', () => ({
     automaticTaskService: { generation: 0, catalog: jest.fn(), history: jest.fn(), getResult: jest.fn() },
 }));
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: Record<string, unknown>) => {
-    const dictionary = require('../src/locales/zh.json').automaticTasks as Record<string, string>;
-    let text = dictionary[key.replace('automaticTasks.', '')] ?? key;
+    const locale = require('../src/locales/zh.json');
+    const dictionary = locale.automaticTasks as Record<string, string>;
+    let text = key === 'tabs.todo' ? locale.tabs.todo : dictionary[key.replace('automaticTasks.', '')] ?? key;
     Object.entries(options ?? {}).forEach(([name, value]) => { text = text.replace(`{{${name}}}`, String(value)); });
     return text;
 } }) }));
@@ -54,16 +55,27 @@ describe('TodoScreen 服务器只读自动任务', () => {
     });
     afterEach(async () => { if (renderer) await act(async () => { renderer.unmount(); }); jest.restoreAllMocks(); });
 
-    it('只显示查询入口、原始规则/时区/时间和排程状态，不提供管理操作', async () => {
+    it('标题与标签统一为任务，只显示开启任务且不提供管理操作', async () => {
         catalog.mockResolvedValue({ tasks: [task, { ...task, id: 'b', title: '已结束排程', status: 'inactive' }], generation: 0 });
         await mount();
-        expect(mockNavigation.setOptions).toHaveBeenCalledWith({ title: '自动任务' });
-        expect(texts()).toEqual(expect.arrayContaining(['服务器任务', '真实执行指令', '每天 09:00', '时区：Asia/Shanghai', `原生计划时间：${task.scheduledAt}`, '排程有效', '排程已结束（不代表执行完成）']));
+        expect(mockNavigation.setOptions).toHaveBeenCalledWith({ title: '任务' });
+        expect(texts()).toEqual(expect.arrayContaining(['服务器任务', '真实执行指令', '每天 09:00', '时区：Asia/Shanghai', `原生计划时间：${task.scheduledAt}`, '排程有效']));
+        expect(texts()).not.toContain('已结束排程');
+        expect(texts()).not.toContain('排程已结束（不代表执行完成）');
         expect(texts()).not.toContain('已完成');
         expect(renderer.root.findAllByType(TouchableOpacity).map(node => node.props.accessibilityLabel))
-            .toEqual(['刷新', '触发记录', '查看结果', '触发记录', '查看结果']);
+            .toEqual(['刷新', '触发记录', '查看结果']);
         expect(history).not.toHaveBeenCalled(); expect(result).not.toHaveBeenCalled();
         expect(Object.keys(service)).toEqual(expect.arrayContaining(['catalog', 'history', 'getResult']));
+    });
+
+    it('只有已结束任务时显示空列表，不读取历史也不删除服务器记录', async () => {
+        catalog.mockResolvedValueOnce({ tasks: [{ ...task, status: 'inactive' }], generation: 0 });
+        await mount();
+        expect(texts()).toContain('暂无自动任务');
+        expect(texts()).not.toContain(task.title);
+        expect(history).not.toHaveBeenCalled();
+        expect(result).not.toHaveBeenCalled();
     });
 
     it('加载不伪装空列表，真正成功空列表才显示暂无任务', async () => {

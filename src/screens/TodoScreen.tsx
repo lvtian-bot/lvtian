@@ -33,7 +33,7 @@ export const TodoScreen = () => {
     const detailRequest = useRef<AbortController | undefined>(undefined);
     const focused = useRef(false);
 
-    useLayoutEffect(() => { navigation.setOptions({ title: t('automaticTasks.title') }); }, [navigation, t]);
+    useLayoutEffect(() => { navigation.setOptions({ title: t('tabs.todo') }); }, [navigation, t]);
 
     const errorKey = (failure: unknown) => failure instanceof AutomaticTaskError && failure.code === 'native_tasks_unavailable'
         ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed';
@@ -59,7 +59,7 @@ export const TodoScreen = () => {
             const response = await service.catalog({ signal: controller.signal });
             if (!controller.signal.aborted && focused.current && response.generation !== service.generation) throw new AutomaticTaskError('connection_changed');
             if (!controller.signal.aborted && focused.current && response.generation === service.generation) {
-                setTasks(response.tasks);
+                setTasks(response.tasks.filter(task => task.status === 'active'));
                 setLoaded(true);
             }
         } catch (failure: unknown) {

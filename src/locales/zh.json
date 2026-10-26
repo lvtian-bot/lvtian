@@ -2,7 +2,7 @@
   "tabs": {
     "chat": "主聊天",
     "timeline": "闪念",
-    "todo": "待办",
+    "todo": "任务",
     "moments": "动态",
     "files": "系统文件",
     "browser": "笔记",
@@ -76,7 +76,7 @@
     "linkError": "无法打开此链接"
   },
   "automaticTasks": {
-    "title": "自动任务",
+    "title": "任务",
     "readOnly": "任务保存在服务器，此处仅供查看。",
     "refresh": "刷新",
     "retry": "重试",
