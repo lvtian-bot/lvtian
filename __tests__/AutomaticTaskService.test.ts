@@ -50,6 +50,17 @@ describe('AutomaticTaskService read-only contract and isolation', () => {
         fetcher.mockResolvedValue(response({ history: { id: task.id, code: 'delivery_cursor_not_found' } }));
         expect((await service.history(task.id)).history).toEqual({ id: task.id, code: 'delivery_cursor_not_found' });
     });
+    it('encodes optional result messageId and rejects a result for a different receipt', async () => {
+        const delivery = { scheduledAt: task.scheduledAt, deliveredAt: task.scheduledAt, messageId: 'receipt /&' };
+        const value = { taskId: task.id, status: 'ended', endReason: 'completed', assistantText: ['This receipt'], truncated: false, delivery };
+        const { service, fetcher } = setup({ result: value });
+        expect((await service.getResult(task.id, { messageId: delivery.messageId })).result).toEqual(value);
+        expect(fetcher.mock.calls[0][0]).toBe('https://example.test/api/tasks/task%2F1/result?messageId=receipt%20%2F%26');
+        await expect(service.getResult(task.id, { messageId: 'older' })).rejects.toMatchObject({ code: 'invalid_response' });
+        fetcher.mockResolvedValue(response({ result: { ...value, delivery: undefined } }));
+        await expect(service.getResult(task.id, { messageId: delivery.messageId })).rejects.toMatchObject({ code: 'invalid_response' });
+        service.dispose();
+    });
     it.each(['unknown', 'not_delivered', 'running', 'ended'])('does not reinterpret result status %s', async status => {
         const value = { taskId: task.id, status, assistantText: ['Visible'], truncated: true, endReason: 'cancelled' };
         expect((await setup({ result: value }).service.getResult(task.id)).result).toEqual(value);
