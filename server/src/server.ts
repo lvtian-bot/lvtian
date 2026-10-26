@@ -813,8 +813,10 @@ export class LvtianServer {
                     return;
                 }
 
+                const completedAt = status === 'done' ? Date.now() : undefined;
                 this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
                     m.status = status === 'done' ? 'done' : 'error';
+                    if (completedAt) m.completedAt = completedAt;
                     if (payload?.code) m.errorMessage = payload.code;
                     if (payload?.stopReason) m.stopReason = payload.stopReason;
                 });
@@ -828,6 +830,7 @@ export class LvtianServer {
                     state: taskState,
                     error: payload?.code,
                     stopReason: payload?.stopReason,
+                    completedAt,
                 });
 
                 // 本轮结束，检查会话排队队列并推进下一项

@@ -836,12 +836,15 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
         received.findIndex((m) => m.type === 'event_chunk' && m.delta === 'chunk-2') < received.indexOf(done),
         '终态应在全部增量之后'
     );
+    assert.ok(typeof done.completedAt === 'number' && done.completedAt > 0, '终态 task_status 应携带 completedAt 时间戳');
 
     const session = sessionManager.getOrCreateSession('main');
     assert.equal(session.taskState, 'completed');
     const asstMsg = session.messages.find((m) => m.id.startsWith('asst-'));
     assert.equal(asstMsg.status, 'done');
     assert.equal(asstMsg.content, 'chunk-1chunk-2');
+    assert.ok(typeof asstMsg.completedAt === 'number' && asstMsg.completedAt > 0, '助理消息应持久化 completedAt 时间戳');
+    assert.equal(asstMsg.completedAt, done.completedAt, '持久化 completedAt 应与终态广播一致');
     assert.ok(sessionManager.getDshSessionId('main'), '引擎侧会话绑定应持久化');
 
     ws.close();

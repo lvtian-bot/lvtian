@@ -715,6 +715,8 @@ export const ChatScreen = () => {
                     const isUser = item.role === 'user';
                     const hasTools = !isUser && Boolean(item.toolCalls?.length);
                     const time = formatChatTime(item.timestamp, chatI18n.language);
+                    const assistantParts = !isUser ? getAssistantDisplayParts(item) : [];
+                    const lastTextPartKey = [...assistantParts].reverse().find((part) => part.type === 'text')?.key;
                     const inlineUserTime = isUser && Boolean(item.content) &&
                         !item.errorMessage && !['sending', 'queued', 'error'].includes(item.status);
                     // Data is newest-first, while each cell remains top-to-bottom.
@@ -736,21 +738,26 @@ export const ChatScreen = () => {
                             ]}
                         >
                             <View style={isUser ? styles.userMessageGroup : styles.assistantMessageGroup}>
-                            {!isUser && getAssistantDisplayParts(item).map((part) => part.type === 'tools' ? (
-                                <ToolCallsCard key={part.key} toolCalls={part.tools} />
-                            ) : isPlainChatText(part.text) ? (
-                                <View
-                                    key={part.key}
-                                    testID={`assistant-prose-${item.id}-${part.key}`}
-                                    style={[styles.bubble, styles.assistantBubble]}
-                                >
-                                    <ChatBubbleText text={part.text} time={time}
-                                        textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} />
-                                </View>
-                            ) : (
-                                <ChatMarkdownBubble key={part.key} text={part.text} time={time} metrics={metrics}
-                                    testID={`assistant-prose-${item.id}-${part.key}`} />
-                            ))}
+                            {!isUser && assistantParts.map((part) => {
+                                const partTime = part.type === 'text' && part.key === lastTextPartKey && item.completedAt
+                                    ? formatChatTime(item.completedAt, chatI18n.language)
+                                    : time;
+                                return part.type === 'tools' ? (
+                                    <ToolCallsCard key={part.key} toolCalls={part.tools} />
+                                ) : isPlainChatText(part.text) ? (
+                                    <View
+                                        key={part.key}
+                                        testID={`assistant-prose-${item.id}-${part.key}`}
+                                        style={[styles.bubble, styles.assistantBubble]}
+                                    >
+                                        <ChatBubbleText text={part.text} time={partTime}
+                                            textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} />
+                                    </View>
+                                ) : (
+                                    <ChatMarkdownBubble key={part.key} text={part.text} time={partTime} metrics={metrics}
+                                        testID={`assistant-prose-${item.id}-${part.key}`} />
+                                );
+                            })}
                             {hasProseBubble && <View
                                 testID={isUser ? `user-bubble-${item.id}` : `assistant-prose-${item.id}`}
                                 style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}
@@ -863,7 +870,7 @@ export const ChatScreen = () => {
                                             isUser ? styles.userTime : styles.assistantTime,
                                         ]}
                                     >
-                                        {time}
+                                        {!isUser && item.completedAt ? formatChatTime(item.completedAt, chatI18n.language) : time}
                                     </Text>
                                     {isUser && item.status === 'sending' && (
                                         <ActivityIndicator size={10} color={theme.colors.primaryDark} style={styles.statusMargin} />
