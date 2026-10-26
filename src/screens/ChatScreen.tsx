@@ -328,9 +328,12 @@ export const ChatScreen = () => {
         const attachments = [...pendingAttachmentsRef.current, ...newAttachments];
         const estimatedEncodedSize = attachments.reduce((total, item) => {
             if (item.data) return total + item.data.length;
-            if (item.content) return total + item.content.length;
             const rawSize = item.size ?? 0;
-            return total + Math.ceil(rawSize * 4 / 3);
+            // 图片及二进制走 Base64 编码（增加约 33% 报文体积）；文本直接按 UTF-8 文件字节数并预留 JSON 转义开销
+            const encoded = (item.type === 'image' || !item.content)
+                ? Math.ceil(rawSize * 4 / 3)
+                : Math.ceil(rawSize * 1.2);
+            return total + encoded;
         }, 0);
         if (estimatedEncodedSize > MAX_ENCODED_BUDGET) {
             Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
