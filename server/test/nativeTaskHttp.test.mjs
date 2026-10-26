@@ -85,6 +85,30 @@ test('invalid JSON/shape is 400, unknown tasks are 404, and native errors remain
   } finally { await server.stop(); }
 });
 
+test('selected delivery query preserves authorization, exact identity and stable lookup errors', async () => {
+  const calls = [];
+  const { server, request } = await fixture(fakeRuntime({ getResult: async (id, messageId) => {
+    calls.push([id, messageId]);
+    if (messageId === 'missing') throw new NativeTaskServiceError('not_found');
+    if (messageId !== undefined && (!messageId.trim() || messageId.length > 200 || messageId.includes('\0'))) throw new NativeTaskServiceError('invalid_input');
+    return { taskId: id, status: 'unknown', assistantText: [], truncated: false };
+  } }));
+  try {
+    assert.equal((await request('/api/tasks/task-1/result?messageId=old', { headers: { Authorization: '' } })).status, 401);
+    assert.equal(calls.length, 0);
+    assert.equal((await request('/api/tasks/task-1/result?messageId=old+%26%2F')).status, 200);
+    assert.deepEqual(calls.at(-1), ['task-1', 'old &/']);
+    assert.equal((await request('/api/tasks/task-1/result')).status, 200);
+    assert.deepEqual(calls.at(-1), ['task-1', undefined]);
+    const missing = await request('/api/tasks/task-1/result?messageId=missing');
+    assert.equal(missing.status, 404); assert.deepEqual(await missing.json(), { code: 'not_found' });
+    for (const query of ['messageId=', 'messageId=+', 'messageId=%00', `messageId=${'x'.repeat(201)}`, 'messageId=old&messageId=other']) {
+      const response = await request(`/api/tasks/task-1/result?${query}`);
+      assert.equal(response.status, 400); assert.deepEqual(await response.json(), { code: 'invalid_input' });
+    }
+  } finally { await server.stop(); }
+});
+
 test('draining rejects task writes without stopping read-only status queries', async () => {
   const { server, request } = await fixture(fakeRuntime({ catalog: async () => [] }));
   server.isDraining = true;
