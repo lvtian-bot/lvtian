@@ -636,7 +636,7 @@ export class AssistantClient {
      * 重置会话上下文（无感新建会话，复用底层交接流水线）
      */
     public async resetSession(sessionId = 'main'): Promise<boolean> {
-        // 1. 若 WebSocket 处于连接状态，通过 WS 发送并等待 session_reset_ack 回执
+        // 1. 若 WebSocket 处于连接状态，仅通过 WS 发送并等待 session_reset_ack 回执，避免与 HTTP 兜底产生双重重置
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             return new Promise<boolean>((resolve) => {
                 let resolved = false;
@@ -652,11 +652,11 @@ export class AssistantClient {
                     resolve(ok);
                 };
 
-                const timer = setTimeout(async () => {
-                    // WS 超时，回退尝试 HTTP
-                    const httpOk = await this.resetSessionHttpFallback(sessionId);
-                    finish(httpOk);
-                }, 4000);
+                const timer = setTimeout(() => {
+                    // WS 等待超时直接判定失败，不追加破坏性的 HTTP 重试，避免网络延迟引发二次重置
+                    console.warn('[AssistantClient] resetSession WS 回执超时');
+                    finish(false);
+                }, 6000);
 
                 const list = this.pendingResetCallbacks.get(sessionId) || [];
                 list.push(finish);
@@ -667,13 +667,12 @@ export class AssistantClient {
                     sessionId,
                 });
                 if (!sent) {
-                    clearTimeout(timer);
-                    this.resetSessionHttpFallback(sessionId).then(finish);
+                    finish(false);
                 }
             });
         }
 
-        // 2. 若 WebSocket 未连接，直接走 HTTP 接口备用兜底
+        // 2. 若 WebSocket 未连接（离线/纯 HTTP 模式），走 HTTP 接口兜底
         return this.resetSessionHttpFallback(sessionId);
     }
 
@@ -684,6 +683,8 @@ export class AssistantClient {
         if (rawUrl && token) {
             try {
                 const httpUrl = AssistantClient.toHttpUrl(rawUrl);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
                 const res = await fetch(`${httpUrl}/api/session/reset`, {
                     method: 'POST',
                     headers: {
@@ -691,7 +692,9 @@ export class AssistantClient {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({ sessionId }),
+                    signal: controller.signal,
                 });
+                clearTimeout(timeoutId);
                 return res.ok;
             } catch (err) {
                 console.warn('[AssistantClient] resetSession 异常:', err);
@@ -713,16 +716,24 @@ export class AssistantClient {
 
         try {
             const httpUrl = AssistantClient.toHttpUrl(rawUrl);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
             const res = await fetch(`${httpUrl}/api/skills`, {
                 headers: {
                     Authorization: `Bearer ${token}`,
                 },
+                signal: controller.signal,
             });
+            clearTimeout(timeoutId);
             if (res.ok) {
                 const data = (await res.json()) as { skills?: AgentSkill[] };
                 const skills = data.skills || [];
-                store.setSkills(skills);
-                return skills;
+                // 核验当前活跃的配置是否仍与发起请求时一致，丢弃旧服务器的迟到响应
+                const currentStore = useAssistantStore.getState();
+                if (currentStore.serverUrl === rawUrl && currentStore.serverToken === token) {
+                    currentStore.setSkills(skills);
+                    return skills;
+                }
             }
         } catch (err) {
             console.warn('[AssistantClient] 获取技能列表失败:', err);

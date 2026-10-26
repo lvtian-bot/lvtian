@@ -115,6 +115,7 @@ export const useAssistantStore = create<AssistantState>()(
                         pendingApprovals: [],
                         isServerUpgrading: false,
                         pendingSendQueue: [],
+                        skills: [],
                     });
                 } else {
                     set({ serverUrl: cleanUrl, serverToken: cleanToken });

@@ -105,10 +105,12 @@ describe('useAssistantStore persistence cursor and messages', () => {
         store.clearChat();
         expect(useAssistantStore.getState().clearedSeq).toBe(100);
 
-        // 切换到新服务器地址，验证 clearedSeq 与 currentSeq 一并重置归零
+        // 切换到新服务器地址，验证 clearedSeq 与 currentSeq 一并重置归零，且技能列表清空
+        store.setSkills([{ name: 'old-skill', description: '旧技能' }]);
         await store.setServerConfig('https://server-b.example.com', 'token-b');
         expect(useAssistantStore.getState().clearedSeq).toBe(0);
         expect(useAssistantStore.getState().currentSeq).toBe(0);
+        expect(useAssistantStore.getState().skills).toEqual([]);
     });
 
     test('pendingSendQueue and isServerUpgrading lifecycle', async () => {
