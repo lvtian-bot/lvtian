@@ -92,17 +92,8 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
             onMoveShouldSetPanResponder: () => true,
             onPanResponderGrant: (evt) => {
                 dragStartOffset.current = { x: panValue.current.x, y: panValue.current.y };
-                const touches = evt.nativeEvent.touches;
-                if (touches.length >= 2) {
-                    isMultiTouchGesture.current = true;
-                    const dx = touches[0].pageX - touches[1].pageX;
-                    const dy = touches[0].pageY - touches[1].pageY;
-                    initialDistance.current = Math.sqrt(dx * dx + dy * dy);
-                    initialScale.current = scaleValue.current;
-                } else {
-                    isMultiTouchGesture.current = false;
-                    initialDistance.current = null;
-                }
+                initialDistance.current = null;
+                isMultiTouchGesture.current = evt.nativeEvent.touches.length >= 2;
             },
             onPanResponderMove: (evt, gestureState) => {
                 const touches = evt.nativeEvent.touches;
