@@ -35,9 +35,11 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
 
     const scaleValue = useRef(1);
     const panValue = useRef({ x: 0, y: 0 });
+    const dragStartOffset = useRef({ x: 0, y: 0 });
     const initialDistance = useRef<number | null>(null);
     const initialScale = useRef(1);
     const lastTapTime = useRef(0);
+    const singleTapTimeout = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
         const scaleSub = scale.addListener((v) => {
@@ -53,6 +55,9 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
             scale.removeListener(scaleSub);
             translateX.removeListener(xSub);
             translateY.removeListener(ySub);
+            if (singleTapTimeout.current) {
+                clearTimeout(singleTapTimeout.current);
+            }
         };
     }, [scale, translateX, translateY]);
 
@@ -63,7 +68,11 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
             translateY.setValue(0);
             scaleValue.current = 1;
             panValue.current = { x: 0, y: 0 };
+            dragStartOffset.current = { x: 0, y: 0 };
             initialDistance.current = null;
+            if (singleTapTimeout.current) {
+                clearTimeout(singleTapTimeout.current);
+            }
         }
     }, [visible, scale, translateX, translateY]);
 
@@ -80,40 +89,53 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
             onStartShouldSetPanResponder: () => true,
             onMoveShouldSetPanResponder: () => true,
             onPanResponderGrant: (evt) => {
+                dragStartOffset.current = { x: panValue.current.x, y: panValue.current.y };
                 const touches = evt.nativeEvent.touches;
                 if (touches.length === 2) {
                     const dx = touches[0].pageX - touches[1].pageX;
                     const dy = touches[0].pageY - touches[1].pageY;
                     initialDistance.current = Math.sqrt(dx * dx + dy * dy);
                     initialScale.current = scaleValue.current;
+                } else {
+                    initialDistance.current = null;
                 }
             },
             onPanResponderMove: (evt, gestureState) => {
                 const touches = evt.nativeEvent.touches;
-                if (touches.length === 2 && initialDistance.current) {
-                    // 双指捏合缩放（iOS & Android 通用）
+                if (touches.length === 2) {
+                    // 双指捏合缩放（支持先后落指的动态初始化）
                     const dx = touches[0].pageX - touches[1].pageX;
                     const dy = touches[0].pageY - touches[1].pageY;
                     const currentDistance = Math.sqrt(dx * dx + dy * dy);
-                    const newScale = Math.min(
-                        Math.max(initialScale.current * (currentDistance / initialDistance.current), 0.8),
-                        4
-                    );
-                    scale.setValue(newScale);
+                    if (!initialDistance.current) {
+                        initialDistance.current = currentDistance;
+                        initialScale.current = scaleValue.current;
+                    } else {
+                        const newScale = Math.min(
+                            Math.max(initialScale.current * (currentDistance / initialDistance.current), 0.8),
+                            4
+                        );
+                        scale.setValue(newScale);
+                    }
                 } else if (touches.length === 1 && scaleValue.current > 1) {
-                    // 单指拖拽平移（仅在放大状态下）
-                    translateX.setValue(panValue.current.x + gestureState.dx * 0.5);
-                    translateY.setValue(panValue.current.y + gestureState.dy * 0.5);
+                    // 单指拖拽平移：基于手势开始时的固定基准进行平移，避免累计位移累加漂移
+                    initialDistance.current = null;
+                    translateX.setValue(dragStartOffset.current.x + gestureState.dx);
+                    translateY.setValue(dragStartOffset.current.y + gestureState.dy);
                 }
             },
             onPanResponderRelease: (_evt, gestureState) => {
                 initialDistance.current = null;
                 const now = Date.now();
 
-                // 点击判定：移动距离极小
-                if (Math.abs(gestureState.dx) < 6 && Math.abs(gestureState.dy) < 6) {
-                    if (now - lastTapTime.current < 300) {
-                        // 双击：放大或还原
+                // 点击判定：移动距离极小（< 8px）
+                if (Math.abs(gestureState.dx) < 8 && Math.abs(gestureState.dy) < 8) {
+                    if (now - lastTapTime.current < 280) {
+                        // 双击判定：清除延时的单击关闭定时器，切换放大与复位
+                        if (singleTapTimeout.current) {
+                            clearTimeout(singleTapTimeout.current);
+                            singleTapTimeout.current = null;
+                        }
                         lastTapTime.current = 0;
                         if (scaleValue.current > 1.2) {
                             resetPositionAndScale();
@@ -123,9 +145,14 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
                         return;
                     }
                     lastTapTime.current = now;
-                    // 单击背景或未放大图片退出
+                    // 单击退出：若当前处于未放大状态，延时等待双击窗口，避免第一次点击过早卸载模态框
                     if (scaleValue.current <= 1.05) {
-                        onClose();
+                        if (singleTapTimeout.current) {
+                            clearTimeout(singleTapTimeout.current);
+                        }
+                        singleTapTimeout.current = setTimeout(() => {
+                            onClose();
+                        }, 280);
                         return;
                     }
                 }
