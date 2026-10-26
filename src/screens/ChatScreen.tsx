@@ -323,11 +323,16 @@ export const ChatScreen = () => {
         setPendingAttachments(attachments);
     }, []);
     const appendPendingAttachments = useCallback((newAttachments: ChatAttachment[]) => {
-        // 放宽单条消息附件总预算至 20MB，满足多图并发发送需求
-        const MAX_TOTAL_BUDGET = 20 * 1024 * 1024;
+        // 服务端 WebSocket 报文上限 30MB；客户端按 Base64 编码后的实际报文大小校验总预算（上限 20MB），为 JSON 结构与文字预留 10MB 余量
+        const MAX_ENCODED_BUDGET = 20 * 1024 * 1024;
         const attachments = [...pendingAttachmentsRef.current, ...newAttachments];
-        const size = attachments.reduce((total, item) => total + (item.size ?? 0), 0);
-        if (size > MAX_TOTAL_BUDGET) {
+        const estimatedEncodedSize = attachments.reduce((total, item) => {
+            if (item.data) return total + item.data.length;
+            if (item.content) return total + item.content.length;
+            const rawSize = item.size ?? 0;
+            return total + Math.ceil(rawSize * 4 / 3);
+        }, 0);
+        if (estimatedEncodedSize > MAX_ENCODED_BUDGET) {
             Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
             return;
         }

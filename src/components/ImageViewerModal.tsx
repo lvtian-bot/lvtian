@@ -1,15 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
     Modal,
     View,
     StyleSheet,
     TouchableOpacity,
-    Image,
     Dimensions,
     ActivityIndicator,
-    ScrollView,
     StatusBar,
     Platform,
+    PanResponder,
+    Animated,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -29,6 +29,117 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
     const [loading, setLoading] = useState(true);
     const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
+    const scale = useRef(new Animated.Value(1)).current;
+    const translateX = useRef(new Animated.Value(0)).current;
+    const translateY = useRef(new Animated.Value(0)).current;
+
+    const scaleValue = useRef(1);
+    const panValue = useRef({ x: 0, y: 0 });
+    const initialDistance = useRef<number | null>(null);
+    const initialScale = useRef(1);
+    const lastTapTime = useRef(0);
+
+    useEffect(() => {
+        const scaleSub = scale.addListener((v) => {
+            scaleValue.current = v.value;
+        });
+        const xSub = translateX.addListener((v) => {
+            panValue.current.x = v.value;
+        });
+        const ySub = translateY.addListener((v) => {
+            panValue.current.y = v.value;
+        });
+        return () => {
+            scale.removeListener(scaleSub);
+            translateX.removeListener(xSub);
+            translateY.removeListener(ySub);
+        };
+    }, [scale, translateX, translateY]);
+
+    useEffect(() => {
+        if (!visible) {
+            scale.setValue(1);
+            translateX.setValue(0);
+            translateY.setValue(0);
+            scaleValue.current = 1;
+            panValue.current = { x: 0, y: 0 };
+            initialDistance.current = null;
+        }
+    }, [visible, scale, translateX, translateY]);
+
+    const resetPositionAndScale = () => {
+        Animated.parallel([
+            Animated.spring(scale, { toValue: 1, useNativeDriver: true }),
+            Animated.spring(translateX, { toValue: 0, useNativeDriver: true }),
+            Animated.spring(translateY, { toValue: 0, useNativeDriver: true }),
+        ]).start();
+    };
+
+    const panResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: () => true,
+            onPanResponderGrant: (evt) => {
+                const touches = evt.nativeEvent.touches;
+                if (touches.length === 2) {
+                    const dx = touches[0].pageX - touches[1].pageX;
+                    const dy = touches[0].pageY - touches[1].pageY;
+                    initialDistance.current = Math.sqrt(dx * dx + dy * dy);
+                    initialScale.current = scaleValue.current;
+                }
+            },
+            onPanResponderMove: (evt, gestureState) => {
+                const touches = evt.nativeEvent.touches;
+                if (touches.length === 2 && initialDistance.current) {
+                    // 双指捏合缩放（iOS & Android 通用）
+                    const dx = touches[0].pageX - touches[1].pageX;
+                    const dy = touches[0].pageY - touches[1].pageY;
+                    const currentDistance = Math.sqrt(dx * dx + dy * dy);
+                    const newScale = Math.min(
+                        Math.max(initialScale.current * (currentDistance / initialDistance.current), 0.8),
+                        4
+                    );
+                    scale.setValue(newScale);
+                } else if (touches.length === 1 && scaleValue.current > 1) {
+                    // 单指拖拽平移（仅在放大状态下）
+                    translateX.setValue(panValue.current.x + gestureState.dx * 0.5);
+                    translateY.setValue(panValue.current.y + gestureState.dy * 0.5);
+                }
+            },
+            onPanResponderRelease: (_evt, gestureState) => {
+                initialDistance.current = null;
+                const now = Date.now();
+
+                // 点击判定：移动距离极小
+                if (Math.abs(gestureState.dx) < 6 && Math.abs(gestureState.dy) < 6) {
+                    if (now - lastTapTime.current < 300) {
+                        // 双击：放大或还原
+                        lastTapTime.current = 0;
+                        if (scaleValue.current > 1.2) {
+                            resetPositionAndScale();
+                        } else {
+                            Animated.spring(scale, { toValue: 2.5, useNativeDriver: true }).start();
+                        }
+                        return;
+                    }
+                    lastTapTime.current = now;
+                    // 单击背景或未放大图片退出
+                    if (scaleValue.current <= 1.05) {
+                        onClose();
+                        return;
+                    }
+                }
+
+                // 缩放边界回弹
+                if (scaleValue.current < 1) {
+                    resetPositionAndScale();
+                } else if (scaleValue.current > 3.5) {
+                    Animated.spring(scale, { toValue: 3.5, useNativeDriver: true }).start();
+                }
+            },
+        })
+    ).current;
+
     if (!visible || !imageUri) return null;
 
     const topOffset = Platform.OS === 'ios' ? 48 : (StatusBar.currentHeight ? StatusBar.currentHeight + 12 : 32);
@@ -43,29 +154,26 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
         >
             <View style={styles.container}>
                 <StatusBar barStyle="light-content" />
-                <ScrollView
-                    style={styles.scrollView}
-                    contentContainerStyle={[styles.scrollContent, { width: screenWidth, height: screenHeight }]}
-                    maximumZoomScale={3}
-                    minimumZoomScale={1}
-                    showsHorizontalScrollIndicator={false}
-                    showsVerticalScrollIndicator={false}
-                    centerContent={true}
-                >
-                    <TouchableOpacity
-                        activeOpacity={1}
-                        style={styles.touchableArea}
-                        onPress={onClose}
-                    >
-                        <Image
-                            source={{ uri: imageUri }}
-                            style={[styles.image, { width: screenWidth, height: screenHeight }]}
-                            resizeMode="contain"
-                            onLoadStart={() => setLoading(true)}
-                            onLoadEnd={() => setLoading(false)}
-                        />
-                    </TouchableOpacity>
-                </ScrollView>
+                <View style={styles.gestureContainer} {...panResponder.panHandlers}>
+                    <Animated.Image
+                        source={{ uri: imageUri }}
+                        style={[
+                            styles.image,
+                            {
+                                width: screenWidth,
+                                height: screenHeight,
+                                transform: [
+                                    { translateX },
+                                    { translateY },
+                                    { scale },
+                                ],
+                            },
+                        ]}
+                        resizeMode="contain"
+                        onLoadStart={() => setLoading(true)}
+                        onLoadEnd={() => setLoading(false)}
+                    />
+                </View>
 
                 {loading && (
                     <View style={styles.loadingContainer} pointerEvents="none">
@@ -97,15 +205,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    scrollView: {
-        flex: 1,
-        width: '100%',
-    },
-    scrollContent: {
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    touchableArea: {
+    gestureContainer: {
         flex: 1,
         width: '100%',
         justifyContent: 'center',
