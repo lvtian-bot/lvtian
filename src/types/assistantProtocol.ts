@@ -38,6 +38,7 @@ export interface AssistantMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
     timestamp: number;
+    completedAt?: number;
     status: 'sending' | 'sent' | 'queued' | 'processing' | 'done' | 'error';
     toolCalls?: ToolCallState[];
     /** 工具首次出现时在 content 中的 UTF-16 偏移；保留正文与工具的交错顺序。 */
@@ -137,6 +138,7 @@ export type ServerMessage =
           state: TaskExecutionState;
           error?: string;
           stopReason?: string;
+          completedAt?: number;
       }
     | {
           type: 'message_deleted';

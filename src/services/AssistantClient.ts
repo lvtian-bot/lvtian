@@ -902,6 +902,7 @@ export class AssistantClient {
                             status: msg.state === 'completed' ? 'done' : msg.state === 'error' ? 'error' : 'done',
                             errorMessage: msg.error,
                             stopReason: msg.stopReason,
+                            completedAt: msg.completedAt ?? (msg.state === 'completed' ? Date.now() : asstMsg.completedAt),
                         });
                     }
 

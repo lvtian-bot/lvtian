@@ -223,4 +223,34 @@ describe('bubble rendering', () => {
         expect(renderer!.root.findAllByType(ChatBubbleText)).toHaveLength(0);
         expect(renderer!.root.findAllByType(Text).some((node) => node.props.children === '12:05')).toBe(false);
     });
+    it('uses completedAt on the final assistant text bubble while earlier prose retains original timestamp', async () => {
+        jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
+        const firstText = '已开始查询，请稍候。';
+        const secondText = '查询完毕，这是最终答复。';
+        const item = message({
+            content: `${firstText}${secondText}`,
+            timestamp: new Date(2026, 9, 26, 12, 5).getTime(),
+            completedAt: new Date(2026, 9, 26, 12, 11).getTime(),
+            toolCalls: [call('t1')],
+            toolCallPositions: [{ toolCallId: 't1', textOffset: firstText.length }],
+        });
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ serverUrl: 'http://localhost:8080', connectionState: 'connected', messages: [item], pendingApprovals: [] });
+            renderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const renderItem = renderer!.root.findByType(FlatList).props.renderItem;
+        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item, index: 0 })));
+
+        const firstProse = renderer!.root.findByProps({ testID: 'assistant-prose-reply-text-0' });
+        const secondProse = renderer!.root.findByProps({ testID: `assistant-prose-reply-text-${firstText.length}` });
+
+        expect(firstProse).toBeTruthy();
+        expect(secondProse).toBeTruthy();
+
+        const firstClock = firstProse.findByProps({ testID: 'inline-bubble-time' });
+        expect(firstClock.props.children).toBe('12:05');
+
+        const secondClock = secondProse.findByProps({ testID: 'inline-bubble-time' });
+        expect(secondClock.props.children).toBe('12:11');
+    });
 });
