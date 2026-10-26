@@ -660,7 +660,7 @@ export const ChatScreen = () => {
         const trimmed = inputContent.trim();
         if (trimmed === '/new') {
             setInputContent('');
-            void (async () => {
+            const doReset = async () => {
                 try {
                     const ok = await AssistantClient.getInstance().resetSession();
                     if (ok) {
@@ -672,7 +672,8 @@ export const ChatScreen = () => {
                     console.warn('[ChatScreen] resetSession failed:', err);
                     showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
                 }
-            })();
+            };
+            doReset();
             return;
         }
 
