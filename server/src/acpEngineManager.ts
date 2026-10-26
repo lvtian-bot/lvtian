@@ -629,7 +629,8 @@ export class AcpEngineManager {
         assistantMessageId: string,
         userPrompt: string,
         callbacks: EngineCallbacks,
-        attachments?: ChatAttachment[]
+        attachments?: ChatAttachment[],
+        source: 'user' | 'task_report' = 'user'
     ): Promise<void> {
         // 入口同步预留（任何 await 之前）：同一会话的并发消息在此被拒绝，
         // 且交接提炼期间锁定会话，防止在即将回收的旧引擎上并发启动新任务
@@ -650,6 +651,10 @@ export class AcpEngineManager {
         let shouldRotate = false;
 
         try {
+            // Freeze legacy/new-session fallback before background state/usage writes move updatedAt.
+            if (source === 'task_report' && this.sessionManager.getOrCreateSession(sessionId).lastActiveAt === undefined) {
+                this.sessionManager.recordActivity(sessionId, this.sessionManager.getLastActiveAt(sessionId));
+            }
             // 初始状态更新须在预留的释放范围内：落盘或回调抛错时 finally 仍会释放预留，
             // 否则失败的请求会把会话永久锁在「进行中」，后续消息全部被静默拒绝
             this.sessionManager.setTaskState(sessionId, 'processing');
@@ -685,7 +690,7 @@ export class AcpEngineManager {
                 && this.sessionManager.isCapacityOver(sessionId, this.minCapacityRatio);
             // 预生成后主人提前回来：先不丢提要——等解析完底层会话，确认原会话还能复用再丢；
             // 若恰好引擎重启且旧会话被替换，这份提要就是断档接管唯一的早期上下文
-            const earlyReturn = pendingBackground !== null && !gateMet && !handoffPending;
+            const earlyReturn = source === 'user' && pendingBackground !== null && !gateMet && !handoffPending;
             // 已开始但尚未交付成功的轮换不再重复换会话，只把上次没送出去的接力上下文补上
             shouldRotate = gateMet && !handoffPending;
 
@@ -762,10 +767,10 @@ export class AcpEngineManager {
                 if (verbatim) {
                     sections.push(`[未竟事项与关键交互原文锚定 (至多5~8轮/最多1500~2000字)]\n${verbatim}`);
                 }
-                sections.push(`[主人当前提问与指令]\n${userPrompt}`);
+                sections.push(`[${source === 'user' ? '主人当前提问与指令' : '后台任务结果交付（非用户指令）'}]\n${userPrompt}`);
                 fullPrompt = sections.join('\n\n');
             } else {
-                fullPrompt = `[系统人设与主人记忆背景]\n${this.engineSystemPrompt}\n\n[主人当前提问与指令]\n${userPrompt}`;
+                fullPrompt = `[系统人设与主人记忆背景]\n${this.engineSystemPrompt}\n\n[${source === 'user' ? '主人当前提问与指令' : '后台任务结果交付（非用户指令）'}]\n${userPrompt}`;
             }
 
             let attachmentContext = '';
@@ -835,7 +840,7 @@ export class AcpEngineManager {
                 this.sessionManager.setHandoffPending(sessionId, false);
             }
 
-            this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn');
+            this.finalizeRun(sessionId, runtime, response?.stopReason ?? 'end_turn', source);
         } catch (err: unknown) {
             // 若轮换首轮请求异常失败，恢复提要文件以支持用户后续重试注入（被中断停止时不恢复旧提要，避免覆盖新提要）
             if (shouldRotate && pendingBackground && !this.stoppedSessions.has(sessionId)) {
@@ -1235,7 +1240,7 @@ export class AcpEngineManager {
         runtime.outstandingTools.clear();
     }
 
-    private finalizeRun(sessionId: string, runtime: SessionRuntime, stopReason: string): void {
+    private finalizeRun(sessionId: string, runtime: SessionRuntime, stopReason: string, source: 'user' | 'task_report' = 'user'): void {
         this.runtimes.delete(sessionId);
         // 已停止任务的进行中工具是被动中断，终态化为失败；无条件 done 会把中断的工具误标为成功，
         // 且停止守卫拦截后续事件，虚假的成功结果无法再被修正
@@ -1258,7 +1263,7 @@ export class AcpEngineManager {
         runtime.callbacks.onStatusChange('done', stopReason === 'max_tokens' ? { stopReason } : undefined);
         this.sessionManager.setTaskState(sessionId, 'completed');
         // 唯真实交互推进主聊天活跃时间
-        this.sessionManager.recordActivity(sessionId);
+        if (source === 'user') this.sessionManager.recordActivity(sessionId);
         try {
             const recordedAnswer = runtime.committedText.trim().slice(0, 300);
             this.memoryManager.appendDailyLog('对话与任务完成', `答：${recordedAnswer}...`);

@@ -673,6 +673,22 @@ export class SessionManager {
         return msg;
     }
 
+    /** Durability barrier used before acknowledging a cross-store task report publication. */
+    public persistDurableMessage(sessionId: string, messageId: string): void {
+        const session = this.getOrCreateSession(sessionId);
+        const message = session.messages.find(m => m.id === messageId);
+        if (!message || !this.appendEvent(sessionId, { t: 'msg', at: Date.now(), seq: message.seq, m: message })) {
+            throw new Error('report_message_not_persisted');
+        }
+        const dir = this.getSafeSessionDir(sessionId);
+        // Windows does not support opening/fsyncing directories through Node's fs API.
+        const targets = process.platform === 'win32' ? [path.join(dir, ACTIVE_LOG)] : [path.join(dir, ACTIVE_LOG), dir, this.sessionsDir];
+        for (const target of targets) {
+            const fd = fs.openSync(target, 'r');
+            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
+    }
+
     public deleteMessage(sessionId: string, messageId: string): boolean {
         this.assertValidSessionId(sessionId);
         const session = this.getOrCreateSession(sessionId);
@@ -985,12 +1001,20 @@ export class SessionManager {
         return null;
     }
 
-    public setPendingBackground(sessionId: string, content: string): void {
+    public setPendingBackground(sessionId: string, content: string, durable = false): void {
         const dir = this.ensureSessionDir(sessionId);
         const targetPath = path.join(dir, 'pending_background.txt');
         const tmpPath = path.join(dir, `pending_background.txt.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`);
         fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
+        if (durable) {
+            const fd = fs.openSync(tmpPath, 'r');
+            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
         fs.renameSync(tmpPath, targetPath);
+        if (durable && process.platform !== 'win32') {
+            const fd = fs.openSync(dir, 'r');
+            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
     }
 
     public clearPendingBackground(sessionId: string): void {

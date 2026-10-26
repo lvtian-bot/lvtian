@@ -12,11 +12,13 @@ export interface NativeTaskOperation { requestId: string; status: 'pending' | 'u
 export interface NativeTaskResult {
   taskId: string;
   delivery?: ScheduleDeliveryReceipt;
-  status: 'unknown' | 'not_delivered' | 'running' | 'ended';
+  status: 'unknown' | 'not_delivered' | 'ended';
   turn?: number;
   endReason?: string;
   assistantText: string[];
   truncated: boolean;
+  /** Reporting-only diagnostic; never substitutes for native execution outcome. */
+  evidenceIssue?: 'delivery_unavailable';
 }
 export interface NativeTaskServiceOptions { clientFactory: () => Promise<NativeTaskClient>; metadataPath: string; workspace: string }
 export class NativeTaskServiceError extends Error {
