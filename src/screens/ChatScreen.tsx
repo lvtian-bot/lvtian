@@ -7,6 +7,7 @@ import {
     TextInput,
     TouchableOpacity,
     FlatList,
+    ScrollView,
     ActivityIndicator,
     Alert,
     Platform,
@@ -37,7 +38,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { fsService } from '../services/FileSystemService';
 import Icon from '@expo/vector-icons/MaterialIcons';
-import Markdown from 'react-native-markdown-display';
+import { ChatMarkdownBubble } from '../components/ChatMarkdownBubble';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
 import { theme } from '../utils/theme';
 import {
@@ -47,13 +48,13 @@ import {
 } from '../utils/chatScrollMetrics';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
-import { AssistantMessage, ToolCallState } from '../types/assistantProtocol';
+import { AssistantMessage, ChatAttachment, ToolCallState } from '../types/assistantProtocol';
 import { getAssistantDisplayParts } from '../utils/assistantMessageParts';
 import { ChatBubbleText } from '../components/ChatBubbleText';
 import { formatChatDate, formatChatTime, isPlainChatText, startsChatDay } from '../utils/chatDate';
 import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { getFontSizeMetrics, FontSizeMetrics } from '../utils/fontSize';
+import { getFontSizeMetrics } from '../utils/fontSize';
 import i18n from '../i18n';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -92,47 +93,6 @@ const ChatScrollView = forwardRef<
     );
 });
 ChatScrollView.displayName = 'ChatScrollView';
-
-/** Markdown 全量选择复制规则（正文、行内代码与代码块均开启 selectable） */
-const markdownRules = {
-    text: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => (
-        <Text key={node.key} style={[inheritedStyles, styles.text]} selectable={true}>
-            {node.content}
-        </Text>
-    ),
-    textgroup: (node: any, children: any, _parent: any, styles: any) => (
-        <Text key={node.key} style={styles.textgroup} selectable={true}>
-            {children}
-        </Text>
-    ),
-    code_inline: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => (
-        <Text key={node.key} style={[inheritedStyles, styles.code_inline]} selectable={true}>
-            {node.content}
-        </Text>
-    ),
-    code_block: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => {
-        let content = node.content;
-        if (typeof content === 'string' && content.endsWith('\n')) {
-            content = content.slice(0, -1);
-        }
-        return (
-            <Text key={node.key} style={[inheritedStyles, styles.code_block]} selectable={true}>
-                {content}
-            </Text>
-        );
-    },
-    fence: (node: any, _children: any, _parent: any, styles: any, inheritedStyles: any = {}) => {
-        let content = node.content;
-        if (typeof content === 'string' && content.endsWith('\n')) {
-            content = content.slice(0, -1);
-        }
-        return (
-            <Text key={node.key} style={[inheritedStyles, styles.fence]} selectable={true}>
-                {content}
-            </Text>
-        );
-    },
-};
 
 interface ToolCallsCardProps {
     toolCalls: ToolCallState[];
@@ -289,7 +249,6 @@ export const ChatScreen = () => {
     const tabBarHeight = useContext(TabBarHeightContext);
     const { fontSize } = useSettingsStore();
     const metrics = useMemo(() => getFontSizeMetrics(fontSize), [fontSize]);
-    const dynamicMarkdownStyles = useMemo(() => getDynamicMarkdownStyles(metrics), [metrics]);
 
     const flatListRef = useRef<FlatList<AssistantMessage>>(null);
     const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
@@ -355,6 +314,22 @@ export const ChatScreen = () => {
     } = useAssistantStore();
 
     const [inputContent, setInputContent] = useState('');
+    const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+    const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
+    const updatePendingAttachments = useCallback((attachments: ChatAttachment[]) => {
+        pendingAttachmentsRef.current = attachments;
+        setPendingAttachments(attachments);
+    }, []);
+    const appendPendingAttachment = useCallback((attachment: ChatAttachment) => {
+        // A draft shares the existing 750 KB attachment budget across its files.
+        const attachments = [...pendingAttachmentsRef.current, attachment];
+        const size = attachments.reduce((total, item) => total + (item.size ?? 0), 0);
+        if (size > 750 * 1024) {
+            Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 750KB）'));
+            return;
+        }
+        updatePendingAttachments(attachments);
+    }, [t, updatePendingAttachments]);
     const [isAttachMenuVisible, setIsAttachMenuVisible] = useState(false);
     const [showScrollBottom, setShowScrollBottom] = useState(false);
     const scrollGestureRef = useRef({ active: false, startDistance: Number.NaN });
@@ -499,25 +474,19 @@ export const ChatScreen = () => {
                 const name = asset.fileName || `image_${Date.now()}.jpg`;
                 // expo-image-picker 在开启 base64 导出时统一压缩输出为 JPEG 编码，匹配声明类型以防模型 Provider 拒收
                 const mimeType = base64Data ? 'image/jpeg' : (asset.mimeType || 'image/jpeg');
-                const text = inputContent.trim() || t('chat.attachedImage', '发送了图片');
-                setInputContent('');
-                const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
-                flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
-                AssistantClient.getInstance().sendMessage(text, [
-                    {
-                        type: 'image',
-                        name,
-                        mimeType,
-                        size: asset.fileSize,
-                        uri: asset.uri,
-                        data: base64Data,
-                    },
-                ]);
+                appendPendingAttachment({
+                    type: 'image',
+                    name,
+                    mimeType,
+                    size: approxSize,
+                    uri: asset.uri,
+                    data: base64Data,
+                });
             }
         } catch {
             Alert.alert(t('common.error', '错误'), t('chat.pickImageError', '选择图片失败'));
         }
-    }, [inputContent, t]);
+    }, [appendPendingAttachment, t]);
 
     const pickDocument = useCallback(async () => {
         try {
@@ -542,26 +511,20 @@ export const ChatScreen = () => {
                     return;
                 }
 
-                const text = inputContent.trim() || `${t('chat.attachedFile', '发送了文件')}: ${name}`;
-                setInputContent('');
-                const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
-                flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
-                AssistantClient.getInstance().sendMessage(text, [
-                    {
-                        type: 'file',
-                        name,
-                        mimeType,
-                        size: readResult.size || asset.size,
-                        uri: asset.uri,
-                        content: readResult.content,
-                        data: readResult.data,
-                    },
-                ]);
+                appendPendingAttachment({
+                    type: 'file',
+                    name,
+                    mimeType,
+                    size: readResult.size,
+                    uri: asset.uri,
+                    content: readResult.content,
+                    data: readResult.data,
+                });
             }
         } catch {
             Alert.alert(t('common.error', '错误'), t('chat.pickDocumentError', '选择文件失败'));
         }
-    }, [inputContent, t]);
+    }, [appendPendingAttachment, t]);
 
     const handlePlusAction = useCallback(() => {
         setIsAttachMenuVisible((prev) => !prev);
@@ -602,12 +565,18 @@ export const ChatScreen = () => {
     }, [t]);
 
     const handleSend = () => {
-        const text = inputContent.trim();
+        const attachments = pendingAttachmentsRef.current;
+        const text = inputContent.trim() || (attachments.length > 0
+            ? (attachments.every((attachment) => attachment.type === 'image')
+                ? t('chat.attachedImage', '发送了图片')
+                : `${t('chat.attachedFile', '发送了文件')}: ${attachments.map((attachment) => attachment.name).join(', ')}`)
+            : '');
         if (!text) return;
+        AssistantClient.getInstance().sendMessage(text, attachments.length > 0 ? attachments : undefined);
         setInputContent('');
+        updatePendingAttachments([]);
         const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
         flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
-        AssistantClient.getInstance().sendMessage(text);
     };
 
     const handleStop = () => {
@@ -769,20 +738,18 @@ export const ChatScreen = () => {
                             <View style={isUser ? styles.userMessageGroup : styles.assistantMessageGroup}>
                             {!isUser && getAssistantDisplayParts(item).map((part) => part.type === 'tools' ? (
                                 <ToolCallsCard key={part.key} toolCalls={part.tools} />
-                            ) : (
+                            ) : isPlainChatText(part.text) ? (
                                 <View
                                     key={part.key}
                                     testID={`assistant-prose-${item.id}-${part.key}`}
                                     style={[styles.bubble, styles.assistantBubble]}
                                 >
-                                    {isPlainChatText(part.text) ? (
-                                        <ChatBubbleText text={part.text} time={time}
-                                            textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} />
-                                    ) : <>
-                                        <Markdown style={dynamicMarkdownStyles} rules={markdownRules}>{part.text}</Markdown>
-                                        <Text style={styles.bubbleTime}>{time}</Text>
-                                    </>}
+                                    <ChatBubbleText text={part.text} time={time}
+                                        textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} />
                                 </View>
+                            ) : (
+                                <ChatMarkdownBubble key={part.key} text={part.text} time={time} metrics={metrics}
+                                    testID={`assistant-prose-${item.id}-${part.key}`} />
                             ))}
                             {hasProseBubble && <View
                                 testID={isUser ? `user-bubble-${item.id}` : `assistant-prose-${item.id}`}
@@ -1016,6 +983,30 @@ export const ChatScreen = () => {
                     </View>
                 )}
 
+                {pendingAttachments.length > 0 && (
+                    <ScrollView horizontal style={styles.draftAttachments} keyboardShouldPersistTaps="handled">
+                        {pendingAttachments.map((attachment, index) => (
+                            <View key={`${attachment.uri}-${index}`} style={styles.draftAttachment} testID={`draft-attachment-${index}`}>
+                                {attachment.type === 'image' ? (
+                                    <Image
+                                        source={{ uri: attachment.uri || `data:${attachment.mimeType};base64,${attachment.data}` }}
+                                        style={styles.draftImage}
+                                        resizeMode="cover"
+                                    />
+                                ) : <Icon name="insert-drive-file" size={24} color={theme.colors.primary} />}
+                                <Text style={styles.draftAttachmentName} numberOfLines={1}>{attachment.name}</Text>
+                                <TouchableOpacity
+                                    onPress={() => updatePendingAttachments(pendingAttachmentsRef.current.filter((_, itemIndex) => itemIndex !== index))}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`${t('common.delete', '删除')} ${attachment.name}`}
+                                    style={styles.draftAttachmentRemove}
+                                >
+                                    <Icon name="close" size={18} color={theme.colors.textSecondary} />
+                                </TouchableOpacity>
+                            </View>
+                        ))}
+                    </ScrollView>
+                )}
                 <View style={styles.inputCapsule}>
                     <TouchableOpacity
                         style={[styles.plusBtn, isAttachMenuVisible && styles.plusBtnActive]}
@@ -1051,7 +1042,7 @@ export const ChatScreen = () => {
                         maxLength={2000}
                         onLayout={handleInputLayout}
                     />
-                    {inputContent.trim() ? (
+                    {inputContent.trim() || pendingAttachments.length > 0 ? (
                         <TouchableOpacity
                             style={styles.sendBtnActive}
                             onPress={handleSend}
@@ -1078,86 +1069,6 @@ export const ChatScreen = () => {
         </View>
     );
 };
-
-const getDynamicMarkdownStyles = (metrics: FontSizeMetrics) => ({
-    body: {
-        color: '#111827',
-        fontSize: metrics.chatBody,
-        lineHeight: metrics.chatLineHeight,
-    },
-    heading1: {
-        color: '#111827',
-        fontSize: metrics.chatHeading1,
-        fontWeight: '700' as const,
-        marginTop: 10,
-        marginBottom: 6,
-    },
-    heading2: {
-        color: '#111827',
-        fontSize: metrics.chatHeading2,
-        fontWeight: '700' as const,
-        marginTop: 8,
-        marginBottom: 4,
-    },
-    heading3: {
-        color: '#111827',
-        fontSize: metrics.chatHeading3,
-        fontWeight: '700' as const,
-        marginTop: 6,
-        marginBottom: 4,
-    },
-    paragraph: {
-        marginTop: 2,
-        marginBottom: 4,
-    },
-    list_item: {
-        marginVertical: 2,
-    },
-    bullet_list: {
-        marginVertical: 4,
-    },
-    ordered_list: {
-        marginVertical: 4,
-    },
-    code_inline: {
-        color: '#111827',
-        backgroundColor: '#E5E7EB',
-        borderRadius: 4,
-        paddingHorizontal: 5,
-        paddingVertical: 2,
-        fontSize: metrics.chatCode,
-        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-    },
-    fence: {
-        backgroundColor: '#E5E7EB',
-        borderRadius: 8,
-        padding: 10,
-        fontSize: metrics.chatCode,
-        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        color: '#111827',
-        marginVertical: 6,
-        borderWidth: 0,
-    },
-    code_block: {
-        backgroundColor: '#E5E7EB',
-        borderRadius: 8,
-        padding: 10,
-        fontSize: metrics.chatCode,
-        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        color: '#111827',
-        marginVertical: 6,
-        borderWidth: 0,
-    },
-    hr: {
-        backgroundColor: '#E5E7EB',
-        height: 1,
-        marginVertical: 8,
-    },
-    strong: {
-        fontWeight: '700' as const,
-        color: '#111827',
-    },
-});
 
 const styles = StyleSheet.create({
     centerContainer: {
@@ -1310,7 +1221,6 @@ const styles = StyleSheet.create({
     },
     dateSeparator: { alignItems: 'center', marginTop: 4, marginBottom: 12 },
     dateSeparatorText: { fontSize: 11, color: '#6B7280', backgroundColor: '#F0F2F5', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
-    bubbleTime: { alignSelf: 'flex-end', fontSize: 10, color: '#6B7280', marginTop: 2 },
     messageRow: {
         flexDirection: 'row',
         marginBottom: 12,
@@ -1614,6 +1524,34 @@ const styles = StyleSheet.create({
         backgroundColor: '#F3F4F6',
         marginHorizontal: 8,
         marginVertical: 1,
+    },
+    draftAttachments: {
+        marginBottom: 8,
+        maxHeight: 72,
+    },
+    draftAttachment: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F0F2F5',
+        borderRadius: 12,
+        padding: 6,
+        marginRight: 8,
+        maxWidth: 220,
+    },
+    draftImage: {
+        width: 48,
+        height: 48,
+        borderRadius: 6,
+    },
+    draftAttachmentName: {
+        flexShrink: 1,
+        maxWidth: 120,
+        marginHorizontal: 6,
+        fontSize: 12,
+        color: theme.colors.text,
+    },
+    draftAttachmentRemove: {
+        padding: 8,
     },
     inputCapsule: {
         flexDirection: 'row',

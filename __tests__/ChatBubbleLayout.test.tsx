@@ -2,6 +2,7 @@ import React from 'react';
 import { FlatList, PixelRatio, StyleSheet, Text, View } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 import { ChatBubbleText } from '../src/components/ChatBubbleText';
+import { ChatMarkdownBubble } from '../src/components/ChatMarkdownBubble';
 import { ChatScreen, ToolCallsCard } from '../src/screens/ChatScreen';
 import { AssistantClient } from '../src/services/AssistantClient';
 import { useAssistantStore } from '../src/store/useAssistantStore';
@@ -173,6 +174,22 @@ describe('bubble rendering', () => {
                 expect(rendered).toContain('const x = 1;');
             }
         }
+    });
+    it('routes screenshot-style lists directly into the definite-width rich bubble without a shrink-wrap parent', async () => {
+        jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ serverUrl: 'http://localhost:8080', connectionState: 'connected', messages: [], pendingApprovals: [] });
+            renderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const renderItem = renderer!.root.findByType(FlatList).props.renderItem;
+        const content = '明白，调整方案：\n\n- **英文模板原文全部保留**，只调整中文部分。\n- 保留 `AGENTS.md`、Skill 的约定。\n- 最后一个完整列表段落。';
+        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: message({ content }), index: 0 })));
+        const richBubble = renderer!.root.findByType(ChatMarkdownBubble);
+        expect(StyleSheet.flatten(richBubble.parent!.props.style)).toMatchObject({ width: '92%', alignItems: 'flex-start' });
+        expect(StyleSheet.flatten(richBubble.findAllByType(View)[0].props.style)).toMatchObject({ width: '100%', flexShrink: 0 });
+        expect(renderer!.root.findAllByType(ChatBubbleText)).toHaveLength(0);
+        expect(renderer!.root.findByProps({ testID: 'markdown-bubble-time' }).props.children).toBe('12:05');
+        expect(JSON.stringify(renderer!.toJSON())).toContain('最后一个完整列表段落。');
     });
     it('renders grouped cards at a definite width with two-line summaries and independent detail state', async () => {
         await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(<ToolCallsCard toolCalls={[call('a'), call('b')]} />); });
