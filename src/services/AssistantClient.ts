@@ -1065,15 +1065,18 @@ export class AssistantClient {
             case 'event_chunk': {
                 store.setCurrentSeq(msg.seq);
 
-                // 支持全量文本校准（如终态 final 事件）与增量流式追加
+                // 支持全量文本校准（如终态 final 事件）与增量流式追加。
+                // 创建时间优先用服务端随事件下发的时间：设备时钟落后时，若这里用 Date.now()，
+                // 重连后回答会排到提问之前，工作记录会丢掉结论并退回“进行中”。
                 const existing = store.messages.find((m) => m.id === msg.messageId);
+                const createdAt = existing ? existing.timestamp : (msg.timestamp ?? Date.now());
                 if (msg.content !== undefined) {
                     store.addOrUpdateMessage({
                         id: msg.messageId,
                         seq: msg.seq,
                         role: 'assistant',
                         content: msg.content,
-                        timestamp: existing ? existing.timestamp : Date.now(),
+                        timestamp: createdAt,
                         status: 'processing',
                     });
                 } else if (!existing) {
@@ -1082,7 +1085,7 @@ export class AssistantClient {
                         seq: msg.seq,
                         role: 'assistant',
                         content: msg.delta || '',
-                        timestamp: Date.now(),
+                        timestamp: createdAt,
                         status: 'processing',
                     });
                 } else if (msg.delta) {

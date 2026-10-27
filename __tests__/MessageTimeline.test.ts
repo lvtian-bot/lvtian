@@ -107,3 +107,21 @@ test('client streaming and reconnect reconciliation render the same ordered hist
     chunk({ delta: '。' });
     expect(display(useAssistantStore.getState().messages[0])).toEqual(['先检查', 'tool:first:done', '再修改', 'tool:second:done', '完成。']);
 });
+
+test('assistant placeholder adopts the server creation time instead of the device clock', () => {
+    const client = AssistantClient.getInstance();
+    const receive = (client as unknown as { handleServerMessage: (msg: ServerMessage) => void }).handleServerMessage.bind(client);
+
+    // 设备时钟落后于服务端：若客户端用 Date.now()，回答会被排到提问之前
+    receive({
+        type: 'event_chunk', sessionId: 'main', messageId: 'reply-server-time',
+        seq: 8, delta: '', status: 'thinking', timestamp: 9000,
+    });
+
+    const msg = useAssistantStore.getState().messages.find((m) => m.id === 'reply-server-time');
+    expect(msg?.timestamp).toBe(9000);
+
+    // 后续增量不得覆盖创建时间
+    receive({ type: 'event_chunk', sessionId: 'main', messageId: 'reply-server-time', seq: 9, delta: '正文' });
+    expect(useAssistantStore.getState().messages.find((m) => m.id === 'reply-server-time')?.timestamp).toBe(9000);
+});

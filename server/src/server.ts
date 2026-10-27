@@ -884,7 +884,7 @@ export class LvtianServer {
             return;
         }
 
-        // 广播助理消息占位（思考中）
+        // 广播助理消息占位（思考中），并带上服务端创建时刻，客户端不另用设备时钟
         this.broadcastSession(sessionId, {
             type: 'event_chunk',
             seq: asstMsg.seq,
@@ -892,6 +892,7 @@ export class LvtianServer {
             messageId: assistantMessageId,
             delta: '',
             status: 'thinking',
+            timestamp: asstMsg.timestamp,
         });
 
         // 设置会话状态为 processing 并向所有连接广播，确保移动端稳定维持执行态

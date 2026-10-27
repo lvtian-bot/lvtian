@@ -133,6 +133,8 @@ export type ServerMessage =
           delta?: string;
           toolCall?: ToolCallState;
           status?: 'thinking' | 'running_tool' | 'done' | 'error';
+          /** 服务端创建该条助手消息的时刻，客户端据此建消息，避免设备时钟把回答排到提问之前 */
+          timestamp?: number;
       }
     | {
           type: 'approval_request';

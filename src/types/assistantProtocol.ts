@@ -140,6 +140,8 @@ export type ServerMessage =
           content?: string;
           toolCall?: ToolCallState;
           status?: 'thinking' | 'running_tool' | 'done' | 'error';
+          /** 服务端创建该条助手消息的时刻，客户端据此建消息，不依赖设备时钟 */
+          timestamp?: number;
       }
     | {
           type: 'approval_request';

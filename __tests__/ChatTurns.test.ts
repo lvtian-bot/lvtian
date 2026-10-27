@@ -143,4 +143,27 @@ describe('工作记录按轮聚合', () => {
         expect(groups[1].data.map((turn) => turn.id)).toEqual(['b']);
         expect(groups[0].date).toBe(new Date(2026, 9, 27).getTime());
     });
+
+    test('跨午夜时同一天只生成一个分段，不出现今天、昨天、今天的重复', () => {
+        const today = new Date(2026, 9, 27, 9, 0, 0).getTime();
+        const yesterday = new Date(2026, 9, 26, 23, 30, 0).getTime();
+        const groups = groupTurnsByDay([
+            { id: 'u3', question: '', answer: '', title: '今早的请求', summary: '', tools: [], startedAt: today, completedAt: today, status: 'done' },
+            { id: 'u2', question: '', answer: '', title: '昨晚排队的请求', summary: '', tools: [], startedAt: yesterday, completedAt: yesterday, status: 'done' },
+            { id: 'u1', question: '', answer: '', title: '昨晚开始今天完成', summary: '', tools: [], startedAt: yesterday, completedAt: today, status: 'done' },
+        ]);
+        expect(groups.map((group) => group.key)).toEqual([String(new Date(2026, 9, 27).getTime()), String(new Date(2026, 9, 26).getTime())]);
+        expect(groups[0].data.map((turn) => turn.id)).toEqual(['u3', 'u1']);
+        expect(groups[1].data.map((turn) => turn.id)).toEqual(['u2']);
+    });
+
+    test('分段按日期倒序，不受轮次开始顺序影响', () => {
+        const today = new Date(2026, 9, 27, 9, 0, 0).getTime();
+        const yesterday = new Date(2026, 9, 26, 23, 0, 0).getTime();
+        const groups = groupTurnsByDay([
+            { id: 'y', question: '', answer: '', title: '昨天', summary: '', tools: [], startedAt: yesterday, completedAt: yesterday, status: 'done' },
+            { id: 't', question: '', answer: '', title: '今天', summary: '', tools: [], startedAt: today, completedAt: today, status: 'done' },
+        ]);
+        expect(groups.map((group) => group.data.map((turn) => turn.id))).toEqual([['t'], ['y']]);
+    });
 });

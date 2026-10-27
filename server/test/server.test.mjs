@@ -848,6 +848,8 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
 
     const placeholderIdx = received.findIndex((m) => m.type === 'event_chunk' && m.delta === '');
     assert.ok(placeholderIdx >= 0, '应广播助理占位 event_chunk');
+    const placeholder = received[placeholderIdx];
+    assert.equal(typeof placeholder.timestamp, 'number', '助理占位事件必须携带服务端创建时间');
     const firstDelta = await waitForMsg(received, (m) => m.type === 'event_chunk' && m.delta === 'chunk-1', '首个增量');
     assert.ok(received.indexOf(firstDelta) > placeholderIdx, '流式增量应在占位之后');
 
@@ -863,6 +865,7 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
     const asstMsg = session.messages.find((m) => m.id.startsWith('asst-'));
     assert.equal(asstMsg.status, 'done');
     assert.equal(asstMsg.content, 'chunk-1chunk-2');
+    assert.equal(placeholder.timestamp, asstMsg.timestamp, '占位事件时间应与服务端落库时间一致');
     assert.ok(typeof asstMsg.completedAt === 'number' && asstMsg.completedAt > 0, '助理消息应持久化 completedAt 时间戳');
     assert.equal(asstMsg.completedAt, done.completedAt, '持久化 completedAt 应与终态广播一致');
     assert.ok(sessionManager.getDshSessionId('main'), '引擎侧会话绑定应持久化');

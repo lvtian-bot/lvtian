@@ -110,18 +110,25 @@ export function buildChatTurns(messages: AssistantMessage[]): ChatTurn[] {
 /** 按本地日历日分组；标题由界面按当前语言生成。 */
 export function groupTurnsByDay(turns: ChatTurn[]): TurnDayGroup[] {
     const groups: TurnDayGroup[] = [];
+    const byKey = new Map<string, TurnDayGroup>();
 
     for (const turn of turns) {
         const date = new Date(turn.completedAt);
         if (Number.isNaN(date.getTime())) continue;
         const start = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
         const key = String(start);
-        let group = groups[groups.length - 1];
-        if (!group || group.key !== key) {
+        // 跨午夜的轮次完成顺序可能与开始顺序不同，同一天可能在中途再次出现，
+        // 因此按日期查表合并，不能只与上一个分段比较。
+        let group = byKey.get(key);
+        if (!group) {
             group = { key, date: start, data: [] };
+            byKey.set(key, group);
             groups.push(group);
         }
         group.data.push(turn);
     }
+    // 轮次按开始时间倒序，完成日期未必同步倒序；分段顺序以日期为准，
+    // 避免夜里排队的轮次把昨天的分段排到今天之前。
+    groups.sort((a, b) => b.date - a.date);
     return groups;
 }
