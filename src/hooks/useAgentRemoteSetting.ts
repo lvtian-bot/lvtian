@@ -78,7 +78,10 @@ export function useAgentRemoteSetting<T>(definition: RemoteSettingDefinition<T>)
     const lastLocalSwitchAtRef = useRef(0);
     const switchingRef = useRef(false);
 
-    const { fetchRemote, applyRemote, texts, isSameValue, writeLocal } = definition;
+    // definition 常含每次渲染重建的内联回调；经 latest-ref 读取，使 refresh/applyNow
+    // 引用稳定，核对 effect 只随连接与凭据变化触发，绝不因渲染或响应写入而重跑
+    const definitionRef = useRef(definition);
+    definitionRef.current = definition;
 
     const refresh = useCallback(() => {
         const url = useAssistantStore.getState().serverUrl;
@@ -87,13 +90,14 @@ export function useAgentRemoteSetting<T>(definition: RemoteSettingDefinition<T>)
             return;
         }
         const requestedAt = Date.now();
-        fetchRemote(url, token).then((remote) => {
+        const def = definitionRef.current;
+        def.fetchRemote(url, token).then((remote) => {
             if (remote !== null && requestedAt >= lastLocalSwitchAtRef.current) {
                 setValue(remote);
-                writeLocal(remote);
+                def.writeLocal(remote);
             }
         });
-    }, [fetchRemote, writeLocal]);
+    }, []);
 
     const isConnected = connectionState === 'connected';
     useEffect(() => {
@@ -104,67 +108,69 @@ export function useAgentRemoteSetting<T>(definition: RemoteSettingDefinition<T>)
 
     const applyNow = useCallback(
         async (url: string, token: string, target: T) => {
+            const def = definitionRef.current;
             setSwitching(true);
             switchingRef.current = true;
             try {
-                const res = await applyRemote(url, token, target);
+                const res = await def.applyRemote(url, token, target);
                 if (res.success) {
                     lastLocalSwitchAtRef.current = Date.now();
                     setValue(target);
-                    writeLocal(target);
-                    Alert.alert(texts.successTitle, texts.applySuccess);
+                    def.writeLocal(target);
+                    Alert.alert(def.texts.successTitle, def.texts.applySuccess);
                     return;
                 }
                 if (res.code === 'REQUEST_UNCONFIRMED') {
                     // 超时中止：服务端可能已写入，重查核对实际生效值并对齐
-                    const remote = await fetchRemote(url, token);
+                    const remote = await def.fetchRemote(url, token);
                     if (remote !== null) {
                         setValue(remote);
-                        writeLocal(remote);
-                        if (isSameValue(remote, target)) {
+                        def.writeLocal(remote);
+                        if (def.isSameValue(remote, target)) {
                             lastLocalSwitchAtRef.current = Date.now();
-                            Alert.alert(texts.successTitle, texts.applySuccess);
+                            Alert.alert(def.texts.successTitle, def.texts.applySuccess);
                         } else {
-                            Alert.alert(texts.noticeTitle, texts.applySettledDifferent(texts.valueLabel(remote)));
+                            Alert.alert(def.texts.noticeTitle, def.texts.applySettledDifferent(def.texts.valueLabel(remote)));
                         }
                     } else {
-                        Alert.alert(texts.noticeTitle, texts.applyUnconfirmed);
+                        Alert.alert(def.texts.noticeTitle, def.texts.applyUnconfirmed);
                     }
                     return;
                 }
                 Alert.alert(
-                    texts.noticeTitle,
-                    res.code === 'TASK_RUNNING' ? texts.taskRunning : texts.applyFailed
+                    def.texts.noticeTitle,
+                    res.code === 'TASK_RUNNING' ? def.texts.taskRunning : def.texts.applyFailed
                 );
             } catch {
-                Alert.alert(texts.noticeTitle, texts.applyFailed);
+                Alert.alert(def.texts.noticeTitle, def.texts.applyFailed);
             } finally {
                 setSwitching(false);
                 switchingRef.current = false;
             }
         },
-        [applyRemote, fetchRemote, isSameValue, texts, writeLocal]
+        []
     );
 
     const switchTo = useCallback(
         (target: T) => {
+            const def = definitionRef.current;
             const { serverUrl: url, serverToken: token, taskState: task } = useAssistantStore.getState();
             if (!url || !token) {
-                Alert.alert(texts.noticeTitle, texts.unconfiguredNotice);
+                Alert.alert(def.texts.noticeTitle, def.texts.unconfiguredNotice);
                 return;
             }
             if (switchingRef.current) {
                 return;
             }
             if (task === 'processing' || task === 'awaiting_approval') {
-                Alert.alert('', texts.taskRunning);
+                Alert.alert(def.texts.noticeTitle, def.texts.taskRunning);
                 return;
             }
-            if (value !== null && isSameValue(value, target)) {
+            if (value !== null && def.isSameValue(value, target)) {
                 return;
             }
 
-            const confirm = definition.confirmBeforeApply?.(target) ?? null;
+            const confirm = def.confirmBeforeApply?.(target) ?? null;
             if (confirm) {
                 Alert.alert(confirm.title, confirm.content, [
                     { text: confirm.cancelText, style: 'cancel' },
@@ -174,7 +180,7 @@ export function useAgentRemoteSetting<T>(definition: RemoteSettingDefinition<T>)
                 applyNow(url, token, target);
             }
         },
-        [applyNow, definition, isSameValue, texts, value]
+        [applyNow, value]
     );
 
     return { value, switching, refresh, switchTo };
