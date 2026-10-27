@@ -48,7 +48,8 @@ export const AgentConfigScreen = () => {
     );
     const [modelOptions, setModelOptions] = useState<AgentModelOption[]>([]);
     const [switchingModel, setSwitchingModel] = useState(false);
-    const hasUserSelectedModelRef = useRef(false);
+    /** 用户最近一次本地切换模型的时刻：仅用于丢弃在此之前发起的过期查询结果 */
+    const lastModelSwitchAtRef = useRef(0);
 
     useEffect(() => {
         if (permissionMode && !hasUserSelectedRef.current) {
@@ -67,14 +68,16 @@ export const AgentConfigScreen = () => {
     /**
      * 拉取服务端模型选项与当前选择。
      * 依赖连接状态：断网或首次查询失败时卡片停留加载态，连接恢复后自动重查；
-     * 加载行亦可点击手动重试。用户手动切换过模型后不再自动覆盖本地选择。
+     * 加载行亦可点击手动重试。仅丢弃在用户本地切换之前发起的过期查询结果，
+     * 其后发起的重连查询始终如实反映服务端状态（含其他客户端的修改）。
      */
     const loadModelSelection = useCallback(() => {
         if (!serverUrl || !serverToken) {
             return;
         }
+        const requestedAt = Date.now();
         AssistantClient.fetchModelSelection(serverUrl, serverToken).then((data) => {
-            if (data && !hasUserSelectedModelRef.current) {
+            if (data && requestedAt >= lastModelSwitchAtRef.current) {
                 setModelOptions(data.options);
                 const selection = { provider: data.provider, model: data.model };
                 setSelectedModel(selection);
@@ -129,7 +132,7 @@ export const AgentConfigScreen = () => {
             const res = await AssistantClient.updateModelSelection(serverUrl, serverToken, option.provider, option.model);
             if (res.success) {
                 setSwitchingModel(false);
-                hasUserSelectedModelRef.current = true;
+                lastModelSwitchAtRef.current = Date.now();
                 setSelectedModel(option);
                 setAgentModelSelection(option);
                 Alert.alert(
@@ -149,7 +152,7 @@ export const AgentConfigScreen = () => {
                     setSelectedModel(actual);
                     setAgentModelSelection(actual);
                     if (actual.provider === option.provider && actual.model === option.model) {
-                        hasUserSelectedModelRef.current = true;
+                        lastModelSwitchAtRef.current = Date.now();
                         Alert.alert(
                             t('settings.success', { defaultValue: '成功' }),
                             t('assistant.modelSwitchSuccess', { defaultValue: '模型已切换，新会话即刻生效' })
