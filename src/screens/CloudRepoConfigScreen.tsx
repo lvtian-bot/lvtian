@@ -1,31 +1,52 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { useTranslation } from 'react-i18next';
-import { useSettingsStore } from '../store/useSettingsStore';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../utils/theme';
+import { useSettingsStore } from '../store/useSettingsStore';
 import { WebDavProvider } from '../services/WebDavProvider';
 import { cloudService } from '../services/CloudService';
 import { syncService } from '../services/SyncService';
-import Icon from '@expo/vector-icons/MaterialCommunityIcons';
+import {
+    SettingsFieldInput,
+    SettingsGroup,
+    SettingsGroupLabel,
+    SettingsPrimaryButton,
+    SettingsRow,
+    SettingsSheet,
+    SettingsStatusCard,
+    SettingsToast,
+    useSettingsToast,
+} from '../components/settings';
+
+interface SheetError {
+    message: string;
+}
 
 export const CloudRepoConfigScreen = () => {
     const { t } = useTranslation();
     const { webDavConfig, setWebDavConfig, setCloudProvider, cloudProvider } = useSettingsStore();
+    const { toast, showToast } = useSettingsToast();
 
-    // WebDAV State
     const [server, setServer] = useState(webDavConfig.server);
     const [username, setUsername] = useState(webDavConfig.username);
     const [password, setPassword] = useState('');
-    const [showWebDavPassword, setShowWebDavPassword] = useState(false);
+    const [hasStoredPassword, setHasStoredPassword] = useState(false);
+    const [sheetOpen, setSheetOpen] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [sheetError, setSheetError] = useState<SheetError | null>(null);
 
-    const [isLoading, setIsLoading] = useState(false);
+    const isConfigured = cloudProvider === 'webdav' && Boolean(webDavConfig.server);
 
     useEffect(() => {
         const loadCredentials = async () => {
             try {
                 const storedPassword = await SecureStore.getItemAsync('WEBDAV_PASSWORD');
-                if (storedPassword) setPassword(storedPassword);
+                if (storedPassword) {
+                    setPassword(storedPassword);
+                    setHasStoredPassword(true);
+                }
             } catch (error) {
                 console.error('Failed to load credentials', error);
             }
@@ -33,152 +54,187 @@ export const CloudRepoConfigScreen = () => {
         loadCredentials();
     }, []);
 
-    const handleSave = async () => {
-        setIsLoading(true);
-        let needsConfirmation = false;
+    const openSheet = () => {
+        setSheetError(null);
+        setSheetOpen(true);
+    };
 
+    const performSave = async () => {
+        await SecureStore.setItemAsync('WEBDAV_PASSWORD', password);
+        setHasStoredPassword(true);
+        setWebDavConfig({ server, username });
+        setCloudProvider('webdav');
+        await cloudService.initProvider();
+        showToast(t('settings.cloudSaveSuccess', '已验证连接并保存，云端同步正常'));
+        setSheetOpen(false);
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+        setSheetError(null);
         try {
             if (!server || !username || !password) {
-                Alert.alert(t('settings.failure'), t('settings.error.notEmpty'));
+                setSheetError({ message: t('settings.error.notEmpty') });
                 return;
             }
 
-            // Verify WebDAV connection
+            // 验证 WebDAV 连接
             const testProvider = new WebDavProvider({ server, username, password });
             await testProvider.listFiles('');
 
-            // Check if server changed while previously configured
+            // 服务器地址变化且此前已配置：切换仓库需清空本地缓存
             const isRepoChanged = cloudProvider === 'webdav' && server !== webDavConfig.server;
-            needsConfirmation = isRepoChanged;
-
-            const performSave = async () => {
-                await SecureStore.setItemAsync('WEBDAV_PASSWORD', password);
-                setWebDavConfig({ server, username });
-                setCloudProvider('webdav');
-
-                // Sync with CloudService (Re-init)
-                await cloudService.initProvider();
-
-                Alert.alert(t('settings.success'), t('settings.success'));
-            };
-
-            if (needsConfirmation) {
-                Alert.alert(
-                    t('settings.warning'),
-                    t('settings.switchCloudWarning'),
-                    [
-                        { text: t('common.cancel'), style: 'cancel', onPress: () => { } },
-                        {
-                            text: t('common.confirm'),
-                            style: 'destructive',
-                            onPress: async () => {
-                                setIsLoading(true);
-                                try {
-                                    await syncService.clearCache({ includeUnsynced: true });
-                                    await performSave();
-                                } catch (e) {
-                                    console.error('Failed during destructive save:', e);
-                                    Alert.alert(t('common.error'), 'Failed to switch service');
-                                } finally {
-                                    setIsLoading(false);
-                                }
+            if (isRepoChanged) {
+                Alert.alert(t('settings.warning', '警告'), t('settings.switchCloudWarning'), [
+                    {
+                        text: t('common.cancel'),
+                        style: 'cancel',
+                        onPress: () => { },
+                    },
+                    {
+                        text: t('common.confirm'),
+                        style: 'destructive',
+                        onPress: async () => {
+                            setSaving(true);
+                            try {
+                                await syncService.clearCache({ includeUnsynced: true });
+                                await performSave();
+                            } catch (e) {
+                                console.error('Failed during destructive save:', e);
+                                setSheetError({ message: t('settings.switchFailed', '切换云服务失败') });
+                            } finally {
+                                setSaving(false);
                             }
-                        }
-                    ]
-                );
+                        },
+                    },
+                ]);
                 return;
             }
 
             await performSave();
-
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error('Failed to save settings:', error);
+            const err = error as { message?: string; code?: string };
             let errorMessage = t('settings.error.validation');
-
-            if (error?.message?.includes('401')) errorMessage = t('settings.error.auth');
-            else if (error?.code === 'NetworkError' || error?.message?.includes('Network request failed')) errorMessage = t('settings.error.network');
-            else if (error?.message) errorMessage = error.message;
-
-            Alert.alert(t('settings.failure'), errorMessage);
+            if (err?.message?.includes('401')) errorMessage = t('settings.error.auth');
+            else if (err?.code === 'NetworkError' || err?.message?.includes('Network request failed')) {
+                errorMessage = t('settings.error.network');
+            } else if (err?.message) errorMessage = err.message;
+            setSheetError({ message: errorMessage });
         } finally {
-            if (!needsConfirmation) {
-                setIsLoading(false);
-            }
+            setSaving(false);
         }
     };
 
-    const renderInput = (
-        label: string,
-        value: string,
-        onChangeText: (text: string) => void,
-        placeholder: string,
-        iconName: any,
-        isPassword = false,
-        showPassword = false,
-        togglePassword?: () => void
-    ) => (
-        <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>{label}</Text>
-            <View style={styles.inputWrapper}>
-                <Icon name={iconName} size={20} color={theme.colors.textSecondary} style={styles.inputIcon} />
-                <TextInput
-                    style={styles.input}
-                    value={value}
-                    onChangeText={onChangeText}
-                    placeholder={placeholder}
-                    placeholderTextColor={theme.colors.textSecondary}
-                    secureTextEntry={isPassword && !showPassword}
-                    autoCapitalize="none"
-                />
-                {isPassword && togglePassword && (
-                    <TouchableOpacity onPress={togglePassword} style={styles.eyeIcon}>
-                        <Icon name={showPassword ? 'eye-off' : 'eye'} size={20} color={theme.colors.textSecondary} />
-                    </TouchableOpacity>
-                )}
-            </View>
-        </View>
-    );
+    const displayServer = webDavConfig.server
+        ? webDavConfig.server.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        : '';
 
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-                <View style={styles.card}>
-                    <View style={styles.infoBox}>
-                        <Icon name="information-outline" size={20} color={theme.colors.primary} style={styles.infoIcon} />
-                        <Text style={styles.infoText}>{t('settings.cloudProvider.webdav.recommendNutstore')}</Text>
-                    </View>
-                    <Text style={styles.cardTitle}>{t('settings.cloudProvider.webdav.configTitle')}</Text>
-                    {renderInput(t('settings.cloudProvider.webdav.serverAddress'), server, setServer, 'https://dav.jianguoyun.com/dav/', 'web')}
-                    {renderInput(t('settings.cloudProvider.webdav.username'), username, setUsername, 'email@example.com', 'account')}
-                    {renderInput(t('settings.cloudProvider.webdav.password'), password, setPassword, 'App Password', 'lock', true, showWebDavPassword, () => setShowWebDavPassword(!showWebDavPassword))}
+        <View style={styles.container}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                <SettingsStatusCard
+                    tone={isConfigured ? 'success' : 'muted'}
+                    title={
+                        isConfigured
+                            ? t('settings.cloudStatusConnected', 'WebDAV · 已连接')
+                            : t('settings.cloudStatusUnconfigured', 'WebDAV · 未配置')
+                    }
+                    subtitle={
+                        isConfigured && displayServer
+                            ? `${displayServer} · ${webDavConfig.username}`
+                            : t('settings.cloudStatusUnconfiguredDesc', '尚未配置云端同步服务')
+                    }
+                    badge={isConfigured ? t('settings.cloudBadgeOk', '同步正常') : t('settings.cloudBadgeNone', '未配置')}
+                />
+
+                <View style={styles.hint}>
+                    <MaterialCommunityIcons name="information-outline" size={14} color="#2563EB" />
+                    <Text style={styles.hintText}>
+                        {t('settings.cloudProvider.webdav.recommendNutstore')}
+                    </Text>
                 </View>
 
-                <TouchableOpacity
-                    style={[styles.saveButton, isLoading && styles.saveButtonDisabled]}
-                    onPress={handleSave}
-                    disabled={isLoading}
-                    activeOpacity={0.8}
-                >
-                    {isLoading ? (
-                        <ActivityIndicator color={theme.colors.white} />
-                    ) : (
-                        <>
-                            <Icon name="check-circle-outline" size={20} color={theme.colors.white} style={styles.saveIcon} />
-                            <Text style={styles.saveButtonText}>
-                                {t('settings.save')} WebDAV
-                            </Text>
-                        </>
-                    )}
-                </TouchableOpacity>
+                <SettingsGroupLabel>{t('settings.connectionGroup', '连接信息')}</SettingsGroupLabel>
+                <SettingsGroup>
+                    <SettingsRow
+                        icon="link-variant"
+                        title={t('settings.cloudProvider.webdav.serverAddress')}
+                        value={displayServer || t('assistant.valueNotSet', '未设置')}
+                        onPress={openSheet}
+                    />
+                    <SettingsRow
+                        icon="account"
+                        title={t('settings.cloudProvider.webdav.username')}
+                        value={webDavConfig.username || t('assistant.valueNotSet', '未设置')}
+                        onPress={openSheet}
+                    />
+                    <SettingsRow
+                        icon="lock"
+                        title={t('settings.cloudProvider.webdav.password')}
+                        value={
+                            hasStoredPassword
+                                ? t('assistant.valueSet', '已设置')
+                                : t('assistant.valueNotSet', '未设置')
+                        }
+                        onPress={openSheet}
+                        last
+                    />
+                </SettingsGroup>
 
-                <Text style={styles.helpText}>
+                <Text style={styles.note}>
                     {t('settings.cloudProvider.webdav.helpText')}
+                    {isConfigured
+                        ? '\n' + t('settings.cloudSwitchNote', '更换服务器地址将清空本地缓存并重新全量同步，操作前会再次确认。')
+                        : ''}
                 </Text>
             </ScrollView>
-        </KeyboardAvoidingView>
+
+            <SettingsSheet
+                visible={sheetOpen}
+                title={t('settings.connectionGroup', '连接信息')}
+                onClose={() => setSheetOpen(false)}
+                dismissable={!saving}
+            >
+                <SettingsFieldInput
+                    label={t('settings.cloudProvider.webdav.serverAddress')}
+                    value={server}
+                    onChangeText={setServer}
+                    placeholder="https://dav.jianguoyun.com/dav/"
+                />
+                <SettingsFieldInput
+                    label={t('settings.cloudProvider.webdav.username')}
+                    value={username}
+                    onChangeText={setUsername}
+                    placeholder="email@example.com"
+                />
+                <SettingsFieldInput
+                    label={t('settings.cloudProvider.webdav.password')}
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="App Password"
+                    secure
+                />
+                {sheetError ? (
+                    <View style={styles.errorBox}>
+                        <MaterialCommunityIcons
+                            name="close-circle"
+                            size={16}
+                            color={theme.colors.dangerText}
+                        />
+                        <Text style={styles.errorText}>{sheetError.message}</Text>
+                    </View>
+                ) : null}
+                <SettingsPrimaryButton
+                    label={t('settings.saveAndValidate')}
+                    icon="shield-check-outline"
+                    onPress={handleSave}
+                    loading={saving}
+                />
+            </SettingsSheet>
+
+            <SettingsToast message={toast} />
+        </View>
     );
 };
 
@@ -187,99 +243,45 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: theme.colors.background,
     },
-    scrollContent: {
+    content: {
         padding: 16,
     },
-    card: {
-        backgroundColor: theme.colors.surface,
+    hint: {
+        flexDirection: 'row',
+        gap: 8,
+        alignItems: 'flex-start',
+        backgroundColor: theme.colors.primaryLight,
         borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-        elevation: 2,
+        padding: 10,
+        marginBottom: 4,
     },
-    cardTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: theme.colors.text,
-        marginBottom: 16,
-    },
-    inputContainer: {
-        marginBottom: 16,
-    },
-    inputLabel: {
-        fontSize: 14,
-        color: theme.colors.textSecondary,
-        marginBottom: 8,
-    },
-    inputWrapper: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: theme.colors.background,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#e0e0e0',
-        paddingHorizontal: 12,
-    },
-    inputIcon: {
-        marginRight: 8,
-    },
-    input: {
+    hintText: {
         flex: 1,
-        height: 48,
-        fontSize: 15,
-        color: theme.colors.text,
+        fontSize: 12,
+        color: '#2563EB',
+        lineHeight: 18,
     },
-    eyeIcon: {
-        padding: 8,
-    },
-    saveButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: theme.colors.primary,
-        height: 48,
-        borderRadius: 8,
-        marginTop: 8,
-        marginBottom: 16,
-        elevation: 2,
-    },
-    saveButtonDisabled: {
-        opacity: 0.6,
-    },
-    saveIcon: {
-        marginRight: 8,
-    },
-    saveButtonText: {
-        color: theme.colors.white,
-        fontSize: 16,
-        fontWeight: 'bold',
-    },
-    helpText: {
-        fontSize: 13,
-        color: theme.colors.textSecondary,
+    note: {
+        fontSize: 12,
+        color: '#9AA3B2',
         lineHeight: 18,
         textAlign: 'center',
-        paddingHorizontal: 8,
+        marginTop: 14,
+        marginHorizontal: 8,
     },
-    infoBox: {
+    errorBox: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#e3f2fd',
-        padding: 12,
-        borderRadius: 8,
-        marginBottom: 16,
+        gap: 6,
+        marginHorizontal: 20,
+        marginTop: 12,
+        padding: 10,
+        borderRadius: 10,
+        backgroundColor: theme.colors.dangerBg,
     },
-    infoIcon: {
-        marginRight: 8,
-    },
-    infoText: {
+    errorText: {
         flex: 1,
-        fontSize: 13,
-        color: '#0d47a1',
-        lineHeight: 18,
+        fontSize: 12,
+        color: theme.colors.dangerText,
     },
 });

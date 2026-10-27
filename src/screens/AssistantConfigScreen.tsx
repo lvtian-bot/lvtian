@@ -1,39 +1,41 @@
-import React, { useState, useEffect } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    TextInput,
-    TouchableOpacity,
-    Alert,
-    ActivityIndicator,
-    ScrollView,
-    KeyboardAvoidingView,
-    Platform,
-} from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
-import Icon from '@expo/vector-icons/MaterialIcons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../utils/theme';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
-import { RootStackParamList } from '../types/navigation';
+import {
+    SettingsFieldInput,
+    SettingsGroup,
+    SettingsGroupLabel,
+    SettingsPrimaryButton,
+    SettingsRow,
+    SettingsSheet,
+    SettingsStatusCard,
+    SettingsToast,
+    useSettingsToast,
+} from '../components/settings';
 
-type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+interface TestResult {
+    success: boolean;
+    message: string;
+}
 
 export const AssistantConfigScreen = () => {
     const { t } = useTranslation();
-    const navigation = useNavigation<NavigationProp>();
-    const { serverUrl, serverToken, setServerConfig, connectionState } = useAssistantStore();
+    const { serverUrl, serverToken, connectionState, setServerConfig } = useAssistantStore();
+    const { toast, showToast } = useSettingsToast();
+
+    const isConnected = connectionState === 'connected';
+    const isConnecting = connectionState === 'connecting' || connectionState === 'reconnecting';
 
     const [url, setUrl] = useState(serverUrl);
     const [token, setToken] = useState(serverToken);
-    const [showToken, setShowToken] = useState(false);
+    const [sheetOpen, setSheetOpen] = useState(false);
     const [testing, setTesting] = useState(false);
-    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-    const [saving, setSaving] = useState(false);
+    const [testResult, setTestResult] = useState<TestResult | null>(null);
 
     // 凭据同步：只在 store 中的 serverUrl / serverToken 变更时初始化表单
     useEffect(() => {
@@ -45,7 +47,7 @@ export const AssistantConfigScreen = () => {
         try {
             const text = await Clipboard.getStringAsync();
             if (!text.trim()) {
-                Alert.alert(t('settings.notice', '提示'), t('assistant.clipboardEmpty', '剪贴板内容为空'));
+                showToast(t('assistant.clipboardEmpty', '剪贴板内容为空'));
                 return;
             }
             const parsed = AssistantClient.parseConnectionUrl(text);
@@ -56,15 +58,25 @@ export const AssistantConfigScreen = () => {
                 setToken(parsed.token);
             }
             setTestResult(null);
-            Alert.alert(t('settings.success', '成功'), t('assistant.clipboardExtracted', '已从剪贴板自动提取服务配置'));
-        } catch (_err) {
-            Alert.alert(t('settings.failure', '失败'), t('assistant.clipboardFail', '读取剪贴板失败'));
+            setSheetOpen(true);
+            showToast(t('assistant.clipboardExtracted', '已从剪贴板自动提取服务配置'));
+        } catch {
+            showToast(t('assistant.clipboardFail', '读取剪贴板失败'));
         }
     };
 
-    const handleTestConnection = async () => {
+    const openSheet = () => {
+        setTestResult(null);
+        setSheetOpen(true);
+    };
+
+    const handleTestAndSave = async () => {
         if (!url.trim()) {
-            Alert.alert(t('settings.failure', '失败'), t('assistant.urlRequired', '服务地址不能为空'));
+            setTestResult({ success: false, message: t('assistant.urlRequired', '服务地址不能为空') });
+            return;
+        }
+        if (!token.trim()) {
+            setTestResult({ success: false, message: t('assistant.tokenRequired', '访问令牌（Token）不能为空') });
             return;
         }
 
@@ -72,190 +84,148 @@ export const AssistantConfigScreen = () => {
         setTestResult(null);
 
         const res = await AssistantClient.testConnection(url, token);
-        setTesting(false);
-        setTestResult({
-            success: res.success,
-            message: res.message + (res.version ? ` (v${res.version})` : ''),
-        });
-    };
-
-    const handleSave = async () => {
-        if (!url.trim()) {
-            Alert.alert(t('settings.failure', '失败'), t('assistant.urlRequired', '服务地址不能为空'));
-            return;
-        }
-        if (!token.trim()) {
-            Alert.alert(t('settings.failure', '失败'), t('assistant.tokenRequired', '访问令牌（Token）不能为空'));
+        if (!res.success) {
+            setTesting(false);
+            setTestResult({
+                success: false,
+                message: res.message,
+            });
             return;
         }
 
-        setSaving(true);
         try {
             await setServerConfig(url, token);
             AssistantClient.getInstance().connect(true);
-            setSaving(false);
-            Alert.alert(t('settings.success', '成功'), t('assistant.saveSuccess', '配置已保存并开始连接'), [
-                {
-                    text: t('common.confirm', '确定'),
-                    onPress: () => navigation.goBack(),
-                },
-            ]);
+            setTesting(false);
+            setTestResult({
+                success: true,
+                message: res.message + (res.version ? ` (v${res.version})` : ''),
+            });
+            showToast(t('assistant.testAndSaveSuccess', '连接测试成功，配置已保存'));
+            setSheetOpen(false);
         } catch (err: unknown) {
-            setSaving(false);
+            setTesting(false);
             const msg = err instanceof Error ? err.message : String(err);
-            Alert.alert(t('settings.failure', '失败'), `${t('assistant.saveFailed', '保存配置失败')}: ${msg}`);
+            setTestResult({ success: false, message: `${t('assistant.saveFailed', '保存配置失败')}: ${msg}` });
         }
     };
 
-    return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-            <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled">
-                <View style={styles.headerCard}>
-                    <Icon name="dns" size={32} color={theme.colors.primary} />
-                    <View style={styles.headerTextWrap}>
-                        <Text style={styles.headerTitle}>{t('settings.serverConfig', '服务端连接配置')}</Text>
-                        <Text style={styles.headerDesc}>
-                            {t('settings.serverSubtitle', '配置运行在您的电脑或 VPS 上的独立服务端地址与访问令牌')}
-                        </Text>
-                    </View>
-                </View>
+    const displayHost = serverUrl ? serverUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') : '';
+    const statusTitle = isConnected
+        ? t('assistant.serverOnline', '服务端在线')
+        : t('assistant.serverOffline', '服务端未连接');
+    const statusBadge = isConnected
+        ? t('assistant.badgeConnected', '已连接')
+        : isConnecting
+        ? t('assistant.badgeConnecting', '连接中')
+        : t('assistant.badgeDisconnected', '未连接');
 
-                {/* 快捷一键导入按钮 */}
+    return (
+        <View style={styles.container}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                <SettingsStatusCard
+                    tone={isConnected ? 'success' : 'muted'}
+                    title={statusTitle}
+                    subtitle={displayHost || t('assistant.serverNotSet', '未配置服务地址')}
+                    badge={statusBadge}
+                />
+
                 <TouchableOpacity
-                    style={styles.clipboardBtn}
+                    style={styles.pasteBar}
                     onPress={handlePasteFromClipboard}
                     activeOpacity={0.7}
                 >
-                    <Icon name="content-paste" size={20} color={theme.colors.primary} />
-                    <Text style={styles.clipboardBtnText}>{t('assistant.pasteConfig', '一键粘贴完整配置链接')}</Text>
+                    <MaterialCommunityIcons
+                        name="content-paste"
+                        size={16}
+                        color={theme.colors.successText}
+                    />
+                    <Text style={styles.pasteBarText}>
+                        {t('assistant.pasteConfigBar', '一键粘贴服务端配置链接')}
+                    </Text>
                 </TouchableOpacity>
 
-                {/* 表单项 */}
-                <View style={styles.formCard}>
-                    <Text style={styles.label}>{t('assistant.serverUrl', '服务地址 (URL)')}</Text>
-                    <TextInput
-                        style={styles.input}
-                        placeholder={t('assistant.serverUrlPlaceholder', '例如 https://agent.example.com 或内网地址')}
-                        placeholderTextColor={theme.colors.textSecondary}
-                        value={url}
-                        onChangeText={(val) => {
-                            setUrl(val);
-                            setTestResult(null);
-                        }}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        keyboardType="url"
+                <SettingsGroupLabel>{t('assistant.serverGroup', '服务端')}</SettingsGroupLabel>
+                <SettingsGroup>
+                    <SettingsRow
+                        icon="dns"
+                        title={t('assistant.serverUrlRow', '服务地址')}
+                        value={displayHost || t('assistant.valueNotSet', '未设置')}
+                        onPress={openSheet}
                     />
-                    <Text style={styles.hint}>
-                        {t('assistant.serverUrlHint', '支持局域网 IP、Tailscale 虚拟内网或公网反代域名')}
-                    </Text>
+                    <SettingsRow
+                        icon="key"
+                        title={t('assistant.tokenRow', '访问令牌')}
+                        value={serverToken ? t('assistant.valueSet', '已设置') : t('assistant.valueNotSet', '未设置')}
+                        onPress={openSheet}
+                        last
+                    />
+                </SettingsGroup>
 
-                    <Text style={[styles.label, styles.tokenLabel]}>{t('assistant.token', '访问令牌 (Token)')}</Text>
-                    <View style={styles.tokenInputWrap}>
-                        <TextInput
-                            style={[styles.input, styles.tokenInput]}
-                            placeholder={t('assistant.tokenPlaceholder', '服务端生成的 32 位访问令牌')}
-                            placeholderTextColor={theme.colors.textSecondary}
-                            value={token}
-                            onChangeText={(val) => {
-                                setToken(val);
-                                setTestResult(null);
-                            }}
-                            secureTextEntry={!showToken}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
-                        <TouchableOpacity
-                            style={styles.eyeBtn}
-                            onPress={() => setShowToken(!showToken)}
-                        >
-                            <Icon
-                                name={showToken ? 'visibility-off' : 'visibility'}
-                                size={22}
-                                color={theme.colors.textSecondary}
-                            />
-                        </TouchableOpacity>
-                    </View>
-                    <Text style={styles.hint}>
-                        {t('assistant.tokenHint', '令牌将加密保存在手机安全存储（SecureStore）中')}
-                    </Text>
-                </View>
+                <Text style={styles.note}>
+                    {t('assistant.serverFooterNote', '令牌加密保存在手机安全存储（SecureStore）中，支持局域网 IP、Tailscale 虚拟内网或公网反代域名。')}
+                </Text>
+            </ScrollView>
 
-                {/* 测试结果提示 */}
-                {testResult && (
+            <SettingsSheet
+                visible={sheetOpen}
+                title={t('settings.serverConfig', '服务端连接')}
+                onClose={() => setSheetOpen(false)}
+                dismissable={!testing}
+            >
+                <SettingsFieldInput
+                    label={t('assistant.serverUrl', '服务地址 (URL)')}
+                    value={url}
+                    onChangeText={(val) => {
+                        setUrl(val);
+                        setTestResult(null);
+                    }}
+                    placeholder={t('assistant.serverUrlPlaceholder', '例如 https://agent.example.com 或内网地址')}
+                    hint={t('assistant.serverUrlHint', '支持局域网 IP、Tailscale 虚拟内网或公网反代域名')}
+                />
+                <SettingsFieldInput
+                    label={t('assistant.token', '访问令牌 (Token)')}
+                    value={token}
+                    onChangeText={(val) => {
+                        setToken(val);
+                        setTestResult(null);
+                    }}
+                    placeholder={t('assistant.tokenPlaceholder', '服务端生成的 32 位访问令牌')}
+                    secure
+                    hint={t('assistant.tokenHint', '令牌将加密保存在手机安全存储（SecureStore）中')}
+                />
+                {testResult ? (
                     <View
                         style={[
                             styles.resultBox,
                             testResult.success ? styles.resultSuccess : styles.resultFail,
                         ]}
                     >
-                        <Icon
-                            name={testResult.success ? 'check-circle' : 'error'}
-                            size={20}
-                            color={testResult.success ? '#2e7d32' : '#c62828'}
+                        <MaterialCommunityIcons
+                            name={testResult.success ? 'check-circle' : 'close-circle'}
+                            size={16}
+                            color={testResult.success ? theme.colors.successText : theme.colors.dangerText}
                         />
                         <Text
                             style={[
                                 styles.resultText,
-                                testResult.success ? styles.textSuccess : styles.textFail,
+                                testResult.success ? styles.resultTextSuccess : styles.resultTextFail,
                             ]}
                         >
                             {testResult.message}
                         </Text>
                     </View>
-                )}
+                ) : null}
+                <SettingsPrimaryButton
+                    label={t('assistant.testAndSave', '测试并保存')}
+                    icon="shield-check-outline"
+                    onPress={handleTestAndSave}
+                    loading={testing}
+                />
+            </SettingsSheet>
 
-                {/* 操作按钮 */}
-                <View style={styles.btnRow}>
-                    <TouchableOpacity
-                        style={[styles.actionBtn, styles.testBtn]}
-                        onPress={handleTestConnection}
-                        disabled={testing || saving}
-                    >
-                        {testing ? (
-                            <ActivityIndicator size="small" color={theme.colors.primary} />
-                        ) : (
-                            <Text style={styles.testBtnText}>{t('assistant.testConnection', '测试连接')}</Text>
-                        )}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[styles.actionBtn, styles.saveBtn]}
-                        onPress={handleSave}
-                        disabled={testing || saving}
-                    >
-                        {saving ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                            <Text style={styles.saveBtnText}>{t('assistant.save', '保存并连接')}</Text>
-                        )}
-                    </TouchableOpacity>
-                </View>
-
-                {/* 成功连接后引导进入 AI 智能体配置 */}
-                {connectionState === 'connected' && (
-                    <TouchableOpacity
-                        style={styles.agentLinkCard}
-                        onPress={() => navigation.navigate('AgentConfig')}
-                        activeOpacity={0.7}
-                    >
-                        <View style={styles.agentLinkLeft}>
-                            <Icon name="smart-toy" size={22} color={theme.colors.primary} style={styles.agentLinkIcon} />
-                            <View>
-                                <Text style={styles.agentLinkTitle}>{t('settings.agentConfig', 'AI 智能体配置')}</Text>
-                                <Text style={styles.agentLinkDesc}>
-                                    {t('settings.agentConfigSubtitle', '配置运行在服务端的 AI 代理权限与能力')}
-                                </Text>
-                            </View>
-                        </View>
-                        <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                    </TouchableOpacity>
-                )}
-            </ScrollView>
-        </KeyboardAvoidingView>
+            <SettingsToast message={toast} />
+        </View>
     );
 };
 
@@ -264,178 +234,57 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: theme.colors.background,
     },
-    scroll: {
+    content: {
         padding: 16,
     },
-    headerCard: {
+    pasteBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: theme.colors.surface,
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: theme.colors.successBg,
+        borderWidth: 1,
+        borderColor: theme.colors.successBorder,
         borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
-        elevation: 1,
+        paddingVertical: 11,
+        marginBottom: 4,
     },
-    headerTextWrap: {
-        marginLeft: 12,
-        flex: 1,
-    },
-    headerTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: theme.colors.text,
-    },
-    headerDesc: {
+    pasteBarText: {
         fontSize: 13,
-        color: theme.colors.textSecondary,
-        marginTop: 4,
-    },
-    clipboardBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#e8f5e9',
-        borderRadius: 10,
-        paddingVertical: 12,
-        marginBottom: 16,
-        borderWidth: 1,
-        borderColor: '#c8e6c9',
-    },
-    clipboardBtnText: {
-        fontSize: 14,
         fontWeight: '600',
-        color: theme.colors.primary,
-        marginLeft: 8,
+        color: theme.colors.successText,
     },
-    formCard: {
-        backgroundColor: theme.colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
-        elevation: 1,
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: theme.colors.text,
-        marginBottom: 6,
-    },
-    tokenLabel: {
-        marginTop: 16,
-    },
-    input: {
-        backgroundColor: '#f5f5f5',
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        fontSize: 14,
-        color: theme.colors.text,
-        borderWidth: 1,
-        borderColor: '#e0e0e0',
-    },
-    tokenInputWrap: {
-        position: 'relative',
-        justifyContent: 'center',
-    },
-    tokenInput: {
-        paddingRight: 42,
-    },
-    eyeBtn: {
-        position: 'absolute',
-        right: 10,
-        padding: 4,
-    },
-    hint: {
+    note: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
-        marginTop: 4,
+        color: '#9AA3B2',
+        lineHeight: 18,
+        textAlign: 'center',
+        marginTop: 14,
+        marginHorizontal: 8,
     },
     resultBox: {
         flexDirection: 'row',
         alignItems: 'center',
-        padding: 12,
-        borderRadius: 8,
-        marginBottom: 16,
+        gap: 6,
+        marginHorizontal: 20,
+        marginTop: 12,
+        padding: 10,
+        borderRadius: 10,
     },
     resultSuccess: {
-        backgroundColor: '#e8f5e9',
-        borderWidth: 1,
-        borderColor: '#a5d6a7',
+        backgroundColor: theme.colors.successBg,
     },
     resultFail: {
-        backgroundColor: '#ffebee',
-        borderWidth: 1,
-        borderColor: '#ffcdd2',
+        backgroundColor: theme.colors.dangerBg,
     },
     resultText: {
-        fontSize: 13,
-        marginLeft: 8,
         flex: 1,
-    },
-    textSuccess: {
-        color: '#2e7d32',
-    },
-    textFail: {
-        color: '#c62828',
-    },
-    btnRow: {
-        flexDirection: 'row',
-        gap: 12,
-        marginBottom: 32,
-    },
-    actionBtn: {
-        flex: 1,
-        borderRadius: 10,
-        paddingVertical: 13,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    testBtn: {
-        backgroundColor: theme.colors.surface,
-        borderWidth: 1,
-        borderColor: theme.colors.primary,
-    },
-    testBtnText: {
-        color: theme.colors.primary,
-        fontSize: 15,
-        fontWeight: '600',
-    },
-    saveBtn: {
-        backgroundColor: theme.colors.primary,
-    },
-    saveBtnText: {
-        color: '#fff',
-        fontSize: 15,
-        fontWeight: '600',
-    },
-    agentLinkCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: theme.colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 24,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        elevation: 0.5,
-    },
-    agentLinkLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flex: 1,
-    },
-    agentLinkIcon: {
-        marginRight: 12,
-    },
-    agentLinkTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: theme.colors.text,
-    },
-    agentLinkDesc: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
-        marginTop: 2,
+    },
+    resultTextSuccess: {
+        color: theme.colors.successText,
+    },
+    resultTextFail: {
+        color: theme.colors.dangerText,
     },
 });

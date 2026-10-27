@@ -1,232 +1,242 @@
-// 直接复用原SettingsScreen的闪念笔记配置部分
-// 仅修改路径和文件名的合并逻辑
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { useSettingsStore } from '../store/useSettingsStore';
 import { theme } from '../utils/theme';
 import { normalizePath } from '../utils/pathUtils';
+import { useSettingsStore } from '../store/useSettingsStore';
 import { flashNoteService } from '../services/FlashNoteService';
+import {
+    SettingsChoice,
+    SettingsFieldInput,
+    SettingsGroup,
+    SettingsGroupLabel,
+    SettingsPrimaryButton,
+    SettingsRow,
+    SettingsSheet,
+    SettingsToast,
+    useSettingsToast,
+} from '../components/settings';
 
-const SectionHeader = ({ title }: { title: string }) => (
-    <View style={styles.sectionHeader}>
-        <Text style={styles.sectionHeaderText}>{title}</Text>
-    </View>
-);
+const SUFFIX_REFERENCE = '\n>';
+const SUFFIX_EMOJI = '\n👉';
 
 export const FlashNoteConfigScreen = () => {
     const { t } = useTranslation();
     const { flashNoteConfig, setFlashNoteConfig } = useSettingsStore();
+    const { toast, showToast } = useSettingsToast();
 
-    // 合并路径和文件名输入框
-    const [fullPath, setFullPath] = useState(() => {
-        const path = flashNoteConfig.path ? `${flashNoteConfig.path}/${flashNoteConfig.filename}` : flashNoteConfig.filename;
-        return normalizePath(path);
-    });
-    const [flashNoteSuffix, setFlashNoteSuffix] = useState(flashNoteConfig.suffix);
+    const fullPathValue = flashNoteConfig.path
+        ? `${flashNoteConfig.path}/${flashNoteConfig.filename}`
+        : flashNoteConfig.filename;
 
-    // 历史归档配置
+    const [fullPath, setFullPath] = useState(fullPathValue);
     const [historyFolderPath, setHistoryFolderPath] = useState(flashNoteConfig.historyFolderPath || '');
+    const [customSuffix, setCustomSuffix] = useState(
+        flashNoteConfig.suffix === SUFFIX_REFERENCE || flashNoteConfig.suffix === SUFFIX_EMOJI
+            ? ''
+            : flashNoteConfig.suffix
+    );
 
-    // 统一保存状态
-    const [isSyncingMain, setIsSyncingMain] = useState(false);
-    const [isSavingSuffix, setIsSavingSuffix] = useState(false); // Fixed: Added state
-    const [isSyncingHistory, setIsSyncingHistory] = useState(false);
+    const [openSheet, setOpenSheet] = useState<'path' | 'archive' | 'suffix' | null>(null);
+    const [saving, setSaving] = useState(false);
 
-    // 主文件配置保存逻辑
+    const suffixDisplay = (() => {
+        if (!flashNoteConfig.suffix) return t('settings.suffixPresets.none');
+        if (flashNoteConfig.suffix === SUFFIX_REFERENCE) return t('flashNoteConfigScreen.referenceShort', '换行引用');
+        if (flashNoteConfig.suffix === SUFFIX_EMOJI) return t('flashNoteConfigScreen.emojiShort', '换行表情');
+        return flashNoteConfig.suffix.replace(/\n/g, '↵');
+    })();
+
+    const openEditor = (sheet: 'path' | 'archive' | 'suffix') => {
+        setFullPath(fullPathValue);
+        setHistoryFolderPath(flashNoteConfig.historyFolderPath || '');
+        setCustomSuffix(
+            flashNoteConfig.suffix === SUFFIX_REFERENCE || flashNoteConfig.suffix === SUFFIX_EMOJI
+                ? ''
+                : flashNoteConfig.suffix
+        );
+        setOpenSheet(sheet);
+    };
+
     const handleSaveMainConfig = async () => {
         if (!fullPath.trim()) {
             Alert.alert(t('settings.failure'), t('settings.error.notEmpty'));
             return;
         }
 
-        setIsSyncingMain(true);
-
+        setSaving(true);
         try {
-            // 1. 处理路径
             const lastSlashIndex = fullPath.lastIndexOf('/');
             const path = lastSlashIndex > 0 ? fullPath.substring(0, lastSlashIndex) : '';
             const filename = lastSlashIndex > 0 ? fullPath.substring(lastSlashIndex + 1) : fullPath;
 
-            // 保存配置
             setFlashNoteConfig({
                 ...flashNoteConfig,
                 path,
                 filename,
             });
-
-            // 同步主文件
             await flashNoteService.syncAll();
 
-            Alert.alert(t('settings.success'), t('settings.success'));
+            setOpenSheet(null);
+            showToast(t('flashNoteConfigScreen.mainSavedToast', '已保存，主文件已同步'));
         } catch (error) {
             console.error('Failed to save main config:', error);
             Alert.alert(t('settings.failure'), t('flashNoteConfigScreen.saveSyncFailed'));
         } finally {
-            setIsSyncingMain(false);
+            setSaving(false);
         }
     };
 
-    // 后缀配置保存逻辑
-    const handleSaveSuffixConfig = () => {
-        setIsSavingSuffix(true);
-        try {
-            setFlashNoteConfig({ ...flashNoteConfig, suffix: flashNoteSuffix });
-            Alert.alert(t('settings.success'), t('settings.success'));
-        } catch {
-            Alert.alert(t('settings.failure'), t('flashNoteConfigScreen.saveFailed'));
-        } finally {
-            setIsSavingSuffix(false);
-        }
-    };
-
-    // 历史配置保存逻辑
     const handleSaveHistoryConfig = async () => {
-        setIsSyncingHistory(true);
+        setSaving(true);
         try {
             const normalizedHistoryPath = historyFolderPath ? normalizePath(historyFolderPath) : '';
-
             setFlashNoteConfig({
                 ...flashNoteConfig,
-                historyFolderPath: normalizedHistoryPath
+                historyFolderPath: normalizedHistoryPath,
             });
-
             await flashNoteService.syncAll();
 
-            Alert.alert(t('settings.success'), t('flashNoteConfigScreen.configSavedHistorySynced'));
+            setOpenSheet(null);
+            showToast(t('flashNoteConfigScreen.historySavedToast', '已保存，历史归档已扫描'));
         } catch (error) {
             console.error('Failed to sync history:', error);
             Alert.alert(t('settings.failure'), t('flashNoteConfigScreen.saveSuccessHistorySyncFailed'));
         } finally {
-            setIsSyncingHistory(false);
+            setSaving(false);
         }
     };
 
     const handleSelectPresetSuffix = (suffix: string) => {
-        setFlashNoteSuffix(suffix);
+        setFlashNoteConfig({ suffix });
+        setOpenSheet(null);
+        showToast(t('flashNoteConfigScreen.suffixSavedToast', '结尾后缀已保存'));
+    };
+
+    const handleApplyCustomSuffix = () => {
+        setFlashNoteConfig({ suffix: customSuffix });
+        setOpenSheet(null);
+        showToast(t('flashNoteConfigScreen.suffixSavedToast', '结尾后缀已保存'));
     };
 
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
-        >
-            <ScrollView contentContainerStyle={styles.scrollContent}>
-
-                {/* Section 1: Main File Configuration */}
-                <SectionHeader title={t('flashNoteConfigScreen.mainFileConfig')} />
-                <View style={styles.card}>
-                    <Text style={styles.label}>{t('settings.flashNotePath')} + {t('settings.flashNoteFilename')}</Text>
-                    <Text style={styles.description}>{t('flashNoteConfigScreen.mergePathExample')}</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={fullPath}
-                        onChangeText={setFullPath}
-                        placeholder="notes/flash_notes.md"
-                        autoCapitalize="none"
-                        autoCorrect={false}
+        <View style={styles.container}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                <SettingsGroupLabel>{t('flashNoteConfigScreen.storageGroup', '存储')}</SettingsGroupLabel>
+                <SettingsGroup>
+                    <SettingsRow
+                        icon="file-document-outline"
+                        title={t('settings.flashNoteLocation', '存储位置')}
+                        subtitle={t('settings.flashNoteLocationDesc', '路径 + 文件名')}
+                        value={normalizePath(fullPathValue)}
+                        onPress={() => openEditor('path')}
                     />
-                    <TouchableOpacity
-                        style={styles.saveButton}
-                        onPress={handleSaveMainConfig}
-                        disabled={isSyncingMain}
-                    >
-                        {isSyncingMain ? (
-                            <ActivityIndicator color={theme.colors.white} />
-                        ) : (
-                            <Text style={styles.saveButtonText}>{t('flashNoteConfigScreen.saveSyncMainFile')}</Text>
-                        )}
-                    </TouchableOpacity>
-                </View>
-
-                {/* Section 2: Suffix Configuration */}
-                <SectionHeader title={t('flashNoteConfigScreen.formatSuffix')} />
-                <View style={styles.card}>
-                    <Text style={styles.label}>{t('settings.flashNoteSuffix')}</Text>
-                    <Text style={styles.description}>{t('settings.flashNoteSuffixDesc')}</Text>
-
-                    <View style={styles.chipContainer}>
-                        {[
-                            { label: t('settings.suffixPresets.none'), value: '' },
-                            { label: '\\n>', value: '\n>' },
-                            { label: '\\n👉', value: '\n👉' }
-                        ].map((preset) => (
-                            <TouchableOpacity
-                                key={preset.label}
-                                style={[styles.chip, flashNoteSuffix === preset.value && styles.chipActive]}
-                                onPress={() => handleSelectPresetSuffix(preset.value)}
-                            >
-                                <Text style={[styles.chipText, flashNoteSuffix === preset.value && styles.chipTextActive]}>
-                                    {preset.label}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-
-                    <Text style={[styles.label, { marginTop: theme.spacing.m }]}>{t('settings.customSuffix')}</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={flashNoteSuffix}
-                        onChangeText={setFlashNoteSuffix}
-                        placeholder="\n> "
-                        autoCapitalize="none"
-                        autoCorrect={false}
+                    <SettingsRow
+                        icon="archive"
+                        title={t('settings.historyFolderPath')}
+                        subtitle={t('flashNoteConfigScreen.historySubtitle', '按月拆分的历史闪念')}
+                        value={
+                            flashNoteConfig.historyFolderPath
+                                ? normalizePath(flashNoteConfig.historyFolderPath)
+                                : t('flashNoteConfigScreen.sameAsMain', '与主文件相同')
+                        }
+                        onPress={() => openEditor('archive')}
+                        last
                     />
-                    <TouchableOpacity
-                        style={styles.saveButton}
-                        onPress={handleSaveSuffixConfig}
-                        disabled={isSavingSuffix}
-                    >
-                        {isSavingSuffix ? (
-                            <ActivityIndicator color={theme.colors.white} />
-                        ) : (
-                            <Text style={styles.saveButtonText}>{t('flashNoteConfigScreen.saveSuffixConfig')}</Text>
-                        )}
-                    </TouchableOpacity>
-                </View>
+                </SettingsGroup>
 
-                {/* Section 3: History & Archive */}
-                <SectionHeader title={t('flashNoteConfigScreen.historyArchive')} />
-                <View style={styles.card}>
-                    <Text style={styles.label}>{t('settings.historyFolderPath')}</Text>
-                    <Text style={styles.description}>{t('settings.historyFolderPathDesc')}</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={historyFolderPath}
-                        onChangeText={setHistoryFolderPath}
-                        placeholder="archive/flash_notes"
-                        autoCapitalize="none"
-                        autoCorrect={false}
+                <SettingsGroupLabel>{t('flashNoteConfigScreen.formatGroup', '格式')}</SettingsGroupLabel>
+                <SettingsGroup>
+                    <SettingsRow
+                        icon="format-quote-close"
+                        title={t('settings.flashNoteSuffixRow', '结尾后缀')}
+                        value={suffixDisplay}
+                        onPress={() => openEditor('suffix')}
+                        last
                     />
-                    <TouchableOpacity
-                        style={styles.saveButton}
-                        onPress={handleSaveHistoryConfig}
-                        disabled={isSyncingHistory}
-                    >
-                        {isSyncingHistory ? (
-                            <ActivityIndicator color={theme.colors.white} />
-                        ) : (
-                            <Text style={styles.saveButtonText}>{t('flashNoteConfigScreen.saveSyncHistoryArchive')}</Text>
-                        )}
-                    </TouchableOpacity>
-                </View>
+                </SettingsGroup>
 
+                <Text style={styles.note}>
+                    {t('flashNoteConfigScreen.footerNote', '修改存储位置或归档目录后，将自动同步主文件并扫描云端历史归档。')}
+                </Text>
             </ScrollView>
 
-            {/* 全屏遮罩 (当正在同步时显示，防止用户操作) */}
-            {(isSyncingMain || isSyncingHistory) && (
-                <View style={styles.loadingOverlay}>
-                    <View style={styles.loadingBox}>
-                        <ActivityIndicator size="large" color={theme.colors.primary} />
-                        <Text style={styles.loadingText}>
-                            {isSyncingMain ? t('flashNoteConfigScreen.syncingMainFile') : t('flashNoteConfigScreen.scanningDownloadingHistory')}
-                        </Text>
-                    </View>
-                </View>
-            )}
+            <SettingsSheet
+                visible={openSheet === 'path'}
+                title={t('settings.flashNoteLocation', '存储位置')}
+                onClose={() => setOpenSheet(null)}
+                dismissable={!saving}
+            >
+                <SettingsFieldInput
+                    label={t('flashNoteConfigScreen.mergePathExample')}
+                    value={fullPath}
+                    onChangeText={setFullPath}
+                    placeholder="notes/flash_notes.md"
+                />
+                <SettingsPrimaryButton
+                    label={t('common.save')}
+                    onPress={handleSaveMainConfig}
+                    loading={saving}
+                />
+            </SettingsSheet>
 
-        </KeyboardAvoidingView>
+            <SettingsSheet
+                visible={openSheet === 'archive'}
+                title={t('settings.historyFolderPath')}
+                onClose={() => setOpenSheet(null)}
+                dismissable={!saving}
+            >
+                <SettingsFieldInput
+                    label={t('settings.historyFolderPathDesc')}
+                    value={historyFolderPath}
+                    onChangeText={setHistoryFolderPath}
+                    placeholder="archive/flash_notes"
+                />
+                <SettingsPrimaryButton
+                    label={t('common.save')}
+                    onPress={handleSaveHistoryConfig}
+                    loading={saving}
+                />
+            </SettingsSheet>
+
+            <SettingsSheet
+                visible={openSheet === 'suffix'}
+                title={t('settings.flashNoteSuffixRow', '结尾后缀')}
+                onClose={() => setOpenSheet(null)}
+            >
+                <View style={styles.choices}>
+                    <SettingsChoice
+                        title={t('settings.suffixPresets.none')}
+                        selected={!flashNoteConfig.suffix}
+                        onPress={() => handleSelectPresetSuffix('')}
+                    />
+                    <SettingsChoice
+                        title={`\n> ${t('flashNoteConfigScreen.reference')}`}
+                        desc={t('flashNoteConfigScreen.referenceDesc', '下一条闪念另起一行引用')}
+                        selected={flashNoteConfig.suffix === SUFFIX_REFERENCE}
+                        onPress={() => handleSelectPresetSuffix(SUFFIX_REFERENCE)}
+                    />
+                    <SettingsChoice
+                        title={`\n👉 ${t('flashNoteConfigScreen.emojiSuffix', '(表情)')}`}
+                        desc={t('flashNoteConfigScreen.emojiDesc', '下一条闪念以表情开头')}
+                        selected={flashNoteConfig.suffix === SUFFIX_EMOJI}
+                        onPress={() => handleSelectPresetSuffix(SUFFIX_EMOJI)}
+                    />
+                </View>
+                <SettingsFieldInput
+                    label={t('settings.customSuffix')}
+                    value={customSuffix}
+                    onChangeText={setCustomSuffix}
+                    placeholder="\n> "
+                />
+                <SettingsPrimaryButton
+                    label={t('flashNoteConfigScreen.applyCustomSuffix', '应用自定义后缀')}
+                    onPress={handleApplyCustomSuffix}
+                />
+            </SettingsSheet>
+
+            <SettingsToast message={toast} />
+        </View>
     );
 };
 
@@ -235,121 +245,19 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: theme.colors.background,
     },
-    scrollContent: {
-        paddingHorizontal: theme.spacing.sm, // Standardize to 8px
-        paddingVertical: theme.spacing.m,
-        paddingBottom: 40,
+    content: {
+        padding: 16,
     },
-    sectionHeader: {
-        marginBottom: theme.spacing.xs,
-        marginTop: theme.spacing.s,
-        paddingHorizontal: theme.spacing.xs,
+    choices: {
+        paddingHorizontal: 12,
+        paddingBottom: 8,
     },
-    sectionHeaderText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: theme.colors.primary,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-    },
-    card: {
-        backgroundColor: theme.colors.surface,
-        borderRadius: theme.radius.sm, // 12 -> 8
-        padding: theme.spacing.m,
-        marginBottom: theme.spacing.sm, // l -> sm (8px)
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.03, // 0.05 -> 0.03
-        shadowRadius: 4,
-        elevation: 0.5, // 1 -> 0.5
-    },
-    label: {
-        fontSize: 15,
-        fontWeight: '500',
-        color: theme.colors.text,
-        marginBottom: 4,
-    },
-    description: {
+    note: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
-        marginBottom: theme.spacing.s,
-        lineHeight: 16,
-    },
-    input: {
-        backgroundColor: theme.colors.background,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        fontSize: 16,
-        color: theme.colors.text,
-    },
-    chipContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-    },
-    chip: {
-        paddingVertical: 6,
-        paddingHorizontal: 12,
-        borderRadius: 20,
-        backgroundColor: theme.colors.background,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-    },
-    chipActive: {
-        backgroundColor: theme.colors.primary,
-        borderColor: theme.colors.primary,
-    },
-    chipText: {
-        fontSize: 13,
-        color: theme.colors.text,
-    },
-    chipTextActive: {
-        color: theme.colors.white,
-        fontWeight: '500',
-    },
-    saveButton: {
-        backgroundColor: theme.colors.primary,
-        paddingVertical: 12,
-        paddingHorizontal: 24,
-        borderRadius: 8,
-        width: '100%',
-        alignItems: 'center',
-        marginTop: theme.spacing.m,
-    },
-    saveButtonText: {
-        color: theme.colors.white,
-        fontSize: 16,
-        fontWeight: '600',
-    },
-    loadingOverlay: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 1000,
-    },
-    loadingBox: {
-        backgroundColor: theme.colors.surface,
-        padding: theme.spacing.l,
-        borderRadius: 16,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 6,
-    },
-    loadingText: {
-        marginTop: theme.spacing.m,
-        fontSize: 16,
-        color: theme.colors.text,
-        fontWeight: '500',
+        color: '#9AA3B2',
+        lineHeight: 18,
+        textAlign: 'center',
+        marginTop: 14,
+        marginHorizontal: 8,
     },
 });
