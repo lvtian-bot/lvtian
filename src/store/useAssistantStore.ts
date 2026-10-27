@@ -28,6 +28,8 @@ interface AssistantState {
     permissionMode: 'workspace-write' | 'danger-full-access';
     /** 服务端当前助理模型选择（provider 路由 + 模型 ID），未拉取到时为 null */
     agentModelSelection: { provider: string; model: string } | null;
+    /** 服务端下发的模型可选项清单（持久化作进页秒显，连接后核对更新） */
+    agentModelOptions: Array<{ provider: string; model: string }>;
     /** 服务端是否正在优雅升级中 */
     isServerUpgrading: boolean;
     /** 待发送消息队列（离线/升级期间乐观入队，重连对账后自动静默补发） */
@@ -41,6 +43,7 @@ interface AssistantState {
     setHasHydrated: (hydrated: boolean) => void;
     setPermissionMode: (mode: 'workspace-write' | 'danger-full-access') => void;
     setAgentModelSelection: (selection: { provider: string; model: string } | null) => void;
+    setAgentModelOptions: (options: Array<{ provider: string; model: string }>) => void;
     setSkills: (skills: AgentSkill[]) => void;
     setServerConfig: (url: string, token: string) => Promise<void>;
     loadSavedCredentials: () => Promise<{ url: string; token: string }>;
@@ -80,6 +83,7 @@ export const useAssistantStore = create<AssistantState>()(
             hasHydrated: false,
             permissionMode: 'workspace-write',
             agentModelSelection: null,
+            agentModelOptions: [],
             isServerUpgrading: false,
             pendingSendQueue: [],
             pendingCancelQueue: [],
@@ -88,6 +92,7 @@ export const useAssistantStore = create<AssistantState>()(
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
             setPermissionMode: (mode) => set({ permissionMode: mode }),
             setAgentModelSelection: (agentModelSelection) => set({ agentModelSelection }),
+            setAgentModelOptions: (agentModelOptions) => set({ agentModelOptions }),
             setSkills: (skills) => set({ skills }),
 
             setServerConfig: async (url, token) => {
@@ -122,6 +127,7 @@ export const useAssistantStore = create<AssistantState>()(
                         pendingSendQueue: [],
                         skills: [],
                         agentModelSelection: null,
+                        agentModelOptions: [],
                     });
                 } else {
                     set({ serverUrl: cleanUrl, serverToken: cleanToken });
@@ -342,6 +348,7 @@ export const useAssistantStore = create<AssistantState>()(
                     pendingCancelQueue: state.pendingCancelQueue ?? [],
                     permissionMode: state.permissionMode ?? 'workspace-write',
                     agentModelSelection: state.agentModelSelection ?? null,
+                    agentModelOptions: state.agentModelOptions ?? [],
                 };
             },
             onRehydrateStorage: () => (state) => {
