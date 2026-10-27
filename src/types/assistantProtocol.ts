@@ -124,6 +124,8 @@ export type ServerMessage =
           status?: 'sent' | 'queued' | 'error';
           role?: 'user';
           content?: string;
+          /** 服务端受理时刻，仅用于显示，不参与排序 */
+          timestamp?: number;
           error?: string;
           attachments?: ChatAttachment[];
       }

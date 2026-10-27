@@ -972,10 +972,14 @@ export class AssistantClient {
                     }
                 }
 
-                const merged = Array.from(msgMap.values()).sort(
-                    (a, b) => a.timestamp - b.timestamp
-                );
-                store.setMessages(merged);
+                // 位置只认服务端 seq：已受理消息按 seq 稳定排序，尚未受理的本地消息保持原顺序放在末尾。
+                // 绝不按时间戳排序——设备时钟与服务端存在偏差，历史故障即由此把相邻问答换了位置。
+                const merged = Array.from(msgMap.values());
+                const sequenced = merged
+                    .filter((m) => typeof m.seq === 'number' && m.seq > 0)
+                    .sort((a, b) => a.seq - b.seq);
+                const unsequenced = merged.filter((m) => !(typeof m.seq === 'number' && m.seq > 0));
+                store.setMessages([...sequenced, ...unsequenced]);
 
                 // 对账完成后，自动静默补发待撤销队列与待发队列
                 this.flushPendingCancelQueue();
@@ -1032,12 +1036,16 @@ export class AssistantClient {
                 }
 
                 const isQueued = msg.status === 'queued';
+                // 受理后以服务端时刻为准：显示不再依赖设备时钟，跨端显示一致
+                const acceptedAt = typeof msg.timestamp === 'number' && msg.timestamp > 0
+                    ? msg.timestamp
+                    : existing ? existing.timestamp : Date.now();
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
                     role: 'user',
                     content: existing ? existing.content : (msg.content || ''),
-                    timestamp: existing ? existing.timestamp : Date.now(),
+                    timestamp: acceptedAt,
                     status: isError ? 'error' : isQueued ? 'queued' : 'sent',
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
                     attachments: existing?.attachments || msg.attachments,

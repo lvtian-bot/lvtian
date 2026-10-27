@@ -118,6 +118,8 @@ export type ServerMessage =
           status?: 'sent' | 'queued' | 'error';
           role?: 'user';
           content?: string;
+          /** 服务端受理时刻，客户端据此覆盖本地设备时间，仅用于显示 */
+          timestamp?: number;
           error?: string;
           attachments?: ChatAttachment[];
       }

@@ -764,6 +764,7 @@ export class LvtianServer {
                 seq: existing.seq,
                 role: 'user',
                 content: existing.content,
+                timestamp: existing.timestamp,
                 attachments: existing.attachments,
                 status: existing.status === 'queued' ? 'queued' : existing.status === 'error' ? 'error' : 'sent',
                 error: existing.errorMessage,
@@ -804,6 +805,7 @@ export class LvtianServer {
                 seq: userMsg.seq,
                 role: 'user',
                 content,
+                timestamp: userMsg.timestamp,
                 attachments,
                 status: 'queued',
             });
@@ -841,6 +843,7 @@ export class LvtianServer {
             seq: userMsg.seq,
             role: 'user',
             content,
+            timestamp: userMsg.timestamp,
             attachments,
             status: 'sent',
         });

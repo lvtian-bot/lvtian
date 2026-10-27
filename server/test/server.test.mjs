@@ -842,6 +842,9 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
     assert.equal(ack.messageId, 'u1');
     assert.equal(ack.role, 'user');
     assert.equal(ack.content, '你好');
+    assert.equal(typeof ack.timestamp, 'number', '受理回执必须携带服务端时间戳');
+    const accepted = sessionManager.getOrCreateSession('main').messages.find((m) => m.id === 'u1');
+    assert.equal(ack.timestamp, accepted.timestamp, '回执时间应与服务端落库时间一致');
 
     const placeholderIdx = received.findIndex((m) => m.type === 'event_chunk' && m.delta === '');
     assert.ok(placeholderIdx >= 0, '应广播助理占位 event_chunk');
