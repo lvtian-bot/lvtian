@@ -1253,6 +1253,14 @@ export class AcpEngineManager {
             return;
         }
 
+        // A reporting round may publish only a naturally completed answer. Preserve
+        // the exact ACP reason; user-initiated turns retain their existing semantics.
+        if (source === 'task_report' && stopReason !== 'end_turn') {
+            runtime.callbacks.onStatusChange('error', { code: stopReason === 'refusal' ? 'engine_refusal' : 'engine_error', stopReason });
+            this.sessionManager.setTaskState(sessionId, 'error');
+            return;
+        }
+
         if (stopReason === 'refusal') {
             runtime.callbacks.onStatusChange('error', { code: 'engine_refusal' });
             this.sessionManager.setTaskState(sessionId, 'error');
@@ -1260,7 +1268,7 @@ export class AcpEngineManager {
         }
 
         // 截断提示由客户端按 stopReason 本地化插入，服务端不内嵌展示文案
-        runtime.callbacks.onStatusChange('done', stopReason === 'max_tokens' ? { stopReason } : undefined);
+        runtime.callbacks.onStatusChange('done', source === 'task_report' || stopReason === 'max_tokens' ? { stopReason } : undefined);
         this.sessionManager.setTaskState(sessionId, 'completed');
         // 唯真实交互推进主聊天活跃时间
         if (source === 'user') this.sessionManager.recordActivity(sessionId);

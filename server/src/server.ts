@@ -924,7 +924,7 @@ export class LvtianServer {
                     onDelta: delta => { text += delta; },
                     onToolCall: () => { toolsUsed = true; this.acpEngine.stop(sessionId); },
                     onApprovalRequest: request => { toolsUsed = true; this.acpEngine.handleApproval(sessionId, request.approvalId, false); },
-                    onStatusChange: (status, payload) => { if (status === 'done' && payload?.stopReason !== 'max_tokens') completed = true; },
+                    onStatusChange: (status, payload) => { if (status === 'done' && payload?.stopReason === 'end_turn') completed = true; },
                 }, undefined, 'task_report');
                 if (!completed || toolsUsed || !text.trim()) throw new Error('task_report_agent_incomplete');
                 store.generated(report.id, text);
@@ -953,6 +953,14 @@ export class LvtianServer {
         } catch {
             store.failed(report.id);
             console.warn('[TaskReporting] Main agent report deferred after failure');
+            // A reconnect may have observed the buffered round's processing state.
+            // Publish current authoritative status only (never buffered text), without
+            // overwriting a newer user/queue execution that may already own main.
+            const current = this.sessionManager.getOrCreateSession(sessionId);
+            this.broadcastSession(sessionId, {
+                type: 'task_status', seq: current.currentSeq, sessionId, state: current.taskState,
+                ...(current.taskState === 'error' ? { error: 'engine_error' } : {}),
+            });
             this.scheduleProcessQueue(sessionId);
             return false;
         }

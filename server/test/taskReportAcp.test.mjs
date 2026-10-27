@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
+import WebSocket from 'ws';
 import { AcpEngineManager } from '../dist/acpEngineManager.js';
 import { SessionManager } from '../dist/sessionManager.js';
 import { MemoryManager } from '../dist/memoryManager.js';
@@ -23,8 +24,8 @@ function fixture(t, onPrompt) {
                 .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'mock-report-session' }))
                 .onRequest(acp.methods.agent.session.resume, c => ({ sessionId: c.params.sessionId }))
                 .onRequest(acp.methods.agent.session.prompt, async c => {
-                    await onPrompt(c, sm);
-                    return { stopReason: 'end_turn' };
+                    const stopReason = await onPrompt(c, sm);
+                    return { stopReason: stopReason ?? 'end_turn' };
                 });
             let ready, stop;
             const contextReady = new Promise(resolve => { ready = resolve; });
@@ -79,6 +80,58 @@ test('real ACP adapter receives every repository detail and buffers one complete
     assert.ok(handoff.startsWith('原有接力提要'));
     assert.ok(handoff.includes(full));
     assert.equal(store.next(), undefined);
+});
+
+for (const reason of ['cancelled', 'max_turn_requests', 'max_tokens', 'refusal']) {
+    test(`real ACP ${reason} preserves exact reason and never publishes buffered partial report`, async t => {
+        const { sm, store, server, engine } = fixture(t, async c => { await emit(c, '不能发布的半截报告'); return reason; });
+        let terminal;
+        const original = engine.execute.bind(engine);
+        engine.execute = (session, id, prompt, callbacks, attachments, source) => original(session, id, prompt, {
+            ...callbacks,
+            onStatusChange: (status, payload) => { if (status !== 'thinking') terminal = { status, payload }; callbacks.onStatusChange(status, payload); },
+        }, attachments, source);
+        assert.equal(await server.reportNativeTask(enqueue(store, '完整原始结果')), false);
+        assert.equal(terminal.status, 'error');
+        assert.equal(terminal.payload.stopReason, reason);
+        assert.equal(sm.getOrCreateSession('main').messages.length, 0);
+        assert.equal(sm.getOrCreateSession('main').taskState, 'error');
+        assert.equal(store.next(Date.now() + 600000).reply, undefined);
+    });
+}
+
+test('reconnected client sees processing round then terminal failure without buffered text', async t => {
+    let entered;
+    const promptEntered = new Promise(resolve => { entered = resolve; });
+    let finish;
+    const gate = new Promise(resolve => { finish = resolve; });
+    const { sm, store, server } = fixture(t, async c => {
+        await emit(c, '私有缓冲半截文本'); entered(); await gate; return 'cancelled';
+    });
+    await server.start();
+    const reportDone = server.reportNativeTask(enqueue(store, '原始完整结果'));
+    await promptEntered;
+    const ws = new WebSocket(`ws://127.0.0.1:${server.httpServer.address().port}`);
+    const messages = [];
+    const waitFor = predicate => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { ws.off('message', listener); reject(new Error('expected server state not received')); }, 3000);
+        const listener = raw => { const message = JSON.parse(raw.toString()); if (predicate(message)) { clearTimeout(timer); ws.off('message', listener); resolve(message); } };
+        ws.on('message', listener);
+    });
+    ws.on('message', raw => messages.push(JSON.parse(raw.toString())));
+    t.after(() => ws.terminate());
+    await new Promise(resolve => ws.once('open', resolve));
+    const authenticated = waitFor(m => m.type === 'auth_result');
+    ws.send(JSON.stringify({ type: 'auth', token: 'fixture' })); await authenticated;
+    const synchronized = waitFor(m => m.type === 'sync_result');
+    ws.send(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: 0 }));
+    assert.equal((await synchronized).taskState, 'processing');
+    const failed = waitFor(m => m.type === 'task_status' && m.state === 'error');
+    finish();
+    assert.equal(await reportDone, false);
+    assert.equal((await failed).sessionId, 'main');
+    assert.equal(sm.getOrCreateSession('main').messages.length, 0);
+    assert.equal(JSON.stringify(messages).includes('私有缓冲半截文本'), false);
 });
 
 test('a background-only session freezes its prior activity fallback rather than treating the report as new user input', async t => {

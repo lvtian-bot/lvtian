@@ -29,7 +29,7 @@ test('offline report calls actual main agent with full input then publishes only
         calls++;
         assert.equal(session, 'main'); assert.equal(source, 'task_report'); assert.match(prompt, /完整10仓明细/);
         assert.equal(sm.getOrCreateSession('main').messages.length, 0);
-        cb.onDelta('10仓完整同步报告'); cb.onStatusChange('done');
+        cb.onDelta('10仓完整同步报告'); cb.onStatusChange('done', { stopReason: 'end_turn' });
     });
     const report = enqueue(store);
     assert.equal(await server.reportNativeTask(report), true);
@@ -63,7 +63,7 @@ test('a client-created colliding message id cannot bypass actual agent reporting
 
 test('generated reply survives publication failure and retries without another model call', async t => {
     let calls = 0;
-    const { store, sm, server } = fixture(t, async (_s, _id, _p, cb) => { calls++; cb.onDelta('完整结果'); cb.onStatusChange('done'); });
+    const { store, sm, server } = fixture(t, async (_s, _id, _p, cb) => { calls++; cb.onDelta('完整结果'); cb.onStatusChange('done', { stopReason: 'end_turn' }); });
     const report = enqueue(store);
     const persist = sm.persistDurableMessage.bind(sm);
     sm.persistDurableMessage = () => { throw new Error('disk failure'); };
@@ -90,8 +90,33 @@ test('failed, empty and truncated main-agent outputs do not publish or claim del
     }
 });
 
+test('done without an explicit end_turn cannot acknowledge a report', async t => {
+    const { store, sm, server } = fixture(t, async (_s, _id, _p, cb) => { cb.onDelta('半截'); cb.onStatusChange('done'); });
+    assert.equal(await server.reportNativeTask(enqueue(store)), false);
+    assert.equal(sm.getOrCreateSession('main').messages.length, 0);
+    assert.equal(store.next(Date.now() + 600000).reply, undefined);
+});
+
+test('failure status reconciliation preserves a newer owner of main and never leaks buffered text', async t => {
+    let currentOwner = false;
+    const { store, sm, server, engine } = fixture(t, async (_s, _id, _p, cb) => {
+        cb.onDelta('私有缓冲');
+        currentOwner = true;
+        sm.setTaskState('main', 'processing');
+        throw new Error('previous reporting round failed');
+    });
+    engine.isRunning = () => currentOwner;
+    const broadcasts = [];
+    server.broadcastSession = (sessionId, message) => broadcasts.push({ sessionId, message });
+    assert.equal(await server.reportNativeTask(enqueue(store)), false);
+    assert.equal(sm.getOrCreateSession('main').taskState, 'processing');
+    assert.equal(broadcasts.at(-1).message.type, 'task_status');
+    assert.equal(broadcasts.at(-1).message.state, 'processing');
+    assert.equal(JSON.stringify(broadcasts).includes('私有缓冲'), false);
+});
+
 test('report appends once to pre-generated handoff and repeats do not duplicate history', async t => {
-    const { store, sm, server } = fixture(t, async (_s, _id, _p, cb) => { cb.onDelta('完整报告'); cb.onStatusChange('done'); });
+    const { store, sm, server } = fixture(t, async (_s, _id, _p, cb) => { cb.onDelta('完整报告'); cb.onStatusChange('done', { stopReason: 'end_turn' }); });
     sm.setPendingBackground('main', '旧提要');
     const report = enqueue(store);
     assert.equal(await server.reportNativeTask(report), true);
