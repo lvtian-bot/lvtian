@@ -1,4 +1,4 @@
-import React, { useEffect, useState, type ComponentProps } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -12,55 +12,9 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
 import { RootStackParamList } from '../types/navigation';
+import { SettingsRow, settingsGroupStyle } from '../components/SettingsRow';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-interface SettingsItemProps {
-    label: string;
-    icon: ComponentProps<typeof MaterialCommunityIcons>['name'];
-    onPress: () => void;
-    subtitle?: string;
-    iconColor?: string;
-}
-
-const SettingsItem: React.FC<SettingsItemProps> = ({
-    label,
-    icon,
-    onPress,
-    subtitle,
-    iconColor = theme.colors.textSecondary,
-}) => (
-    <Pressable
-        style={({ pressed }) => [
-            styles.settingsItem,
-            pressed && styles.settingsItemPressed,
-        ]}
-        android_ripple={{ color: '#E5E7EB' }}
-        onPress={onPress}
-    >
-        <View style={styles.settingsItemLeft}>
-            <MaterialCommunityIcons
-                name={icon}
-                size={22}
-                color={iconColor}
-                style={styles.settingsItemIcon}
-            />
-            <Text style={styles.settingsItemText}>{label}</Text>
-        </View>
-        <View style={styles.settingsItemRight}>
-            {subtitle ? (
-                <Text style={styles.settingsItemSubtitle} numberOfLines={1}>
-                    {subtitle}
-                </Text>
-            ) : null}
-            <MaterialCommunityIcons
-                name="chevron-right"
-                size={20}
-                color={theme.colors.textSecondary}
-            />
-        </View>
-    </Pressable>
-);
 
 export const MeScreen = () => {
     const { t } = useTranslation();
@@ -213,19 +167,19 @@ export const MeScreen = () => {
 
                 {/* 卡片一：智能体与文件 */}
                 <View style={styles.cardWrapper}>
-                    <View style={styles.settingsGroup}>
-                        <SettingsItem
+                    <View style={settingsGroupStyle.group}>
+                        <SettingsRow
                             label={t('settings.agentConfig', 'AI 智能体配置')}
                             icon="robot-outline"
                             onPress={() => navigation.navigate('AgentConfig')}
-                            subtitle={
+                            value={
                                 permissionMode === 'danger-full-access'
                                     ? t('assistant.permissionDanger', '完全权限模式')
                                     : t('assistant.permissionWorkspace', '安全工作区模式')
                             }
                         />
-                        <View style={styles.separator} />
-                        <SettingsItem
+                        <View style={settingsGroupStyle.separator} />
+                        <SettingsRow
                             label={t('tabs.files', '系统文件')}
                             icon="folder-outline"
                             onPress={() => navigation.navigate('ServerFileList')}
@@ -235,19 +189,19 @@ export const MeScreen = () => {
 
                 {/* 卡片二：云端存储 */}
                 <View style={styles.cardWrapper}>
-                    <View style={styles.settingsGroup}>
-                        <SettingsItem
+                    <View style={settingsGroupStyle.group}>
+                        <SettingsRow
                             label={t('settings.cloudSyncWebDav', '云端同步 (WebDAV / 坚果云)')}
                             icon="cloud-sync-outline"
                             onPress={() => navigation.navigate('CloudRepoConfig')}
-                            subtitle={
+                            value={
                                 cloudProvider === 'webdav' && webDavConfig.server
                                     ? t('settings.configured', '已配置')
                                     : t('settings.notConfigured', '未配置')
                             }
                         />
-                        <View style={styles.separator} />
-                        <SettingsItem
+                        <View style={settingsGroupStyle.separator} />
+                        <SettingsRow
                             label={t('browser.cloudFiles', '云盘文件')}
                             icon="cloud-outline"
                             onPress={() => navigation.navigate('CloudFileList')}
@@ -257,21 +211,21 @@ export const MeScreen = () => {
 
                 {/* 卡片三：设置与关于 */}
                 <View style={styles.cardWrapper}>
-                    <View style={styles.settingsGroup}>
-                        <SettingsItem
+                    <View style={settingsGroupStyle.group}>
+                        <SettingsRow
                             label={t('settings.flashNoteConfig', '闪念笔记设置')}
                             icon="lightning-bolt-outline"
                             onPress={() => navigation.navigate('FlashNoteConfig')}
                         />
-                        <View style={styles.separator} />
-                        <SettingsItem
+                        <View style={settingsGroupStyle.separator} />
+                        <SettingsRow
                             label={t('settings.appSettings', 'APP 设置')}
                             icon="tune"
                             onPress={() => navigation.navigate('AppSettings')}
-                            subtitle={`${t(`settings.fontSizesShort.${fontSize}`)} · ${t(`settings.themes.${markdownTheme}`)}`}
+                            value={`${t(`settings.fontSizesShort.${fontSize}`)} · ${t(`settings.themes.${markdownTheme}`)}`}
                         />
-                        <View style={styles.separator} />
-                        <SettingsItem
+                        <View style={settingsGroupStyle.separator} />
+                        <SettingsRow
                             label={t('about.title', '关于绿天')}
                             icon="information-outline"
                             onPress={() => navigation.navigate('About')}
@@ -375,55 +329,5 @@ const styles = StyleSheet.create({
     cardWrapper: {
         paddingHorizontal: theme.spacing.s,
         marginBottom: theme.spacing.s,
-    },
-    settingsGroup: {
-        backgroundColor: theme.colors.surface,
-        borderRadius: theme.radius.sm,
-        shadowColor: '#000',
-        shadowOpacity: 0.03,
-        shadowOffset: { width: 0, height: 1 },
-        shadowRadius: 4,
-        elevation: 0.5,
-        overflow: 'hidden',
-    },
-    settingsItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: theme.spacing.m,
-        paddingVertical: 12,
-        minHeight: 52,
-    },
-    settingsItemPressed: {
-        backgroundColor: '#F3F4F6',
-    },
-    settingsItemLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flex: 1,
-    },
-    settingsItemIcon: {
-        marginRight: theme.spacing.m,
-        width: 24,
-        textAlign: 'center',
-    },
-    settingsItemText: {
-        fontSize: 16,
-        color: theme.colors.text,
-    },
-    settingsItemRight: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    settingsItemSubtitle: {
-        fontSize: 13,
-        color: theme.colors.textSecondary,
-        marginRight: 4,
-        maxWidth: 160,
-    },
-    separator: {
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: theme.colors.border,
-        marginLeft: theme.spacing.m + 24 + theme.spacing.m,
     },
 });

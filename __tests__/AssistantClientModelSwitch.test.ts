@@ -24,7 +24,7 @@ describe('AssistantClient 模型切换请求的结果分类', () => {
         expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:3000/api/model');
     });
 
-    test('请求超时中止归类为 MODEL_SWITCH_UNCONFIRMED 而非失败', async () => {
+    test('请求超时中止归类为 REQUEST_UNCONFIRMED 而非失败', async () => {
         // 服务端在触发会话交接前已写入新配置，超时只代表结果未确认
         fetchMock.mockRejectedValueOnce(new Error('Aborted'));
         const res = await AssistantClient.updateModelSelection(
@@ -34,7 +34,18 @@ describe('AssistantClient 模型切换请求的结果分类', () => {
             'gpt-6.1-sol'
         );
         expect(res.success).toBe(false);
-        expect(res.code).toBe('MODEL_SWITCH_UNCONFIRMED');
+        expect(res.code).toBe('REQUEST_UNCONFIRMED');
+    });
+
+    test('权限切换请求超时中止同样归类为 REQUEST_UNCONFIRMED（与模型切换共用分类）', async () => {
+        fetchMock.mockRejectedValueOnce(new Error('Aborted'));
+        const res = await AssistantClient.updatePermissionMode(
+            'http://127.0.0.1:3000',
+            'token-a',
+            'danger-full-access'
+        );
+        expect(res.success).toBe(false);
+        expect(res.code).toBe('REQUEST_UNCONFIRMED');
     });
 
     test('其他网络异常仍归类为 NETWORK_ERROR', async () => {
