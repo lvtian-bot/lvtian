@@ -6,6 +6,9 @@ import {
     StyleSheet,
     TouchableOpacity,
     TouchableWithoutFeedback,
+    ScrollView,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../utils/theme';
@@ -36,13 +39,23 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
         <Modal transparent visible={visible} animationType="fade" onRequestClose={requestClose}>
             <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={requestClose}>
                 <TouchableWithoutFeedback>
-                    <SafeAreaView edges={['bottom']} style={styles.sheetSafe}>
-                        <View style={styles.sheet}>
-                            <View style={styles.handle} />
-                            <Text style={styles.sheetTitle}>{title}</Text>
-                            {children}
-                        </View>
-                    </SafeAreaView>
+                    <KeyboardAvoidingView
+                        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                        style={styles.sheetSafe}
+                    >
+                        <SafeAreaView edges={['bottom']} style={styles.sheetSafe}>
+                            <View style={styles.sheet}>
+                                <View style={styles.handle} />
+                                <Text style={styles.sheetTitle}>{title}</Text>
+                                <ScrollView
+                                    keyboardShouldPersistTaps="handled"
+                                    contentContainerStyle={styles.sheetContent}
+                                >
+                                    {children}
+                                </ScrollView>
+                            </View>
+                        </SafeAreaView>
+                    </KeyboardAvoidingView>
                 </TouchableWithoutFeedback>
             </TouchableOpacity>
         </Modal>
@@ -86,5 +99,8 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingTop: 8,
         paddingBottom: 6,
+    },
+    sheetContent: {
+        paddingBottom: 8,
     },
 });
