@@ -86,4 +86,17 @@ describe('工作记录页面', () => {
         expect(texts(renderer!)).toContain(i18n.t('workRecords.conclusion'));
         expect(JSON.stringify(renderer!.toJSON())).toContain('已整理 3 张发票，合计 286 元。');
     });
+
+    it('详情展示完整请求，不只给列表用的截断标题', async () => {
+        const question = '把上季度的销售发票按客户拆分，并核对每一笔的税额是否一致。\n第二行补充：差异超过一元的单独列出来。';
+        const turn = buildChatTurns([
+            message({ id: 'u9', role: 'user', seq: 9, content: question, timestamp: Date.now() }),
+            message({ id: 'a9', role: 'assistant', seq: 10, replyTo: 'u9', content: '已核对。', timestamp: Date.now() }),
+        ])[0];
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<WorkRecordDetail turn={turn} onClose={jest.fn()} />);
+        });
+        expect(turn.title).not.toBe(question);
+        expect(texts(renderer!)).toContain(question);
+    });
 });

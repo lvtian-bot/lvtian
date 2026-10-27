@@ -972,12 +972,14 @@ export class AssistantClient {
                     }
                 }
 
-                // 位置只认服务端 seq：已受理消息按 seq 稳定排序，尚未受理的本地消息保持原顺序放在末尾。
-                // 绝不按时间戳排序——设备时钟与服务端存在偏差，历史故障即由此把相邻问答换了位置。
+                // 位置按服务端时间排序：已受理消息采用服务端受理/创建时刻，同一毫秒保持到达顺序。
+                // 尚未受理的本地消息仍用设备时间，但不参与整段排序，按原顺序置于末尾，避免设备时钟污染历史。
                 const merged = Array.from(msgMap.values());
                 const sequenced = merged
-                    .filter((m) => typeof m.seq === 'number' && m.seq > 0)
-                    .sort((a, b) => a.seq - b.seq);
+                    .map((message, index) => ({ message, index }))
+                    .filter(({ message }) => typeof message.seq === 'number' && message.seq > 0)
+                    .sort((a, b) => (a.message.timestamp - b.message.timestamp) || (a.index - b.index))
+                    .map(({ message }) => message);
                 const unsequenced = merged.filter((m) => !(typeof m.seq === 'number' && m.seq > 0));
                 store.setMessages([...sequenced, ...unsequenced]);
 

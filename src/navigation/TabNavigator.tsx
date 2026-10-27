@@ -12,15 +12,10 @@ import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
 import { MomentsScreen } from '../screens/MomentsScreen';
 import { MeScreen } from '../screens/MeScreen';
-import { MainTabParamList } from '../types/navigation';
+import { ChatStackParamList, MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
 import { TabBarHeightContext } from './TabBarHeightContext';
-
-type ChatStackParamList = {
-    ChatScreen: undefined;
-    WorkRecords: undefined;
-};
 
 const ChatStack = createNativeStackNavigator<ChatStackParamList>();
 const FlashStack = createNativeStackNavigator();

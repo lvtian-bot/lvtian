@@ -40,10 +40,12 @@ export function firstMeaningfulLine(text: string, maxLength: number): string {
 
 /**
  * 按“用户一次请求”切分历史消息。
- * 只依赖消息的到达顺序与角色，不依赖任何时间戳；工具归属到它所在的那一轮。
+ * 助手回复优先按 replyTo 归回它实际回答的请求；旧历史没有该字段时，回退到到达顺序。
+ * 工具归属到它所在的那一轮。
  */
 export function buildChatTurns(messages: AssistantMessage[]): ChatTurn[] {
     const turns: ChatTurn[] = [];
+    const turnsById = new Map<string, ChatTurn>();
     let current: ChatTurn | undefined;
 
     for (const message of messages) {
@@ -57,21 +59,24 @@ export function buildChatTurns(messages: AssistantMessage[]): ChatTurn[] {
                 tools: [],
                 startedAt: message.timestamp,
                 completedAt: message.timestamp,
-                status: 'running',
+                status: message.status === 'error' ? 'error' : 'running',
             };
             turns.push(current);
+            turnsById.set(current.id, current);
             continue;
         }
         // 定时任务的后台汇报不是对当前用户请求的回答，不能并进上一轮。
         if (message.source === 'native_task_report') continue;
-        if (message.role !== 'assistant' || !current) continue;
+        if (message.role !== 'assistant') continue;
+        const target = message.replyTo ? turnsById.get(message.replyTo) : current;
+        if (!target) continue;
 
         if (message.content.trim()) {
-            current.answer = current.answer
-                ? `${current.answer}\n\n${message.content}`
+            target.answer = target.answer
+                ? `${target.answer}\n\n${message.content}`
                 : message.content;
             // 列表摘要取最后一次正文的首行：过程性开场白不应盖过最终结论。
-            current.summary = firstMeaningfulLine(message.content, SUMMARY_MAX);
+            target.summary = firstMeaningfulLine(message.content, SUMMARY_MAX);
         }
         if (message.toolCalls?.length) {
             // 同一轮内按工具首次出现的正文锚点排序；缺失锚点时保持服务端数组顺序。
@@ -84,15 +89,15 @@ export function buildChatTurns(messages: AssistantMessage[]): ChatTurn[] {
                     - (offsets.get(b.id) ?? Number.MAX_SAFE_INTEGER))
                 : message.toolCalls;
             for (const tool of orderedTools) {
-                const index = current.tools.findIndex((item) => item.id === tool.id);
-                if (index >= 0) current.tools[index] = tool;
-                else current.tools.push(tool);
+                const index = target.tools.findIndex((item) => item.id === tool.id);
+                if (index >= 0) target.tools[index] = tool;
+                else target.tools.push(tool);
             }
         }
-        current.completedAt = Math.max(current.completedAt, message.completedAt ?? message.timestamp);
-        if (message.status === 'error') current.status = 'error';
-        else if (message.status === 'processing' && current.status !== 'error') current.status = 'running';
-        else if (message.status === 'done' && current.status !== 'error') current.status = 'done';
+        target.completedAt = Math.max(target.completedAt, message.completedAt ?? message.timestamp);
+        if (message.status === 'error') target.status = 'error';
+        else if (message.status === 'processing' && target.status !== 'error') target.status = 'running';
+        else if (message.status === 'done' && target.status !== 'error') target.status = 'done';
     }
 
     for (const turn of turns) {

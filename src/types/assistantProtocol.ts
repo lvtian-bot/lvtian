@@ -50,6 +50,8 @@ export interface AssistantMessage {
     /** Main-agent reply to a background result, never a user instruction. */
     source?: 'native_task_report';
     reportDeliveryId?: string;
+    /** 本条助手回复所回答的用户消息 id；排队时据此把回答归回对应请求 */
+    replyTo?: string;
     content: string;
     timestamp: number;
     completedAt?: number;

@@ -1137,6 +1137,11 @@ test('并发发送消息自动排队，前序任务完成后按序流水推进',
     const session = sessionManager.getOrCreateSession('main');
     // 验证所有排队消息均已顺利完成，无残留排队
     assert.equal(session.messages.filter((m) => m.status === 'queued').length, 0);
+    // 每条助手回复都绑定它实际回答的请求，排队场景下不能靠“最近一条用户消息”猜
+    const replyTo = session.messages
+        .filter((m) => m.role === 'assistant' && !m.source)
+        .map((m) => m.replyTo);
+    assert.deepEqual(replyTo, ['u1', 'u2', 'u3']);
 
     ws.close();
     await server.stop();

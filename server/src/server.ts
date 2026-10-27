@@ -849,13 +849,14 @@ export class LvtianServer {
         });
 
         // 3. 执行助理任务
-        this.executeAssistantPrompt(sessionId, content, attachments);
+        this.executeAssistantPrompt(sessionId, content, attachments, userMsg.id);
     }
 
     private executeAssistantPrompt(
         sessionId: string,
         content: string,
-        attachments?: ChatAttachment[]
+        attachments?: ChatAttachment[],
+        replyTo?: string
     ): void {
         const assistantMessageId = `asst-${Date.now()}`;
         let asstMsg;
@@ -863,6 +864,7 @@ export class LvtianServer {
             asstMsg = this.sessionManager.addMessage(sessionId, {
                 id: assistantMessageId,
                 role: 'assistant',
+                replyTo,
                 content: '',
                 timestamp: Date.now(),
                 status: 'processing',
@@ -1045,7 +1047,7 @@ export class LvtianServer {
         });
 
         // 3. 启动助理执行
-        this.executeAssistantPrompt(sessionId, nextQueued.content, nextQueued.attachments);
+        this.executeAssistantPrompt(sessionId, nextQueued.content, nextQueued.attachments, nextQueued.id);
     }
 
     /** Deliver through the SAME main ACP agent, never as a synthetic user message.

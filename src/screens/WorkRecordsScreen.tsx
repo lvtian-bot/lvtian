@@ -68,6 +68,9 @@ export const WorkRecordDetail: React.FC<{ turn: ChatTurn; onClose: () => void }>
                 <Text style={styles.detailTitle} selectable>
                     {turn.title || t('workRecords.untitled', '未命名任务')}
                 </Text>
+                {turn.question && turn.question !== turn.title ? (
+                    <Text style={styles.detailRequest} selectable>{turn.question}</Text>
+                ) : null}
                 {turn.summary ? (
                     <Text style={styles.detailSummary} selectable>{turn.summary}</Text>
                 ) : null}
@@ -252,6 +255,7 @@ const styles = StyleSheet.create({
     detailTime: { fontSize: 12, color: colors.mutedText },
     detailScroll: { padding: spacing.md, paddingTop: spacing.sm },
     detailTitle: { fontSize: 22, fontWeight: '700', color: colors.text, lineHeight: 30 },
+    detailRequest: { fontSize: 15, color: colors.text, marginTop: spacing.sm, lineHeight: 23 },
     detailSummary: { fontSize: 15, color: colors.textSecondary, marginTop: spacing.sm, lineHeight: 22 },
     detailSection: {
         fontSize: 13,

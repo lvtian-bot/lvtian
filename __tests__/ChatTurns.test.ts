@@ -61,6 +61,38 @@ describe('工作记录按轮聚合', () => {
         expect(turns[0].summary).toBe('');
     });
 
+    test('连续排队时按 replyTo 把回答与工具归回各自请求', () => {
+        const turns = buildChatTurns([
+            message({ id: 'u1', role: 'user', content: '第一个问题', timestamp: 1 }),
+            message({ id: 'a1', role: 'assistant', replyTo: 'u1', content: '答一', timestamp: 2, completedAt: 3 }),
+            message({ id: 'u2', role: 'user', content: '第二个问题', timestamp: 4 }),
+            message({ id: 'u3', role: 'user', content: '第三个问题', timestamp: 5 }),
+            message({
+                id: 'a2', role: 'assistant', replyTo: 'u2', content: '答二', timestamp: 6, completedAt: 8,
+                toolCalls: [{ id: 't2', name: 'bash', status: 'done', summary: '处理第二个问题' }],
+            }),
+            message({ id: 'a3', role: 'assistant', replyTo: 'u3', content: '答三', timestamp: 7, completedAt: 9 }),
+        ]);
+
+        expect(turns.map((turn) => turn.id)).toEqual(['u3', 'u2', 'u1']);
+        expect(turns[0].answer).toBe('答三');
+        expect(turns[1].answer).toBe('答二');
+        expect(turns[1].tools.map((tool) => tool.id)).toEqual(['t2']);
+        expect(turns[1].status).toBe('done');
+        expect(turns[2].answer).toBe('答一');
+    });
+
+    test('发送失败或排队中被终止的请求落为失败态，不永久进行中', () => {
+        const turns = buildChatTurns([
+            message({ id: 'u1', role: 'user', content: '没发出去', timestamp: 1, status: 'error' }),
+            message({ id: 'u2', role: 'user', content: '排队后被停止', timestamp: 2, status: 'error' }),
+            message({ id: 'a2', role: 'assistant', replyTo: 'u2', content: '', timestamp: 3, status: 'error' }),
+        ]);
+
+        expect(turns).toHaveLength(2);
+        expect(turns.map((turn) => turn.status)).toEqual(['error', 'error']);
+    });
+
     test('同一轮内工具按正文锚点先后排列，不按状态更新顺序', () => {
         const turns = buildChatTurns([
             message({ id: 'u1', role: 'user', content: '检查仓库', timestamp: 1 }),
