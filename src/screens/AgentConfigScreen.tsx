@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,6 +8,7 @@ import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { type AgentModelOption } from '../types/assistantProtocol';
 import { RootStackParamList } from '../types/navigation';
+import { useAgentRemoteSetting } from '../hooks/useAgentRemoteSetting';
 import {
     SettingsChoice,
     SettingsGroup,
@@ -15,425 +16,286 @@ import {
     SettingsRow,
     SettingsSheet,
     SettingsStatusCard,
-    SettingsToast,
-    useSettingsToast,
 } from '../components/settings';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type PermissionMode = 'workspace-write' | 'danger-full-access';
+type ModelSelection = { provider: string; model: string };
+
+const PERMISSION_MODES: PermissionMode[] = ['workspace-write', 'danger-full-access'];
 
 export const AgentConfigScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
-    const { toast, showToast } = useSettingsToast();
     const {
         serverUrl,
         serverToken,
-        permissionMode,
-        setPermissionMode,
-        agentModelSelection,
-        setAgentModelSelection,
-        taskState,
         connectionState,
+        setPermissionMode,
+        agentModelOptions,
     } = useAssistantStore();
 
     const isConnected = connectionState === 'connected';
-    const isTaskRunning = taskState === 'processing' || taskState === 'awaiting_approval';
 
-    const [selectedMode, setSelectedMode] = useState<'workspace-write' | 'danger-full-access'>(
-        permissionMode || 'workspace-write'
-    );
-    const [switchingPerm, setSwitchingPerm] = useState(false);
-    const hasUserSelectedRef = useRef(false);
+    const permissionLabel = (mode: PermissionMode): string =>
+        mode === 'danger-full-access'
+            ? t('assistant.permissionDanger', { defaultValue: '完全权限模式' })
+            : t('assistant.permissionWorkspace', { defaultValue: '安全工作区模式' });
 
-    const [selectedModel, setSelectedModel] = useState<{ provider: string; model: string } | null>(
-        agentModelSelection
-    );
-    const [modelOptions, setModelOptions] = useState<AgentModelOption[]>([]);
-    const [switchingModel, setSwitchingModel] = useState(false);
-    const [openSheet, setOpenSheet] = useState<'perm' | 'model' | null>(null);
-    /** 用户最近一次本地切换模型的时刻：仅用于丢弃在此之前发起的过期查询结果 */
-    const lastModelSwitchAtRef = useRef(0);
-
-    useEffect(() => {
-        if (permissionMode && !hasUserSelectedRef.current) {
-            setSelectedMode(permissionMode);
+    const modelLabel = (selection: ModelSelection): string => {
+        if (selection.provider === 'deepseek-official' && selection.model === 'deepseek-flash') {
+            return t('assistant.modelDeepseekFlashName', { defaultValue: 'DeepSeek V4.1-Flash' });
         }
-        if (serverUrl && serverToken) {
-            AssistantClient.fetchPermissionMode(serverUrl, serverToken).then((remoteMode) => {
-                if (remoteMode && !hasUserSelectedRef.current) {
-                    setSelectedMode(remoteMode);
-                    setPermissionMode(remoteMode);
-                }
-            });
+        if (selection.provider === 'openai-codex' && selection.model === 'gpt-6.1-sol') {
+            return t('assistant.modelGptSolName', { defaultValue: 'GPT-6.1-Sol' });
         }
-    }, [permissionMode, serverUrl, serverToken, setPermissionMode]);
-
-    /**
-     * 拉取服务端模型选项与当前选择。
-     * 依赖连接状态：断网或首次查询失败时弹层停留加载态，连接恢复后自动重查；
-     * 加载行亦可点击手动重试。仅丢弃在用户本地切换之前发起的过期查询结果，
-     * 其后发起的重连查询始终如实反映服务端状态（含其他客户端的修改）。
-     */
-    const loadModelSelection = useCallback(() => {
-        if (!serverUrl || !serverToken) {
-            return;
-        }
-        const requestedAt = Date.now();
-        AssistantClient.fetchModelSelection(serverUrl, serverToken).then((data) => {
-            if (data && requestedAt >= lastModelSwitchAtRef.current) {
-                setModelOptions(data.options);
-                const selection = { provider: data.provider, model: data.model };
-                setSelectedModel(selection);
-                setAgentModelSelection(selection);
-            }
-        });
-    }, [serverUrl, serverToken, setAgentModelSelection]);
-
-    useEffect(() => {
-        if (isConnected) {
-            loadModelSelection();
-        }
-    }, [isConnected, loadModelSelection]);
-
-    /** 已知模型组合映射为本地化名称与说明，未知组合回退展示原始模型 ID */
-    const resolveModelPresentation = (option: AgentModelOption): { title: string; desc: string } => {
-        if (option.provider === 'deepseek-official' && option.model === 'deepseek-flash') {
-            return {
-                title: t('assistant.modelDeepseekFlashName', { defaultValue: 'DeepSeek V4.1-Flash' }),
-                desc: t('assistant.modelDeepseekFlashDesc', {
-                    defaultValue: 'DeepSeek 官方直连，响应快、成本低，适合日常任务。',
-                }),
-            };
-        }
-        if (option.provider === 'openai-codex' && option.model === 'gpt-6.1-sol') {
-            return {
-                title: t('assistant.modelGptSolName', { defaultValue: 'GPT-6.1-Sol' }),
-                desc: t('assistant.modelGptSolDesc', {
-                    defaultValue: '经第三方 Codex 路由接入的模型。',
-                }),
-            };
-        }
-        return {
-            title: option.model,
-            desc: t('assistant.modelUnknownDesc', { defaultValue: '服务端当前启用的模型。' }),
-        };
+        return selection.model;
     };
 
-    const applyModelSwitch = async (option: AgentModelOption) => {
-        if (!serverUrl || !serverToken) {
-            showToast(t('assistant.serverConfigRequiredForModel'));
-            return;
-        }
+    const modelDesc = (option: AgentModelOption): string =>
+        option.provider === 'deepseek-official'
+            ? t('assistant.modelDeepseekFlashDesc', {
+                  defaultValue: 'DeepSeek 官方直连，响应快、成本低，适合日常任务',
+              })
+            : t('assistant.modelGptSolDesc', { defaultValue: '经第三方 Codex 路由接入的模型' });
 
-        setSwitchingModel(true);
-        try {
-            const res = await AssistantClient.updateModelSelection(serverUrl, serverToken, option.provider, option.model);
-            if (res.success) {
-                setSwitchingModel(false);
-                lastModelSwitchAtRef.current = Date.now();
-                setSelectedModel(option);
-                setAgentModelSelection(option);
-                setOpenSheet(null);
-                showToast(t('assistant.modelSwitchSuccess', { defaultValue: '模型已切换，新会话即刻生效' }));
-                return;
-            }
-
-            // 超时中止不代表切换失败：服务端在交接前已写入新配置，须重查核对实际生效模型
-            if (res.code === 'MODEL_SWITCH_UNCONFIRMED') {
-                const remote = await AssistantClient.fetchModelSelection(serverUrl, serverToken);
-                setSwitchingModel(false);
-                if (remote) {
-                    const actual = { provider: remote.provider, model: remote.model };
-                    setModelOptions(remote.options);
-                    setSelectedModel(actual);
-                    setAgentModelSelection(actual);
-                    setOpenSheet(null);
-                    if (actual.provider === option.provider && actual.model === option.model) {
-                        lastModelSwitchAtRef.current = Date.now();
-                        showToast(t('assistant.modelSwitchSuccess', { defaultValue: '模型已切换，新会话即刻生效' }));
-                    } else {
-                        Alert.alert(
-                            t('settings.notice', { defaultValue: '提示' }),
-                            t('assistant.modelSwitchSettled', {
-                                defaultValue:
-                                    '切换请求超时，服务端当前实际生效模型为「{{model}}」，已按服务端状态刷新',
-                                model: resolveModelPresentation(actual).title,
-                            })
-                        );
-                    }
-                } else {
-                    Alert.alert(
-                        t('settings.notice', { defaultValue: '提示' }),
-                        t('assistant.modelSwitchUnconfirmed', {
-                            defaultValue: '切换请求超时，结果未确认；请稍后重新进入本页查看实际生效模型',
-                        })
-                    );
-                }
-                return;
-            }
-
-            setSwitchingModel(false);
-            const failMessage = res.code === 'TASK_RUNNING'
-                ? t('assistant.taskRunningCannotSwitchModel', {
-                      defaultValue: '当前有正在执行的任务，请先在聊天界面停止任务后再切换模型',
-                  })
-                : t('assistant.modelSwitchFailed', { defaultValue: '切换模型失败，请检查服务连接' });
-            Alert.alert(t('settings.failure', { defaultValue: '失败' }), failMessage);
-        } catch {
-            setSwitchingModel(false);
-            Alert.alert(
-                t('settings.failure', { defaultValue: '失败' }),
-                t('assistant.modelSwitchFailed', { defaultValue: '切换模型失败，请检查服务连接' })
-            );
-        }
-    };
-
-    const handleSelectModel = (option: AgentModelOption) => {
-        if (switchingModel || !isConnected) {
-            return;
-        }
-        if (selectedModel && selectedModel.provider === option.provider && selectedModel.model === option.model) {
-            setOpenSheet(null);
-            return;
-        }
-        if (isTaskRunning) {
-            Alert.alert(
-                t('settings.failure', { defaultValue: '失败' }),
-                t('assistant.taskRunningCannotSwitchModel', {
-                    defaultValue: '当前有正在执行的任务，请先在聊天界面停止任务后再切换模型',
-                })
-            );
-            return;
-        }
-        const { title } = resolveModelPresentation(option);
-        Alert.alert(
-            t('assistant.modelSwitchConfirmTitle', { defaultValue: '确认切换模型？' }),
-            t('assistant.modelSwitchConfirmContent', {
-                defaultValue:
-                    '切换模型将重启助理会话：当前对话会自动提炼备忘录并无缝接力；有任务运行时需先停止。确认切换到「{{model}}」？',
-                model: title,
+    // 权限与模型共用同一套远程设置状态机：本地缓存秒显、连接后核对、切换与超时核对
+    const permissionSetting = useAgentRemoteSetting<PermissionMode>({
+        readLocal: () => useAssistantStore.getState().permissionMode,
+        writeLocal: setPermissionMode,
+        fetchRemote: AssistantClient.fetchPermissionMode,
+        applyRemote: (url, token, mode) => AssistantClient.updatePermissionMode(url, token, mode),
+        isSameValue: (a, b) => a === b,
+        confirmBeforeApply: (mode) =>
+            mode === 'danger-full-access'
+                ? {
+                      title: t('assistant.permissionDangerAlertTitle', { defaultValue: '确认切换至完全权限？' }),
+                      content: t('assistant.permissionDangerAlertContent', {
+                          defaultValue:
+                              '切换后助理将拥有当前服务器用户的所有执行权限，并为您即时生成当前对话的心智备忘录以接力新会话。是否继续？',
+                      }),
+                      confirmText: t('common.confirm', { defaultValue: '确认切换' }),
+                      cancelText: t('common.cancel', { defaultValue: '取消' }),
+                  }
+                : null,
+        texts: {
+            valueLabel: permissionLabel,
+            noticeTitle: t('settings.notice', { defaultValue: '提示' }),
+            successTitle: t('settings.success', { defaultValue: '成功' }),
+            unconfiguredNotice: t('assistant.remoteUnconfigured', {
+                defaultValue: '请先配置并连接服务，再调整服务端设置',
             }),
-            [
-                { text: t('common.cancel', { defaultValue: '取消' }), style: 'cancel' },
-                {
-                    text: t('common.confirm', { defaultValue: '确认' }),
-                    onPress: () => applyModelSwitch(option),
-                },
-            ]
-        );
-    };
+            taskRunning: t('assistant.remoteTaskRunning', {
+                defaultValue: '当前有正在执行的任务，请先停止任务后再切换设置',
+            }),
+            applySuccess: t('assistant.remoteApplySuccess', { defaultValue: '已切换并完成会话交接' }),
+            applyFailed: t('assistant.remoteApplyFailed', { defaultValue: '切换失败，请检查服务连接' }),
+            applyUnconfirmed: t('assistant.remoteUnconfirmed', {
+                defaultValue: '切换请求超时，结果未确认；请稍后重新查看实际生效值',
+            }),
+            applySettledDifferent: (actual) =>
+                t('assistant.remoteSettledDifferent', {
+                    defaultValue: '切换请求超时，服务端当前实际生效为「{{label}}」，已按服务端状态刷新',
+                    label: actual,
+                }),
+        },
+    });
 
-    const applyPermissionSwitch = async (targetMode: 'workspace-write' | 'danger-full-access') => {
+    const modelSetting = useAgentRemoteSetting<ModelSelection>({
+        readLocal: () => useAssistantStore.getState().agentModelSelection,
+        writeLocal: (selection) => useAssistantStore.getState().setAgentModelSelection(selection),
+        fetchRemote: async (url, token) => {
+            const data = await AssistantClient.fetchModelSelection(url, token);
+            if (!data) return null;
+            useAssistantStore.getState().setAgentModelOptions(data.options);
+            return { provider: data.provider, model: data.model };
+        },
+        applyRemote: (url, token, selection) =>
+            AssistantClient.updateModelSelection(url, token, selection.provider, selection.model),
+        isSameValue: (a, b) => a.provider === b.provider && a.model === b.model,
+        confirmBeforeApply: (selection) => ({
+            title: t('assistant.modelSwitchConfirmTitle', { defaultValue: '确认切换模型？' }),
+            content: t('assistant.modelSwitchConfirmContent', {
+                defaultValue: '切换将重启助理会话并自动提炼备忘录无缝接力。确认切换到「{{model}}」？',
+                model: modelLabel(selection),
+            }),
+            confirmText: t('common.confirm', { defaultValue: '确认' }),
+            cancelText: t('common.cancel', { defaultValue: '取消' }),
+        }),
+        texts: {
+            valueLabel: modelLabel,
+            noticeTitle: t('settings.notice', { defaultValue: '提示' }),
+            successTitle: t('settings.success', { defaultValue: '成功' }),
+            unconfiguredNotice: t('assistant.remoteUnconfigured', {
+                defaultValue: '请先配置并连接服务，再调整服务端设置',
+            }),
+            taskRunning: t('assistant.remoteTaskRunning', {
+                defaultValue: '当前有正在执行的任务，请先停止任务后再切换设置',
+            }),
+            applySuccess: t('assistant.remoteApplySuccess', { defaultValue: '已切换并完成会话交接' }),
+            applyFailed: t('assistant.remoteApplyFailed', { defaultValue: '切换失败，请检查服务连接' }),
+            applyUnconfirmed: t('assistant.remoteUnconfirmed', {
+                defaultValue: '切换请求超时，结果未确认；请稍后重新查看实际生效值',
+            }),
+            applySettledDifferent: (actual) =>
+                t('assistant.remoteSettledDifferent', {
+                    defaultValue: '切换请求超时，服务端当前实际生效为「{{label}}」，已按服务端状态刷新',
+                    label: actual,
+                }),
+        },
+    });
+
+    const [activePicker, setActivePicker] = useState<'permission' | 'model' | null>(null);
+
+    const openPicker = (picker: 'permission' | 'model') => {
         if (!serverUrl || !serverToken) {
-            showToast(t('assistant.serverConfigRequiredFirst'));
+            // 未配置服务：借 switchTo 的统一凭据检查给出提示，不打开弹层
+            permissionSetting.switchTo('workspace-write');
             return;
         }
-
-        setSwitchingPerm(true);
-        try {
-            const res = await AssistantClient.updatePermissionMode(serverUrl, serverToken, targetMode);
-            setSwitchingPerm(false);
-            if (res.success) {
-                hasUserSelectedRef.current = true;
-                setSelectedMode(targetMode);
-                setPermissionMode(targetMode);
-                setOpenSheet(null);
-                showToast(t('assistant.permissionSwitchSuccess', '权限已成功切换并完成会话交接'));
-            } else {
-                const failMessage = res.code === 'TASK_RUNNING'
-                    ? t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式')
-                    : t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接');
-                Alert.alert(t('settings.failure', '失败'), failMessage);
-            }
-        } catch {
-            setSwitchingPerm(false);
-            Alert.alert(
-                t('settings.failure', '失败'),
-                t('assistant.permissionSwitchFailed', '切换权限模式失败，请检查服务连接')
-            );
-        }
+        // 打开弹层前重查服务端：选中标记立即对齐实际生效值，上次核对失败时此处即为重试入口
+        (picker === 'permission' ? permissionSetting : modelSetting).refresh();
+        setActivePicker(picker);
     };
 
-    const handleSelectMode = (mode: 'workspace-write' | 'danger-full-access') => {
-        if (switchingPerm) {
-            return;
-        }
-        if (isTaskRunning) {
-            Alert.alert(
-                t('settings.failure', '失败'),
-                t('assistant.taskRunningCannotSwitch', '当前有正在执行的任务，请先在聊天界面停止任务后再切换权限模式')
-            );
-            return;
-        }
-        if (mode === 'danger-full-access') {
-            Alert.alert(
-                t('assistant.permissionDangerAlertTitle', '确认切换至完全权限？'),
-                t(
-                    'assistant.permissionDangerAlertContent',
-                    '切换后助理将拥有当前服务器用户的所有执行权限，并为您即时生成当前对话的心智备忘录以接力新会话。是否继续？'
-                ),
-                [
-                    { text: t('common.cancel', '取消'), style: 'cancel' },
-                    {
-                        text: t('common.confirm', '确认切换'),
-                        style: 'destructive',
-                        onPress: () => applyPermissionSwitch('danger-full-access'),
-                    },
-                ]
-            );
-        } else {
-            applyPermissionSwitch('workspace-write');
-        }
-    };
+    const modelValueText = modelSetting.value
+        ? modelLabel(modelSetting.value)
+        : agentModelOptions.length === 0
+        ? t('assistant.remoteValuePending', { defaultValue: '读取中…' })
+        : '—';
 
-    const handleRowPress = (sheet: 'perm' | 'model') => {
-        if (!isConnected) {
-            showToast(t('assistant.serverConfigRequiredFirst'));
-            return;
-        }
-        setOpenSheet(sheet);
-    };
-
-    const permDisplay = selectedMode === 'danger-full-access'
-        ? t('assistant.permissionDanger', '完全权限模式')
-        : t('assistant.permissionWorkspace', '安全工作区模式');
-    const modelDisplay = selectedModel
-        ? resolveModelPresentation(selectedModel).title
-        : t('assistant.modelNotLoaded', '未读取');
+    const permissionSelected = permissionSetting.value ?? 'workspace-write';
 
     return (
         <View style={styles.container}>
-            <ScrollView contentContainerStyle={styles.content}>
-                <SettingsStatusCard
-                    icon="robot"
-                    tone={isConnected ? 'success' : 'muted'}
-                    title={
-                        isConnected
-                            ? t('settings.agentOnline', '智能体在线')
-                            : t('settings.agentOffline', '智能体未连接')
-                    }
-                    subtitle={
-                        isConnected
-                            ? `${t('assistant.currentModel', '当前模型')} · ${modelDisplay}`
-                            : t('settings.agentOfflineDesc', '请先配置并连接服务端')
-                    }
-                    badge={isConnected ? t('assistant.badgeConnected', '已连接') : t('assistant.badgeDisconnected', '未连接')}
-                    onPress={isConnected ? undefined : () => navigation.navigate('AssistantConfig')}
+            <SettingsStatusCard
+                icon="robot"
+                tone={isConnected ? 'success' : 'muted'}
+                title={
+                    isConnected
+                        ? t('settings.agentOnline', '智能体在线')
+                        : t('settings.agentOffline', '智能体未连接')
+                }
+                subtitle={
+                    isConnected
+                        ? `${t('assistant.currentModel', '当前模型')} · ${modelValueText}`
+                        : t('settings.agentOfflineDesc', '请先配置并连接服务端')
+                }
+                badge={isConnected ? t('assistant.badgeConnected', '已连接') : t('assistant.badgeDisconnected', '未连接')}
+                onPress={isConnected ? undefined : () => navigation.navigate('AssistantConfig')}
+            />
+
+            <SettingsGroupLabel>{t('settings.agentExecGroup', '助理执行')}</SettingsGroupLabel>
+            <SettingsGroup>
+                <SettingsRow
+                    icon="shield-check-outline"
+                    title={t('assistant.permissionRow', '执行权限')}
+                    value={permissionSetting.value ? permissionLabel(permissionSetting.value) : undefined}
+                    busy={permissionSetting.switching}
+                    onPress={() => openPicker('permission')}
                 />
+                <SettingsRow
+                    icon="chip"
+                    title={t('assistant.modelTitle', '助理模型')}
+                    value={modelValueText}
+                    busy={modelSetting.switching}
+                    onPress={() => openPicker('model')}
+                    last
+                />
+            </SettingsGroup>
 
-                <SettingsGroupLabel>{t('settings.agentExecGroup', '助理执行')}</SettingsGroupLabel>
-                <SettingsGroup>
-                    <SettingsRow
-                        icon="shield-check-outline"
-                        title={t('assistant.permissionRow', '执行权限')}
-                        value={permDisplay}
-                        onPress={() => handleRowPress('perm')}
-                    />
-                    <SettingsRow
-                        icon="chip"
-                        title={t('assistant.modelTitle', '助理模型')}
-                        value={modelDisplay}
-                        onPress={() => handleRowPress('model')}
-                        last
-                    />
-                </SettingsGroup>
+            <SettingsGroupLabel>{t('settings.agentHubGroup', '中枢与记忆')}</SettingsGroupLabel>
+            <SettingsGroup>
+                <SettingsRow
+                    icon="hub"
+                    title={t('settings.agentHubEngine', '执行中枢')}
+                    value={t('settings.agentHubEngineDesc', 'DeepSeek Harness (ACP 协议)')}
+                />
+                <SettingsRow
+                    icon="brain"
+                    title={t('settings.agentHubMemory', '长期记忆')}
+                    value={t('settings.agentHubMemoryDesc', 'SOUL.md / MEMORY.md 持续沉淀')}
+                    last
+                />
+            </SettingsGroup>
 
-                <SettingsGroupLabel>{t('settings.agentHubGroup', '中枢与记忆')}</SettingsGroupLabel>
-                <SettingsGroup>
-                    <SettingsRow
-                        icon="hub"
-                        title={t('settings.agentHubEngine', '执行中枢')}
-                        value={t('settings.agentHubEngineDesc', 'DeepSeek Harness (ACP 协议)')}
-                    />
-                    <SettingsRow
-                        icon="brain"
-                        title={t('settings.agentHubMemory', '长期记忆')}
-                        value={t('settings.agentHubMemoryDesc', 'SOUL.md / MEMORY.md 持续沉淀')}
-                        last
-                    />
-                </SettingsGroup>
-
-                <Text style={styles.note}>
-                    {t('settings.agentSwitchNote', '切换权限或模型会重启助理会话，当前对话将自动提炼备忘录并无缝接力。')}
-                </Text>
-            </ScrollView>
+            <Text style={styles.note}>
+                {t('settings.agentSwitchNote', '切换权限或模型会重启助理会话，当前对话将自动提炼备忘录并无缝接力。')}
+            </Text>
 
             <SettingsSheet
-                visible={openSheet === 'perm'}
+                visible={activePicker === 'permission'}
                 title={t('assistant.permissionRow', '执行权限')}
-                onClose={() => setOpenSheet(null)}
+                onClose={() => setActivePicker(null)}
             >
                 <View style={styles.choices}>
-                    <SettingsChoice
-                        title={t('assistant.permissionWorkspace', '安全工作区模式')}
-                        desc={t('assistant.permissionWorkspaceDesc')}
-                        badge={t('common.recommended')}
-                        selected={selectedMode === 'workspace-write'}
-                        disabled={switchingPerm}
-                        onPress={() => handleSelectMode('workspace-write')}
-                    />
-                    <SettingsChoice
-                        title={t('assistant.permissionDanger', '完全权限模式')}
-                        desc={t('assistant.permissionDangerDesc')}
-                        danger
-                        selected={selectedMode === 'danger-full-access'}
-                        disabled={switchingPerm}
-                        onPress={() => handleSelectMode('danger-full-access')}
-                    />
-                    {switchingPerm ? (
-                        <View style={styles.switchingRow}>
-                            <ActivityIndicator size="small" color={theme.colors.primary} />
-                        </View>
-                    ) : null}
+                    {PERMISSION_MODES.map((mode) => (
+                        <SettingsChoice
+                            key={mode}
+                            title={permissionLabel(mode)}
+                            desc={
+                                mode === 'danger-full-access'
+                                    ? t('assistant.permissionDangerBrief', {
+                                          defaultValue: '完整系统权限且免审批，适合运维与开发场景',
+                                      })
+                                    : t('assistant.permissionWorkspaceBrief', {
+                                          defaultValue: '仅在工作区内读写，敏感操作需审批',
+                                      })
+                            }
+                            badge={mode === 'workspace-write' ? t('common.recommended') : undefined}
+                            danger={mode === 'danger-full-access'}
+                            selected={permissionSelected === mode}
+                            onPress={() => {
+                                setActivePicker(null);
+                                permissionSetting.switchTo(mode);
+                            }}
+                        />
+                    ))}
                 </View>
             </SettingsSheet>
 
             <SettingsSheet
-                visible={openSheet === 'model'}
+                visible={activePicker === 'model'}
                 title={t('assistant.modelTitle', '助理模型')}
-                onClose={() => setOpenSheet(null)}
+                onClose={() => setActivePicker(null)}
             >
                 <View style={styles.choices}>
-                    {modelOptions.length === 0 ? (
+                    {agentModelOptions.length === 0 ? (
                         <TouchableOpacity
                             style={styles.loadingButton}
-                            onPress={loadModelSelection}
+                            onPress={() => modelSetting.refresh()}
                             activeOpacity={0.7}
                         >
                             <Text style={styles.loadingText}>
-                                {t('assistant.modelLoading', { defaultValue: '正在读取服务端模型配置...' })}
+                                {t('assistant.remoteValuePending', { defaultValue: '读取中…' })}
                             </Text>
                             <ActivityIndicator size="small" color={theme.colors.textSecondary} />
                         </TouchableOpacity>
                     ) : (
-                        modelOptions.map((option) => {
-                            const isSelected = Boolean(
-                                selectedModel
-                                    && selectedModel.provider === option.provider
-                                    && selectedModel.model === option.model
-                            );
-                            const { title, desc } = resolveModelPresentation(option);
+                        agentModelOptions.map((option: AgentModelOption) => {
                             return (
                                 <SettingsChoice
                                     key={`${option.provider}/${option.model}`}
-                                    title={title}
-                                    desc={desc}
-                                    selected={isSelected}
-                                    disabled={switchingModel}
-                                    onPress={() => handleSelectModel(option)}
+                                    title={modelLabel(option)}
+                                    desc={modelDesc(option)}
+                                    selected={Boolean(
+                                        modelSetting.value
+                                            && modelSetting.value.provider === option.provider
+                                            && modelSetting.value.model === option.model
+                                    )}
+                                    onPress={() => {
+                                        setActivePicker(null);
+                                        modelSetting.switchTo({
+                                            provider: option.provider,
+                                            model: option.model,
+                                        });
+                                    }}
                                 />
                             );
                         })
                     )}
-                    {switchingModel ? (
-                        <View style={styles.switchingRow}>
-                            <ActivityIndicator size="small" color={theme.colors.primary} />
-                        </View>
-                    ) : null}
                 </View>
             </SettingsSheet>
-
-            <SettingsToast message={toast} />
         </View>
     );
 };
@@ -442,8 +304,6 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: theme.colors.background,
-    },
-    content: {
         padding: 16,
     },
     choices: {
@@ -469,9 +329,5 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: theme.colors.textSecondary,
         fontStyle: 'italic',
-    },
-    switchingRow: {
-        paddingVertical: 6,
-        alignItems: 'center',
     },
 });

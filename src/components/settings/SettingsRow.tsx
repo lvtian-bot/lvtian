@@ -1,5 +1,5 @@
 import React, { type ComponentProps, type PropsWithChildren } from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 
@@ -20,6 +20,8 @@ interface SettingsRowProps {
     onPress?: () => void;
     /** 组内最后一行，隐藏底部分隔线 */
     last?: boolean;
+    /** 右侧当前值处的小型加载指示（如远端切换进行中） */
+    busy?: boolean;
 }
 
 export const SettingsRow: React.FC<SettingsRowProps> = ({
@@ -29,6 +31,7 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
     value,
     onPress,
     last,
+    busy,
 }) => {
     const body = (
         <>
@@ -39,6 +42,7 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
                 <Text style={styles.rowTitle}>{title}</Text>
                 {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
             </View>
+            {busy ? <ActivityIndicator size="small" color={theme.colors.primary} /> : null}
             {value ? (
                 <Text style={styles.rowValue} numberOfLines={1}>
                     {value}

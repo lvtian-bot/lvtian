@@ -244,18 +244,9 @@ export class AssistantClient {
                 signal: controller.signal,
             });
             clearTimeout(timeoutId);
-            if (res.ok) {
-                const data = (await res.json().catch(() => null)) as { changed?: boolean } | null;
-                return { success: true, changed: data?.changed };
-            }
-            const data = (await res.json().catch(() => null)) as { code?: string; error?: string } | null;
-            return {
-                success: false,
-                code: data?.code,
-                message: data?.error,
-            };
-        } catch {
-            return { success: false, code: 'NETWORK_ERROR' };
+            return AssistantClient.parseRemoteApplyResponse(res);
+        } catch (err: unknown) {
+            return AssistantClient.classifyRemoteApplyError(err);
         }
     }
 
@@ -318,26 +309,37 @@ export class AssistantClient {
                 signal: controller.signal,
             });
             clearTimeout(timeoutId);
-            if (res.ok) {
-                const data = (await res.json().catch(() => null)) as { changed?: boolean } | null;
-                return { success: true, changed: data?.changed };
-            }
-            const data = (await res.json().catch(() => null)) as { code?: string; error?: string } | null;
-            return {
-                success: false,
-                code: data?.code,
-                message: data?.error,
-            };
+            return AssistantClient.parseRemoteApplyResponse(res);
         } catch (err: unknown) {
-            // 超时中止不代表切换失败：服务端在触发会话交接前已写入新配置，
-            // 须由调用方重查核对实际生效模型，不得按失败处理让旧选择误导用户
-            const isAbortOrTimeout = (err instanceof Error && err.name === 'AbortError')
-                || /aborted|timeout/i.test(err instanceof Error ? err.message : String(err));
-            if (isAbortOrTimeout) {
-                return { success: false, code: 'MODEL_SWITCH_UNCONFIRMED' };
-            }
-            return { success: false, code: 'NETWORK_ERROR' };
+            return AssistantClient.classifyRemoteApplyError(err);
         }
+    }
+
+    /** 远程设置切换类 POST 的统一响应解析：成功透传 changed，失败透传服务端错误码 */
+    private static async parseRemoteApplyResponse(
+        res: Response
+    ): Promise<{ success: boolean; changed?: boolean; code?: string; message?: string }> {
+        if (res.ok) {
+            const data = (await res.json().catch(() => null)) as { changed?: boolean } | null;
+            return { success: true, changed: data?.changed };
+        }
+        const data = (await res.json().catch(() => null)) as { code?: string; error?: string } | null;
+        return {
+            success: false,
+            code: data?.code,
+            message: data?.error,
+        };
+    }
+
+    /**
+     * 远程设置切换类请求的统一异常分类：超时中止返回 REQUEST_UNCONFIRMED
+     * （服务端可能在会话交接前已写入新配置，调用方须重查核对实际生效值），
+     * 其余网络异常返回 NETWORK_ERROR。
+     */
+    private static classifyRemoteApplyError(err: unknown): { success: boolean; code: string } {
+        const isAbortOrTimeout = (err instanceof Error && err.name === 'AbortError')
+            || /aborted|timeout/i.test(err instanceof Error ? err.message : String(err));
+        return { success: false, code: isAbortOrTimeout ? 'REQUEST_UNCONFIRMED' : 'NETWORK_ERROR' };
     }
 
     /**
