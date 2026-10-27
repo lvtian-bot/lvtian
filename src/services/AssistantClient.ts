@@ -1121,10 +1121,12 @@ export class AssistantClient {
                         (m) => m.role === 'assistant' && m.status === 'processing'
                     );
                     if (asstMsg) {
+                        // 停止与审批超时和报错一样属于中断终态：服务端同一条消息存的是 error，
+                        // 这里若记成 done，工作记录会先显示完成、重连对账后又变未完成。
                         store.addOrUpdateMessage({
                             ...asstMsg,
-                            status: msg.state === 'completed' ? 'done' : msg.state === 'error' ? 'error' : 'done',
-                            errorMessage: msg.error,
+                            status: msg.state === 'completed' ? 'done' : 'error',
+                            errorMessage: msg.state === 'stopped' ? (msg.error || 'task_stopped') : msg.error,
                             stopReason: msg.stopReason,
                             completedAt: msg.completedAt ?? (msg.state === 'completed' ? Date.now() : asstMsg.completedAt),
                         });
