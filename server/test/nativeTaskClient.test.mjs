@@ -36,6 +36,23 @@ const safeError = (code, operation, unknown = false) => error => {
   return true;
 };
 
+test('official control stream wakes cold reconciliation and aborts without writing tasks', async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  let signals = 0;
+  f.remote.session.control = async function* (signal) {
+    yield { type: 'baseline', value: { projections: {} } };
+    yield { type: 'projection', sessionId: 'owned', key: 'status', value: {}, seq: 12 };
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  };
+  const client = await NativeTaskClient.connect(options, f.dependencies);
+  const watched = client.watchChanges(() => { if (++signals === 2) queueMicrotask(() => controller.abort()); }, controller.signal);
+  await watched;
+  assert.equal(signals, 2);
+  assert.deepEqual(f.calls.map(call => call[0]), ['catalog']);
+  await client.dispose();
+});
+
 test('rejects public, ambiguous, credential-bearing and non-origin URLs before I/O', async () => {
   for (const origin of ['https://example.com', 'http://localhost:123', 'http://127.0.0.1.evil', 'http://user:password@127.0.0.1', 'http://127.0.0.1/path', 'http://127.0.0.1?token=SECRET', 'http://127.0.0.1/#SECRET', 'http://2130706433', 'file:///tmp/socket']) {
     const f = fixture();

@@ -8,7 +8,7 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol';
 import WebSocket from 'ws';
 
 type Schedule = Context['remote']['schedule'];
-type Session = Pick<Context['remote']['session'], 'create' | 'prompt' | 'projections' | 'page'>;
+type Session = Pick<Context['remote']['session'], 'create' | 'prompt' | 'projections' | 'page'> & Partial<Pick<Context['remote']['session'], 'control'>>;
 export interface NativeTaskRemote {
   readonly schedule: Schedule;
   readonly session: Session;
@@ -199,6 +199,17 @@ export class NativeTaskClient {
   prompt(request: Parameters<Session['prompt']>[0]) { return this.#call('prompt', true, (remote, signal) => remote.session.prompt(request, signal)); }
   projections(request: Parameters<Session['projections']>[0]) { return this.#call('projections', false, (remote, signal) => remote.session.projections(request, signal)); }
   page(request: Parameters<Session['page']>[0]) { return this.#call('page', false, (remote, signal) => remote.session.page(request, signal)); }
+
+  /** Official host-wide projection stream. Read-only; cold history remains authoritative. */
+  async watchChanges(onChange: () => void, signal: AbortSignal): Promise<void> {
+    this.#assertUsable('control');
+    if (!this.#remote?.session.control) throw new NativeTaskClientError('remote_failed', 'control');
+    const combined = AbortSignal.any([signal, this.#controller.signal]);
+    for await (const _frame of this.#remote.session.control(combined)) {
+      if (combined.aborted) break;
+      onChange();
+    }
+  }
 
   dispose(): Promise<void> {
     if (!this.#disposePromise) {

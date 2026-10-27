@@ -41,6 +41,9 @@ export interface AssistantMessage {
     id: string;
     seq: number;
     role: 'user' | 'assistant' | 'system';
+    /** Main-agent reply to a background result, never a user instruction. */
+    source?: 'native_task_report';
+    reportDeliveryId?: string;
     content: string;
     timestamp: number;
     completedAt?: number;

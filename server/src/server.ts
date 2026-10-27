@@ -1,4 +1,6 @@
 import http from 'node:http';
+import path from 'node:path';
+import { NativeTaskReporting, TaskReportStore, reportMessageId, taskReportPrompt, type TaskReport } from './nativeTaskReporting.js';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
@@ -48,6 +50,8 @@ export class LvtianServer {
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     private consolidationInterval: ReturnType<typeof setInterval> | null = null;
     private isDraining = false;
+    private taskReporting?: NativeTaskReporting;
+    private taskReportStore?: TaskReportStore;
 
     constructor(
         config: ServerConfig,
@@ -56,7 +60,7 @@ export class LvtianServer {
         acpEngine: AcpEngineManager,
         fileManager?: FileManager,
         contextConsolidator?: ContextConsolidator,
-        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'>,
+        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'> & Partial<Pick<NativeTaskRuntime, 'watchChanges'>>,
         skillManager?: SkillManager
     ) {
         this.config = config;
@@ -929,6 +933,7 @@ export class LvtianServer {
             (m) => m.role === 'user' && m.status === 'queued'
         );
         if (!nextQueued) {
+            if (sessionId === 'main') this.taskReporting?.wake();
             return;
         }
 
@@ -950,6 +955,72 @@ export class LvtianServer {
 
         // 3. 启动助理执行
         this.executeAssistantPrompt(sessionId, nextQueued.content, nextQueued.attachments);
+    }
+
+    /** Deliver through the SAME main ACP agent, never as a synthetic user message.
+     * Buffer model output until terminal success, then persist outbox before publishing a stable-ID message. */
+    private async reportNativeTask(report: TaskReport): Promise<boolean> {
+        const sessionId = 'main';
+        const store = this.taskReportStore;
+        if (!store || this.isDraining || this.acpEngine.isRunning(sessionId)) return false;
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        if (session.messages.some(m => m.role === 'user' && m.status === 'queued') || session.pendingApprovals.length) return false;
+        const messageId = reportMessageId(report.id);
+        try {
+            const existing = session.messages.find(m => m.id === messageId);
+            if (existing && (existing.role !== 'assistant' || existing.source !== 'native_task_report'
+                || existing.reportDeliveryId !== (report.result.delivery?.messageId ?? report.id))) {
+                throw new Error('task_report_message_identity_conflict');
+            }
+            if (!existing && report.reply === undefined) {
+                store.accepted(report.id);
+                let text = '';
+                let completed = false;
+                let toolsUsed = false;
+                await this.acpEngine.execute(sessionId, messageId, taskReportPrompt(report), {
+                    onDelta: delta => { text += delta; },
+                    onToolCall: () => { toolsUsed = true; this.acpEngine.stop(sessionId); },
+                    onApprovalRequest: request => { toolsUsed = true; this.acpEngine.handleApproval(sessionId, request.approvalId, false); },
+                    onStatusChange: (status, payload) => { if (status === 'done' && payload?.stopReason === 'end_turn') completed = true; },
+                }, undefined, 'task_report');
+                if (!completed || toolsUsed || !text.trim()) throw new Error('task_report_agent_incomplete');
+                store.generated(report.id, text);
+                report.reply = text;
+            }
+            if (!existing) {
+                this.sessionManager.addMessage(sessionId, {
+                    id: messageId, role: 'assistant', source: 'native_task_report', reportDeliveryId: report.result.delivery?.messageId ?? report.id,
+                    content: report.reply!, timestamp: Date.now(), completedAt: Date.now(), status: 'done',
+                });
+            }
+            // A pre-generated handoff must not silently omit reports received after it was built.
+            const background = this.sessionManager.getPendingBackground(sessionId);
+            const marker = `[后台任务报告 ${report.id}]`;
+            if (background) {
+                const updated = background.includes(marker) ? background : `${background}\n\n${marker}\n${existing?.content ?? report.reply}`;
+                this.sessionManager.setPendingBackground(sessionId, updated, true);
+            }
+            this.sessionManager.persistDurableMessage(sessionId, messageId);
+            store.delivered(report.id);
+            // Full state reconciles both currently-online and reconnecting clients. No internal input is exposed.
+            const reconcile = this.sessionManager.getReconcileData(sessionId, 0);
+            this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...reconcile });
+            this.scheduleProcessQueue(sessionId);
+            return true;
+        } catch {
+            store.failed(report.id);
+            console.warn('[TaskReporting] Main agent report deferred after failure');
+            // A reconnect may have observed the buffered round's processing state.
+            // Publish current authoritative status only (never buffered text), without
+            // overwriting a newer user/queue execution that may already own main.
+            const current = this.sessionManager.getOrCreateSession(sessionId);
+            this.broadcastSession(sessionId, {
+                type: 'task_status', seq: current.currentSeq, sessionId, state: current.taskState,
+                ...(current.taskState === 'error' ? { error: 'engine_error' } : {}),
+            });
+            this.scheduleProcessQueue(sessionId);
+            return false;
+        }
     }
 
     private send(ws: WebSocket, msg: ServerMessage): void {
@@ -1072,6 +1143,13 @@ export class LvtianServer {
         // Keep main chat available if the optional native host is temporarily unavailable.
         if (this.nativeTasks) {
             this.nativeTasks.start().catch(() => console.warn('[Server] Native task host unavailable; recovery remains active'));
+            this.taskReportStore = new TaskReportStore(path.join(this.config.dataDir, 'native-tasks', 'reports.sqlite'));
+            this.taskReporting = new NativeTaskReporting({
+                service: this.nativeTasks.service, store: this.taskReportStore,
+                ...(this.nativeTasks.watchChanges ? { watchChanges: (onChange, signal) => this.nativeTasks!.watchChanges!(onChange, signal) } : {}),
+                report: report => this.reportNativeTask(report),
+            });
+            this.taskReporting.start();
         }
     }
 
@@ -1082,8 +1160,13 @@ export class LvtianServer {
         }
 
         // 优雅关停 ACP 引擎：停止全部受理中任务、关闭引擎连接并回收子进程，防止僵尸进程常驻
+        this.isDraining = true;
+        const reportingStopped = this.taskReporting?.stop();
         try { await this.acpEngine.stopAll(); }
-        finally { await this.nativeTasks?.stop(); }
+        finally {
+            await reportingStopped;
+            await this.nativeTasks?.stop();
+        }
 
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);

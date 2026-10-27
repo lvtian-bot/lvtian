@@ -134,7 +134,7 @@
 - **云同步链路**：`CloudService` 作为云策略入口调度 `WebDavProvider`（原腾讯云 COS 已退出）；`SyncService` 实现三阶段同步引擎（ETag 乐观锁、diff-match-patch 三路合并、`ShadowFileService` 维护的 `.shadows/` 影子基准）；`useFileMetadataStore` 保存 ETag/LastModified 作为冲突检测核心依据；`useSyncStore` 以 Write-Through 机制（写入即入队）管理上传队列。
 - **云优先数据流**：“列表即菜单，点击即下单”——本地缓存仅作首屏加速，云端为唯一真相来源；`useFileListStore` 保存云端列表快照。
 - **闪念与待办**：`FlashNoteService` 向 `flash_notes.md` 时间线流式追加写入；待办系统后续由服务端驱动，原 Markdown `TodoParser` 已清理；`FlashNoteInputModal` 为全局快速录入模态框。
-- **原生自动任务**：ACP 主聊天不迁移；独立 Harness web profile 承接 Schedule。`nativeTaskRuntime` 负责进程连接、`nativeTaskService` 负责归属及幂等关联、`nativeTaskToolBridge` 通过额外 ACP overlay 注册真实交办工具。规则位于 `<dataDir>/native-tasks/home/storages/schedule.json`，会话/结果在同根 `sessions/`；原生为唯一调度与执行事实源。默认关闭，App 首版仅通过 GET 展示服务器任务、触发记录和结果，无新建/编辑/删除/完成停止、无本地调度或主聊天通知。详见 `docs/自动任务/自动任务架构与接口.md`。
+- **原生自动任务**：ACP 主聊天不迁移；独立 Harness web profile 承接 Schedule。`nativeTaskRuntime` 负责进程连接、`nativeTaskService` 负责归属及幂等关联、`nativeTaskToolBridge` 通过额外 ACP overlay 注册真实交办工具。规则位于 `<dataDir>/native-tasks/home/storages/schedule.json`，会话/结果在同根 `sessions/`；原生为唯一调度与执行事实源。默认关闭，App 仅通过 GET 展示服务器任务、触发记录和结果，无新建/编辑/删除/完成停止或本地调度。`nativeTaskReporting` 通过官方投影流及只读恢复对账发现结果，持久化收件箱/发件箱后交固定 main ACP 主代理向主聊天报告，完整必要明细不强制摘要；主聊天忙时避让，稳定消息 ID 去重，不旁路代理、不另建任务调度器。详见 `docs/自动任务/自动任务架构与接口.md`。
 - **编辑器与预览**：`src/editor-web/` 为独立的 CodeMirror 6 工程（Vite 单文件打包），产物经 `editorHtml.ts` 注入 RN WebView，通过 Bridge 协议与 RN 侧通信；Markdown 预览渲染为同构的 `src/preview-web/` 工程（产物 `previewHtml.ts`）。
 - **国际化与事件**：`i18n.ts` 为国际化入口，App 启动首位加载；组件与非 React 上下文（如后台服务）通过 `DeviceEventEmitter` 通信（如 `SHARE_RECEIVED_EVENT`）。
 
