@@ -62,9 +62,9 @@ describe('MeScreen 与 AppSettingsScreen', () => {
 
         // 验证主页面核心结构
         expect(allTexts).toContain('绿天');
-        expect(allTexts).toContain('AI 智能体配置');
-        expect(allTexts).toContain('APP 设置');
-        expect(allTexts).toContain('云端同步 (WebDAV / 坚果云)');
+        expect(allTexts).toContain('AI 智能体');
+        expect(allTexts).toContain('App 设置');
+        expect(allTexts).toContain('云端同步');
 
         // 验证缓存管理已被彻底移除
         expect(allTexts).not.toContain('本地缓存管理');
@@ -79,10 +79,10 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         const root = currentRenderer!.root;
         const pressables = root.findAll((node) => typeof node.props.onPress === 'function');
 
-        // 点击 APP 设置条目
+        // 点击 App 设置条目
         const appSettingsItem = pressables.find((p) => {
             const texts = p.findAllByType(Text).flatMap((n) => n.props.children);
-            return texts.some((t) => typeof t === 'string' && t.includes('APP 设置'));
+            return texts.some((t) => typeof t === 'string' && t.includes('App 设置'));
         });
         expect(appSettingsItem).toBeDefined();
 
@@ -91,10 +91,10 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         });
         expect(mockNavigate).toHaveBeenCalledWith('AppSettings');
 
-        // 点击 AI 智能体配置条目
+        // 点击 AI 智能体条目
         const agentConfigItem = pressables.find((p) => {
             const texts = p.findAllByType(Text).flatMap((n) => n.props.children);
-            return texts.some((t) => typeof t === 'string' && t.includes('AI 智能体配置'));
+            return texts.some((t) => typeof t === 'string' && t.includes('AI 智能体'));
         });
         expect(agentConfigItem).toBeDefined();
 
@@ -124,16 +124,28 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         const root = currentRenderer!.root;
         const allTexts = root.findAllByType(Text).map((node) => node.props.children).flat();
 
+        expect(allTexts).toContain('阅读与显示');
         expect(allTexts).toContain('字体大小');
-        expect(allTexts).toContain('小');
-        expect(allTexts).toContain('默认');
-        expect(allTexts).toContain('大');
+        expect(allTexts).toContain('Markdown样式');
 
-        // 点击“大”字号按钮
+        // 点击「字体大小」行打开底部选择弹层
+        const fontRow = root
+            .findAll((node) => typeof node.props.onPress === 'function')
+            .find((p) => {
+                const texts = p.findAllByType(Text).flatMap((n) => n.props.children);
+                return texts.some((t) => typeof t === 'string' && t.includes('字体大小'));
+            });
+        expect(fontRow).toBeDefined();
+
+        await ReactTestRenderer.act(async () => {
+            fontRow!.props.onPress();
+        });
+
+        // 弹层内点击「大」字号选项（遮罩层同样包含选项文本，须以首文本精确匹配）
         const touchables = root.findAllByType(TouchableOpacity);
         const largeButton = touchables.find((t) => {
             const texts = t.findAllByType(Text).map((n) => n.props.children);
-            return texts.includes('大');
+            return texts[0] === '大';
         });
         expect(largeButton).toBeDefined();
 

@@ -12,7 +12,7 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
 import { RootStackParamList } from '../types/navigation';
-import { SettingsRow, settingsGroupStyle } from '../components/SettingsRow';
+import { SettingsGroup, SettingsRow } from '../components/settings';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -20,20 +20,8 @@ export const MeScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
-    const {
-        webDavConfig,
-        cloudProvider,
-        markdownTheme,
-        fontSize,
-        userAvatar,
-        setUserAvatar,
-    } = useSettingsStore();
-
-    const {
-        serverUrl,
-        connectionState,
-        permissionMode,
-    } = useAssistantStore();
+    const { userAvatar, setUserAvatar } = useSettingsStore();
+    const { serverUrl, connectionState } = useAssistantStore();
 
     const isConnected = connectionState === 'connected';
 
@@ -83,7 +71,7 @@ export const MeScreen = () => {
                 t('me.avatar.title', '绿天助理形象'),
                 undefined,
                 [
-                    { text: t('common.cancel', '取消'), style: 'cancel' },
+                    { text: t('common.cancel'), style: 'cancel' },
                     { text: t('me.avatar.change', '从相册更换'), onPress: () => { pickAvatarAsync(); } },
                     { text: t('me.avatar.clear', '恢复默认形象'), style: 'destructive', onPress: () => { clearAvatarAsync(); } },
                 ]
@@ -167,70 +155,58 @@ export const MeScreen = () => {
 
                 {/* 卡片一：智能体与文件 */}
                 <View style={styles.cardWrapper}>
-                    <View style={settingsGroupStyle.group}>
+                    <SettingsGroup>
                         <SettingsRow
-                            label={t('settings.agentConfig', 'AI 智能体配置')}
+                            title={t('settings.agentConfig', 'AI 智能体')}
                             icon="robot-outline"
                             onPress={() => navigation.navigate('AgentConfig')}
-                            value={
-                                permissionMode === 'danger-full-access'
-                                    ? t('assistant.permissionDanger', '完全权限模式')
-                                    : t('assistant.permissionWorkspace', '安全工作区模式')
-                            }
                         />
-                        <View style={settingsGroupStyle.separator} />
                         <SettingsRow
-                            label={t('tabs.files', '系统文件')}
+                            title={t('tabs.files', '系统文件')}
                             icon="folder-outline"
                             onPress={() => navigation.navigate('ServerFileList')}
+                            last
                         />
-                    </View>
+                    </SettingsGroup>
                 </View>
 
                 {/* 卡片二：云端存储 */}
                 <View style={styles.cardWrapper}>
-                    <View style={settingsGroupStyle.group}>
+                    <SettingsGroup>
                         <SettingsRow
-                            label={t('settings.cloudSyncWebDav', '云端同步 (WebDAV / 坚果云)')}
+                            title={t('settings.cloudRepoConfig', '云端同步')}
                             icon="cloud-sync-outline"
                             onPress={() => navigation.navigate('CloudRepoConfig')}
-                            value={
-                                cloudProvider === 'webdav' && webDavConfig.server
-                                    ? t('settings.configured', '已配置')
-                                    : t('settings.notConfigured', '未配置')
-                            }
                         />
-                        <View style={settingsGroupStyle.separator} />
                         <SettingsRow
-                            label={t('browser.cloudFiles', '云盘文件')}
+                            title={t('browser.cloudFiles', '云盘文件')}
                             icon="cloud-outline"
                             onPress={() => navigation.navigate('CloudFileList')}
+                            last
                         />
-                    </View>
+                    </SettingsGroup>
                 </View>
 
                 {/* 卡片三：设置与关于 */}
                 <View style={styles.cardWrapper}>
-                    <View style={settingsGroupStyle.group}>
+                    <SettingsGroup>
                         <SettingsRow
-                            label={t('settings.flashNoteConfig', '闪念笔记设置')}
+                            title={t('settings.flashNoteConfig', '闪念设置')}
                             icon="lightning-bolt-outline"
                             onPress={() => navigation.navigate('FlashNoteConfig')}
                         />
-                        <View style={settingsGroupStyle.separator} />
                         <SettingsRow
-                            label={t('settings.appSettings', 'APP 设置')}
+                            title={t('settings.appSettings', 'App 设置')}
                             icon="tune"
                             onPress={() => navigation.navigate('AppSettings')}
-                            value={`${t(`settings.fontSizesShort.${fontSize}`)} · ${t(`settings.themes.${markdownTheme}`)}`}
                         />
-                        <View style={settingsGroupStyle.separator} />
                         <SettingsRow
-                            label={t('about.title', '关于绿天')}
+                            title={t('about.title', '关于')}
                             icon="information-outline"
                             onPress={() => navigation.navigate('About')}
+                            last
                         />
-                    </View>
+                    </SettingsGroup>
                 </View>
             </ScrollView>
         </View>
@@ -327,7 +303,7 @@ const styles = StyleSheet.create({
         flexShrink: 1,
     },
     cardWrapper: {
-        paddingHorizontal: theme.spacing.s,
+        paddingHorizontal: theme.spacing.m,
         marginBottom: theme.spacing.s,
     },
 });

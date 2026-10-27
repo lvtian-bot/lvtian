@@ -1,17 +1,22 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
-import { AgentModelOption } from '../types/assistantProtocol';
+import { type AgentModelOption } from '../types/assistantProtocol';
 import { RootStackParamList } from '../types/navigation';
-import { SettingsRow, settingsGroupStyle } from '../components/SettingsRow';
-import { OptionPickerModal, PickerOption } from '../components/OptionPickerModal';
 import { useAgentRemoteSetting } from '../hooks/useAgentRemoteSetting';
+import {
+    SettingsChoice,
+    SettingsGroup,
+    SettingsGroupLabel,
+    SettingsRow,
+    SettingsSheet,
+    SettingsStatusCard,
+} from '../components/settings';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type PermissionMode = 'workspace-write' | 'danger-full-access';
@@ -46,6 +51,13 @@ export const AgentConfigScreen = () => {
         }
         return selection.model;
     };
+
+    const modelDesc = (option: AgentModelOption): string =>
+        option.provider === 'deepseek-official'
+            ? t('assistant.modelDeepseekFlashDesc', {
+                  defaultValue: 'DeepSeek 官方直连，响应快、成本低，适合日常任务',
+              })
+            : t('assistant.modelGptSolDesc', { defaultValue: '经第三方 Codex 路由接入的模型' });
 
     // 权限与模型共用同一套远程设置状态机：本地缓存秒显、连接后核对、切换与超时核对
     const permissionSetting = useAgentRemoteSetting<PermissionMode>({
@@ -135,41 +147,6 @@ export const AgentConfigScreen = () => {
 
     const [activePicker, setActivePicker] = useState<'permission' | 'model' | null>(null);
 
-    const permissionOptions: PickerOption[] = useMemo(
-        () =>
-            PERMISSION_MODES.map((mode) => ({
-                key: mode,
-                label: permissionLabel(mode),
-                desc:
-                    mode === 'danger-full-access'
-                        ? t('assistant.permissionDangerBrief', {
-                              defaultValue: '完整系统权限且免审批，适合运维与开发场景',
-                          })
-                        : t('assistant.permissionWorkspaceBrief', {
-                              defaultValue: '仅在工作区内读写，敏感操作需审批',
-                          }),
-            })),
-        // 权限选项固定且文案仅随语言变化
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [t]
-    );
-
-    const modelOptions: PickerOption[] = useMemo(
-        () =>
-            agentModelOptions.map((option: AgentModelOption) => ({
-                key: `${option.provider}/${option.model}`,
-                label: modelLabel(option),
-                desc:
-                    option.provider === 'deepseek-official'
-                        ? t('assistant.modelDeepseekFlashDesc', {
-                              defaultValue: 'DeepSeek 官方直连，响应快、成本低，适合日常任务',
-                          })
-                        : t('assistant.modelGptSolDesc', { defaultValue: '经第三方 Codex 路由接入的模型' }),
-            })),
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [agentModelOptions, t]
-    );
-
     const openPicker = (picker: 'permission' | 'model') => {
         if (!serverUrl || !serverToken) {
             // 未配置服务：借 switchTo 的统一凭据检查给出提示，不打开弹层
@@ -187,66 +164,139 @@ export const AgentConfigScreen = () => {
         ? t('assistant.remoteValuePending', { defaultValue: '读取中…' })
         : '—';
 
-    return (
-        <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-            {!isConnected && (
-                <TouchableOpacity
-                    style={styles.offlineHint}
-                    onPress={() => navigation.navigate('AssistantConfig')}
-                    activeOpacity={0.7}
-                >
-                    <Icon name="cloud-off" size={15} color="#E65100" />
-                    <Text style={styles.offlineHintText}>
-                        {t('settings.assistantDisconnected', { defaultValue: '服务端未连接' })}
-                    </Text>
-                    <Icon name="chevron-right" size={16} color="#E65100" />
-                </TouchableOpacity>
-            )}
+    const permissionSelected = permissionSetting.value ?? 'workspace-write';
 
-            <View style={settingsGroupStyle.group}>
+    return (
+        <View style={styles.container}>
+            <SettingsStatusCard
+                icon="robot"
+                tone={isConnected ? 'success' : 'muted'}
+                title={
+                    isConnected
+                        ? t('settings.agentOnline', '智能体在线')
+                        : t('settings.agentOffline', '智能体未连接')
+                }
+                subtitle={
+                    isConnected
+                        ? `${t('assistant.currentModel', '当前模型')} · ${modelValueText}`
+                        : t('settings.agentOfflineDesc', '请先配置并连接服务端')
+                }
+                badge={isConnected ? t('assistant.badgeConnected', '已连接') : t('assistant.badgeDisconnected', '未连接')}
+                onPress={isConnected ? undefined : () => navigation.navigate('AssistantConfig')}
+            />
+
+            <SettingsGroupLabel>{t('settings.agentExecGroup', '助理执行')}</SettingsGroupLabel>
+            <SettingsGroup>
                 <SettingsRow
-                    label={t('assistant.permissionTitle', { defaultValue: '执行权限' })}
+                    icon="shield-check-outline"
+                    title={t('assistant.permissionRow', '执行权限')}
                     value={permissionSetting.value ? permissionLabel(permissionSetting.value) : undefined}
                     busy={permissionSetting.switching}
                     onPress={() => openPicker('permission')}
                 />
-                <View style={settingsGroupStyle.separator} />
                 <SettingsRow
-                    label={t('assistant.modelTitle', { defaultValue: '助理模型' })}
+                    icon="chip"
+                    title={t('assistant.modelTitle', '助理模型')}
                     value={modelValueText}
                     busy={modelSetting.switching}
                     onPress={() => openPicker('model')}
+                    last
                 />
-            </View>
+            </SettingsGroup>
 
-            <OptionPickerModal
+            <SettingsGroupLabel>{t('settings.agentHubGroup', '中枢与记忆')}</SettingsGroupLabel>
+            <SettingsGroup>
+                <SettingsRow
+                    icon="hub"
+                    title={t('settings.agentHubEngine', '执行中枢')}
+                    value={t('settings.agentHubEngineDesc', 'DeepSeek Harness (ACP 协议)')}
+                />
+                <SettingsRow
+                    icon="brain"
+                    title={t('settings.agentHubMemory', '长期记忆')}
+                    value={t('settings.agentHubMemoryDesc', 'SOUL.md / MEMORY.md 持续沉淀')}
+                    last
+                />
+            </SettingsGroup>
+
+            <Text style={styles.note}>
+                {t('settings.agentSwitchNote', '切换权限或模型会重启助理会话，当前对话将自动提炼备忘录并无缝接力。')}
+            </Text>
+
+            <SettingsSheet
                 visible={activePicker === 'permission'}
-                title={t('assistant.permissionPickerTitle', { defaultValue: '选择执行权限' })}
-                options={permissionOptions}
-                selectedKey={permissionSetting.value ?? undefined}
-                onSelect={(option) => permissionSetting.switchTo(option.key as PermissionMode)}
+                title={t('assistant.permissionRow', '执行权限')}
                 onClose={() => setActivePicker(null)}
-            />
+            >
+                <View style={styles.choices}>
+                    {PERMISSION_MODES.map((mode) => (
+                        <SettingsChoice
+                            key={mode}
+                            title={permissionLabel(mode)}
+                            desc={
+                                mode === 'danger-full-access'
+                                    ? t('assistant.permissionDangerBrief', {
+                                          defaultValue: '完整系统权限且免审批，适合运维与开发场景',
+                                      })
+                                    : t('assistant.permissionWorkspaceBrief', {
+                                          defaultValue: '仅在工作区内读写，敏感操作需审批',
+                                      })
+                            }
+                            badge={mode === 'workspace-write' ? t('common.recommended') : undefined}
+                            danger={mode === 'danger-full-access'}
+                            selected={permissionSelected === mode}
+                            onPress={() => {
+                                setActivePicker(null);
+                                permissionSetting.switchTo(mode);
+                            }}
+                        />
+                    ))}
+                </View>
+            </SettingsSheet>
 
-            <OptionPickerModal
+            <SettingsSheet
                 visible={activePicker === 'model'}
-                title={t('assistant.modelPickerTitle', { defaultValue: '选择助理模型' })}
-                options={modelOptions}
-                selectedKey={
-                    modelSetting.value
-                        ? `${modelSetting.value.provider}/${modelSetting.value.model}`
-                        : undefined
-                }
-                onSelect={(option) => {
-                    const separatorIndex = option.key.indexOf('/');
-                    modelSetting.switchTo({
-                        provider: option.key.slice(0, separatorIndex),
-                        model: option.key.slice(separatorIndex + 1),
-                    });
-                }}
+                title={t('assistant.modelTitle', '助理模型')}
                 onClose={() => setActivePicker(null)}
-            />
-        </ScrollView>
+            >
+                <View style={styles.choices}>
+                    {agentModelOptions.length === 0 ? (
+                        <TouchableOpacity
+                            style={styles.loadingButton}
+                            onPress={() => modelSetting.refresh()}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={styles.loadingText}>
+                                {t('assistant.remoteValuePending', { defaultValue: '读取中…' })}
+                            </Text>
+                            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                        </TouchableOpacity>
+                    ) : (
+                        agentModelOptions.map((option: AgentModelOption) => {
+                            return (
+                                <SettingsChoice
+                                    key={`${option.provider}/${option.model}`}
+                                    title={modelLabel(option)}
+                                    desc={modelDesc(option)}
+                                    selected={Boolean(
+                                        modelSetting.value
+                                            && modelSetting.value.provider === option.provider
+                                            && modelSetting.value.model === option.model
+                                    )}
+                                    onPress={() => {
+                                        setActivePicker(null);
+                                        modelSetting.switchTo({
+                                            provider: option.provider,
+                                            model: option.model,
+                                        });
+                                    }}
+                                />
+                            );
+                        })
+                    )}
+                </View>
+            </SettingsSheet>
+        </View>
     );
 };
 
@@ -254,20 +304,30 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: theme.colors.background,
+        padding: 16,
     },
-    content: {
-        padding: theme.spacing.m,
+    choices: {
+        paddingHorizontal: 12,
+        paddingBottom: 8,
     },
-    offlineHint: {
+    note: {
+        fontSize: 12,
+        color: '#9AA3B2',
+        lineHeight: 18,
+        textAlign: 'center',
+        marginTop: 14,
+        marginHorizontal: 8,
+    },
+    loadingButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        alignSelf: 'flex-start',
-        marginBottom: theme.spacing.s,
-        paddingVertical: 2,
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 10,
     },
-    offlineHintText: {
+    loadingText: {
         fontSize: 12,
-        color: '#E65100',
-        marginHorizontal: 4,
+        color: theme.colors.textSecondary,
+        fontStyle: 'italic',
     },
 });
