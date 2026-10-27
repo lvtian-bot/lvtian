@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../utils/theme';
+import { useSettingsFont } from './useSettingsFont';
 
 interface SettingsSheetProps {
     visible: boolean;
@@ -29,11 +30,13 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
     dismissable = true,
     children,
 }) => {
-    if (!visible) return null;
+    const font = useSettingsFont();
 
     const requestClose = () => {
         if (dismissable) onClose();
     };
+
+    if (!visible) return null;
 
     return (
         <Modal transparent visible={visible} animationType="fade" onRequestClose={requestClose}>
@@ -46,7 +49,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                         <SafeAreaView edges={['bottom']} style={styles.sheetSafe}>
                             <View style={styles.sheet}>
                                 <View style={styles.handle} />
-                                <Text style={styles.sheetTitle}>{title}</Text>
+                                <Text style={[styles.sheetTitle, { fontSize: font.chatBody }]}>{title}</Text>
                                 <ScrollView
                                     keyboardShouldPersistTaps="handled"
                                     contentContainerStyle={styles.sheetContent}
@@ -92,7 +95,6 @@ const styles = StyleSheet.create({
         marginBottom: 2,
     },
     sheetTitle: {
-        fontSize: 15,
         fontWeight: '600',
         color: theme.colors.text,
         textAlign: 'center',

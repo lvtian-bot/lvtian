@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
+import { useSettingsFont } from './useSettingsFont';
 
 interface SettingsFieldInputProps {
     label: string;
@@ -22,6 +23,7 @@ export const SettingsFieldInput: React.FC<SettingsFieldInputProps> = ({
 }) => {
     const [focused, setFocused] = useState(false);
     const [revealed, setRevealed] = useState(false);
+    const font = useSettingsFont();
 
     return (
         <View style={styles.wrap}>
@@ -33,7 +35,7 @@ export const SettingsFieldInput: React.FC<SettingsFieldInputProps> = ({
                 ]}
             >
                 <TextInput
-                    style={styles.input}
+                    style={[styles.input, { fontSize: font.chatBody }]}
                     value={value}
                     onChangeText={onChangeText}
                     placeholder={placeholder}
@@ -69,7 +71,7 @@ const styles = StyleSheet.create({
         marginTop: 6,
     },
     label: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '500',
         color: '#374151',
         marginBottom: 6,
@@ -90,14 +92,13 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingHorizontal: 12,
         paddingVertical: 10,
-        fontSize: 14,
         color: theme.colors.text,
     },
     eye: {
         padding: 8,
     },
     hint: {
-        fontSize: 11,
+        fontSize: 12,
         color: '#9AA3B2',
         marginTop: 5,
     },

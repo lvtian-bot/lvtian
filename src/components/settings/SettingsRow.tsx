@@ -2,6 +2,7 @@ import React, { type ComponentProps, type PropsWithChildren } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
+import { useSettingsFont } from './useSettingsFont';
 
 export const SettingsGroup: React.FC<PropsWithChildren> = ({ children }) => (
     <View style={styles.group}>{children}</View>
@@ -33,13 +34,14 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
     last,
     busy,
 }) => {
+    const font = useSettingsFont();
     const body = (
         <>
             <View style={styles.rowIcon}>
                 <MaterialCommunityIcons name={icon} size={15} color={theme.colors.primaryDark} />
             </View>
             <View style={styles.rowMain}>
-                <Text style={styles.rowTitle}>{title}</Text>
+                <Text style={[styles.rowTitle, { fontSize: font.chatBody }]}>{title}</Text>
                 {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
             </View>
             {busy ? <ActivityIndicator size="small" color={theme.colors.primary} /> : null}
@@ -86,7 +88,7 @@ const styles = StyleSheet.create({
         elevation: 0.5,
     },
     groupLabel: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '600',
         color: theme.colors.primaryDark,
         letterSpacing: 0.3,
@@ -123,16 +125,15 @@ const styles = StyleSheet.create({
         gap: 1,
     },
     rowTitle: {
-        fontSize: 14,
         fontWeight: '500',
         color: theme.colors.text,
     },
     rowSubtitle: {
-        fontSize: 11,
+        fontSize: 12,
         color: '#9AA3B2',
     },
     rowValue: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#8A94A6',
         maxWidth: '40%',
     },

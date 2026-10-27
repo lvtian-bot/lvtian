@@ -253,7 +253,7 @@ const styles = StyleSheet.create({
         paddingBottom: 8,
     },
     note: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#9AA3B2',
         lineHeight: 18,
         textAlign: 'center',

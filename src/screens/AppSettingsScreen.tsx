@@ -158,7 +158,7 @@ const styles = StyleSheet.create({
         color: '#374151',
     },
     note: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#9AA3B2',
         lineHeight: 18,
         textAlign: 'center',
