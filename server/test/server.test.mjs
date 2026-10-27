@@ -53,7 +53,7 @@ test('SessionManager handles final lossless text update and advances sequence', 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('LvtianServer handles WebSocket connection error without crash', async () => {
+test('LvtianServer handles WebSocket connection error without crash', { timeout: 15000 }, async (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-srv-'));
     const sm = new SessionManager(tmpDir);
     const mm = new MemoryManager(tmpDir);
@@ -77,37 +77,53 @@ test('LvtianServer handles WebSocket connection error without crash', async () =
 
     const assignedPort = server.httpServer.address().port;
 
-    // 客户端发送超过 maxPayload (5MB) 的超大报文，切实触发服务端 accepted socket 的 RangeError
+    const clients = new Set();
+    t.after(async () => {
+        for (const client of clients) client.terminate();
+        for (const client of server.wss.clients) client.terminate();
+        try {
+            await server.stop();
+        } finally {
+            assert.equal(path.dirname(tmpDir), os.tmpdir());
+            assert.ok(path.basename(tmpDir).startsWith('lvtian-test-srv-'));
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // 超过当前 30MiB maxPayload，触发服务端 accepted socket 的 RangeError。
     await new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${assignedPort}`);
+        clients.add(ws);
         const timer = setTimeout(() => {
+            ws.terminate();
             reject(new Error('超大报文未在预期时间内触发连接关闭'));
         }, 5000);
-        const ws = new WebSocket(`ws://127.0.0.1:${assignedPort}`);
+        t.after(() => clearTimeout(timer));
         ws.on('open', () => {
-            const oversized = Buffer.alloc(5 * 1024 * 1024 + 1024);
-            ws.send(oversized);
+            ws.send(Buffer.alloc(30 * 1024 * 1024 + 1024));
         });
         ws.on('error', () => {
-            // 客户端侧网络重置
+            // 客户端侧网络重置，由 close 验证连接是否确实关闭。
         });
-        ws.on('close', () => {
+        ws.on('close', (code) => {
             clearTimeout(timer);
-            resolve();
+            try {
+                assert.equal(code, 1009);
+                resolve();
+            } catch (error) {
+                reject(error);
+            }
         });
     });
 
     // 验证服务端稳定存活，后续正常客户端依然可顺畅连接
     await new Promise((resolve, reject) => {
         const healthyWs = new WebSocket(`ws://127.0.0.1:${assignedPort}`);
-        healthyWs.on('open', () => {
-            healthyWs.close();
-            resolve();
-        });
+        clients.add(healthyWs);
+        healthyWs.on('open', () => healthyWs.close());
+        healthyWs.on('close', resolve);
         healthyWs.on('error', reject);
     });
-
-    await server.stop();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('scripts match server absolute entrypoint as exact argv and reject sub-path or backup names', () => {

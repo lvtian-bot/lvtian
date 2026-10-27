@@ -407,13 +407,13 @@ class FileSystemService {
      * 读取外部/临时附件文件（用于主聊天图片或文档附件上传）
      * 区分纯文本与二进制文档（PDF、Office、压缩包等），避免强行解码为损坏的 UTF-8 文本
      * @param uri 外部/缓存文件路径
-     * @param maxSize 附件体积限制（默认 750KB，避免超出 WebSocket 传输安全阈值）
+     * @param maxSize 附件体积限制（默认 10MB，避免超出传输安全阈值）
      * @param mimeType 可选 MIME 类型
      * @param fileName 可选文件名
      */
     async readAttachment(
         uri: string,
-        maxSize = 750 * 1024,
+        maxSize = 10 * 1024 * 1024,
         mimeType?: string,
         fileName?: string
     ): Promise<{ content?: string; data?: string; size: number }> {
