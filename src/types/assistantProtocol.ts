@@ -24,6 +24,12 @@ export interface AgentSkill {
     description: string;
 }
 
+/** 服务端下发的助理模型可选项：provider 为 DSH 已注册路由，model 为该路由下的模型 ID */
+export interface AgentModelOption {
+    provider: string;
+    model: string;
+}
+
 export interface ChatAttachment {
     type: 'image' | 'file';
     name: string;

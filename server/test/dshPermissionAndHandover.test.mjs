@@ -9,6 +9,9 @@ import {
     getDshPermissionMode,
     setDshPermissionMode,
     willDshPermissionChange,
+    getDshModelSelection,
+    setDshModelSelection,
+    willDshModelChange,
     DEFAULT_PERMISSION_MODE,
 } from '../dist/dshConfigManager.js';
 import { SessionManager } from '../dist/sessionManager.js';
@@ -109,6 +112,72 @@ test('DshConfigManager: 官方规范 ID 读写、approval 联动、旧配置迁�
         fs.writeFileSync(patchFile, corruptedContent, 'utf8');
         assert.throws(
             () => setDshPermissionMode('danger-full-access', tmpDir),
+            /读取或解析现有 DSH 配置文件失败/
+        );
+        assert.equal(fs.readFileSync(patchFile, 'utf8'), corruptedContent);
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('DshConfigManager: 模型选择读写、双条目同步维护、既有字段保留与原子保护', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-dsh-model-test-'));
+    try {
+        // 1. 空目录：未选择返回 null，任何写入都判定为变更
+        assert.equal(getDshModelSelection(tmpDir), null);
+        const gptOption = { provider: 'openai-codex', model: 'gpt-6.1-sol' };
+        const flashOption = { provider: 'deepseek-official', model: 'deepseek-flash' };
+        assert.equal(willDshModelChange(gptOption, tmpDir), true);
+
+        // 2. 补丁文件不存在时写入：创建文件并同步写入 acp 与 agent-default-model 两个条目
+        assert.equal(setDshModelSelection(gptOption, tmpDir), true, '补丁文件缺失时首次写入应判定为变更');
+        assert.deepEqual(getDshModelSelection(tmpDir), gptOption);
+        assert.equal(willDshModelChange(gptOption, tmpDir), false, '两个条目均已一致时预测应为无变更');
+        assert.equal(setDshModelSelection(gptOption, tmpDir), false, '相同有效配置再次设置应判定为幂等未变更');
+
+        // 3. 模拟生产形态：已存在其它插件 patch，acp 条目携带额外配置字段，且缺少 agent-default-model 条目
+        const patchFile = path.join(tmpDir, 'cordis.patch.yml');
+        fs.writeFileSync(patchFile, yaml.stringify([
+            { id: 'custom-logger', config: { level: 'debug' } },
+            { id: 'acp', config: { provider: 'openai-codex', model: 'gpt-6.1-sol', sessionListPageSize: 50 } },
+        ]), 'utf8');
+        assert.deepEqual(getDshModelSelection(tmpDir), gptOption);
+        assert.equal(willDshModelChange(gptOption, tmpDir), true, 'agent-default-model 条目缺失时应判定需要变更');
+        assert.equal(setDshModelSelection(gptOption, tmpDir), true, '补齐缺失条目应判定为变更');
+
+        // 4. 切换模型：两个条目的 provider/model 同步更新，acp 的既有额外字段与其它插件 patch 原样保留
+        assert.equal(setDshModelSelection(flashOption, tmpDir), true);
+        assert.deepEqual(getDshModelSelection(tmpDir), flashOption);
+        const afterSwitch = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
+        assert.equal(afterSwitch.length, 3, '应包含 custom-logger, acp, agent-default-model');
+        assert.equal(afterSwitch[0].id, 'custom-logger');
+        assert.equal(afterSwitch[1].id, 'acp');
+        assert.equal(afterSwitch[1].config.provider, 'deepseek-official');
+        assert.equal(afterSwitch[1].config.model, 'deepseek-flash');
+        assert.equal(afterSwitch[1].config.sessionListPageSize, 50, 'acp 条目的非模型字段必须原样保留');
+        assert.equal(afterSwitch[2].id, 'agent-default-model');
+        assert.equal(afterSwitch[2].config.provider, 'deepseek-official');
+        assert.equal(afterSwitch[2].config.model, 'deepseek-flash');
+
+        // 5. 条目 config 缺失或结构异常：整体重建该条目 config，不向非对象展开
+        fs.writeFileSync(patchFile, yaml.stringify([{ id: 'acp' }]), 'utf8');
+        assert.equal(getDshModelSelection(tmpDir), null, '条目缺字段时应视为未选择');
+        assert.equal(setDshModelSelection(flashOption, tmpDir), true);
+        const afterRebuild = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
+        assert.equal(afterRebuild[0].config.provider, 'deepseek-official');
+        assert.equal(afterRebuild[1].id, 'agent-default-model');
+
+        // 5.5 仅配置共享默认条目：读取应回退到 agent-default-model，不再误报未选择
+        fs.writeFileSync(patchFile, yaml.stringify([
+            { id: 'agent-default-model', config: { provider: 'deepseek-official', model: 'deepseek-flash' } },
+        ]), 'utf8');
+        assert.deepEqual(getDshModelSelection(tmpDir), flashOption, '仅共享默认条目时应回退读取');
+
+        // 6. 损坏或非法 YAML 保护：抛出异常并保留原始文件内容，禁止静默覆盖清空
+        const corruptedContent = ':::invalid:model:yaml:::';
+        fs.writeFileSync(patchFile, corruptedContent, 'utf8');
+        assert.throws(
+            () => setDshModelSelection(flashOption, tmpDir),
             /读取或解析现有 DSH 配置文件失败/
         );
         assert.equal(fs.readFileSync(patchFile, 'utf8'), corruptedContent);
@@ -429,12 +498,15 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         const contextConsolidator = new ContextConsolidator(sessionManager);
 
         let handoverTriggered = false;
+        let executeCount = 0;
         const mockEngine = {
             isRunning: () => false,
             stop: () => false,
             stopAll: async () => {},
             rebuildSystemPrompt: () => false,
-            execute: async () => {},
+            execute: async () => {
+                executeCount++;
+            },
             handleApproval: () => false,
             triggerHandover: async (sid, reason) => {
                 handoverTriggered = true;
@@ -512,7 +584,15 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         assert.equal(busyData.code, 'TASK_RUNNING');
         mockEngine.isRunning = () => false;
 
-        // 5. POST 正确切换至 danger-full-access
+        // 5. POST 正确切换至 danger-full-access；交接窗口内排队的聊天消息在交接结束后被队列唤醒推进
+        sessionManager.getOrCreateSession('main');
+        sessionManager.addMessage('main', {
+            id: 'queued-during-permission-handover',
+            role: 'user',
+            content: '交接期间的排队消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        });
         let handoverCount = 0;
         mockEngine.triggerHandover = async () => {
             handoverCount++;
@@ -531,6 +611,13 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         assert.equal(postData.permissionMode, 'danger-full-access');
         assert.equal(postData.changed, true);
         assert.equal(handoverCount, 1);
+
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const queuedMsg = sessionManager
+            .getOrCreateSession('main')
+            .messages.find((m) => m.id === 'queued-during-permission-handover');
+        assert.equal(queuedMsg?.status, 'sent', '权限交接结束后排队消息应被队列唤醒推进为已发送');
+        assert.ok(executeCount >= 1, '队列唤醒后应驱动助理执行排队消息');
 
         // 6. 相同模式再次 POST：即便是任务执行中，也应幂等放行返回 changed: false，且不触发 handover
         mockEngine.isRunning = (sid) => sid === 'main';
@@ -583,6 +670,199 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({ permissionMode: 'workspace-write' }),
+        });
+        assert.equal(postCorruptRes.status, 500);
+        const corruptData = await postCorruptRes.json();
+        assert.ok(corruptData.error.includes('读取或解析现有 DSH 配置文件失败'));
+
+        await server.stop();
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门禁与会话交接', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-server-model-test-'));
+    try {
+        const workspaceDir = path.join(tmpDir, 'workspace');
+        const dataDir = path.join(tmpDir, 'data');
+        const dshProfileDir = path.join(tmpDir, 'dsh', 'profiles', 'acp');
+        fs.mkdirSync(workspaceDir, { recursive: true });
+        fs.mkdirSync(dataDir, { recursive: true });
+        fs.mkdirSync(dshProfileDir, { recursive: true });
+
+        const sessionManager = new SessionManager(dataDir);
+        const memoryManager = new MemoryManager(workspaceDir);
+        const fileManager = new FileManager(workspaceDir);
+        const contextConsolidator = new ContextConsolidator(sessionManager);
+
+        let handoverCount = 0;
+        let executeCount = 0;
+        const mockEngine = {
+            isRunning: () => false,
+            stop: () => false,
+            stopAll: async () => {},
+            rebuildSystemPrompt: () => false,
+            execute: async () => {
+                executeCount++;
+            },
+            handleApproval: () => false,
+            triggerHandover: async () => {
+                handoverCount++;
+            },
+        };
+
+        const config = {
+            host: '127.0.0.1',
+            port: 0,
+            token: 'test-secret-token-12345',
+            workspace: workspaceDir,
+            dataDir,
+            assistantName: '绿天',
+            dshProfileDir,
+        };
+
+        const server = new LvtianServer(
+            config,
+            sessionManager,
+            memoryManager,
+            mockEngine,
+            fileManager,
+            contextConsolidator
+        );
+
+        await server.start();
+        const port = server.httpServer.address().port;
+        const baseUrl = `http://127.0.0.1:${port}`;
+
+        const flashOption = { provider: 'deepseek-official', model: 'deepseek-flash' };
+        const gptOption = { provider: 'openai-codex', model: 'gpt-6.1-sol' };
+
+        // 1. 未授权访问拒绝 (401)
+        const unauthRes = await fetch(`${baseUrl}/api/model`);
+        assert.equal(unauthRes.status, 401);
+
+        // 2. 补丁无模型条目时 GET 返回默认选项（GPT）与服务端下发清单
+        const getRes = await fetch(`${baseUrl}/api/model`, {
+            headers: { Authorization: `Bearer ${config.token}` },
+        });
+        assert.equal(getRes.status, 200);
+        const getData = await getRes.json();
+        assert.equal(getData.provider, 'openai-codex');
+        assert.equal(getData.model, 'gpt-6.1-sol');
+        assert.equal(getData.options.length, 2);
+        assert.ok(getData.options.some((o) => o.provider === flashOption.provider && o.model === flashOption.model));
+
+        // 2.5 仅配置共享默认条目（无 acp 条目）时，GET 应回退读取而非显示默认选项
+        fs.writeFileSync(path.join(dshProfileDir, 'cordis.patch.yml'), yaml.stringify([
+            { id: 'agent-default-model', config: flashOption },
+        ]), 'utf8');
+        const getFallbackRes = await fetch(`${baseUrl}/api/model`, {
+            headers: { Authorization: `Bearer ${config.token}` },
+        });
+        const getFallbackData = await getFallbackRes.json();
+        assert.equal(getFallbackData.provider, flashOption.provider);
+        assert.equal(getFallbackData.model, flashOption.model);
+
+        // 3. POST 白名单外的组合返回 400
+        const badPostRes = await fetch(`${baseUrl}/api/model`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ provider: 'deepseek-official', model: 'gpt-6.1-sol' }),
+        });
+        assert.equal(badPostRes.status, 400);
+        assert.equal((await badPostRes.json()).code, 'PARAM_INVALID');
+
+        // 4. 任务运行中且有实际变更时，POST 被门禁拦截返回 409 TASK_RUNNING
+        mockEngine.isRunning = (sid) => sid === 'main';
+        const busyPostRes = await fetch(`${baseUrl}/api/model`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(flashOption),
+        });
+        assert.equal(busyPostRes.status, 409);
+        assert.equal((await busyPostRes.json()).code, 'TASK_RUNNING');
+        mockEngine.isRunning = () => false;
+
+        // 5. POST 正确切换模型：补丁双条目落盘并触发一次会话交接
+        // 5.5 模拟交接窗口内排队的聊天消息：交接结束后应被显式唤醒队列推进为已发送并执行
+        sessionManager.getOrCreateSession('main');
+        sessionManager.addMessage('main', {
+            id: 'queued-during-model-handover',
+            role: 'user',
+            content: '交接期间的排队消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        });
+        const postRes = await fetch(`${baseUrl}/api/model`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(flashOption),
+        });
+        assert.equal(postRes.status, 200);
+        const postData = await postRes.json();
+        assert.equal(postData.success, true);
+        assert.equal(postData.provider, flashOption.provider);
+        assert.equal(postData.model, flashOption.model);
+        assert.equal(postData.changed, true);
+        assert.equal(handoverCount, 1);
+
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const queuedMsg = sessionManager
+            .getOrCreateSession('main')
+            .messages.find((m) => m.id === 'queued-during-model-handover');
+        assert.equal(queuedMsg?.status, 'sent', '交接结束后排队消息应被队列唤醒推进为已发送');
+        assert.ok(executeCount >= 1, '队列唤醒后应驱动助理执行排队消息');
+
+        const patchFile = path.join(dshProfileDir, 'cordis.patch.yml');
+        const afterSwitch = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
+        const acpEntry = afterSwitch.find((item) => item.id === 'acp');
+        const defaultModelEntry = afterSwitch.find((item) => item.id === 'agent-default-model');
+        assert.equal(acpEntry.config.model, 'deepseek-flash');
+        assert.equal(defaultModelEntry.config.model, 'deepseek-flash');
+
+        // 6. 相同选择再次 POST：即便是任务执行中，也应幂等放行返回 changed: false，且不触发 handover
+        mockEngine.isRunning = (sid) => sid === 'main';
+        const postSameRes = await fetch(`${baseUrl}/api/model`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(flashOption),
+        });
+        assert.equal(postSameRes.status, 200);
+        const postSameData = await postSameRes.json();
+        assert.equal(postSameData.changed, false);
+        assert.equal(handoverCount, 1);
+        mockEngine.isRunning = () => false;
+
+        // 7. 再次 GET 确认更新生效
+        const getUpdated = await fetch(`${baseUrl}/api/model`, {
+            headers: { Authorization: `Bearer ${config.token}` },
+        });
+        const updatedData = await getUpdated.json();
+        assert.equal(updatedData.provider, flashOption.provider);
+        assert.equal(updatedData.model, flashOption.model);
+
+        // 8. 配置文件损坏时 POST 请求应返回 500，绝不走 changed: false 假阳性误判
+        fs.writeFileSync(patchFile, ':::corrupted:model:yaml:::', 'utf8');
+        const postCorruptRes = await fetch(`${baseUrl}/api/model`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${config.token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(gptOption),
         });
         assert.equal(postCorruptRes.status, 500);
         const corruptData = await postCorruptRes.json();

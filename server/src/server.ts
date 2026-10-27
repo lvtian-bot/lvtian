@@ -14,7 +14,16 @@ import { SkillManager } from './skillManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
 import { handleNativeTaskHttp, isNativeTaskPath } from './nativeTaskHttp.js';
 import type { NativeTaskRuntime } from './nativeTaskRuntime.js';
-import { getDshPermissionMode, setDshPermissionMode, willDshPermissionChange, DshPermissionMode } from './dshConfigManager.js';
+import {
+    getDshPermissionMode,
+    setDshPermissionMode,
+    willDshPermissionChange,
+    getDshModelSelection,
+    setDshModelSelection,
+    willDshModelChange,
+    DshPermissionMode,
+    DshModelSelection,
+} from './dshConfigManager.js';
 import {
     ClientMessage,
     ServerMessage,
@@ -30,6 +39,19 @@ const WS = require('ws');
 // JSON 序列化最坏情况下单个字符会膨胀至 6 字节（\uXXXX 转义），
 // 传输上限需覆盖最坏膨胀并留出 JSON 结构（path 等字段）余量，避免合法内容在传输层被误拒
 const SAVE_BODY_MAX_BYTES = 5 * 1024 * 1024 * 6 + 2 * 1024 * 1024;
+
+/**
+ * 助理模型可选项：provider 为 DSH 已注册的路由（deepseek-official 为官方
+ * DeepSeek 路由，openai-codex 为 llm-pi-ai 第三方路由），model 为该路由下的
+ * 模型 ID。清单由服务端统一维护并经 GET /api/model 下发，App 侧不硬编码。
+ */
+const MODEL_OPTIONS: ReadonlyArray<DshModelSelection> = [
+    { provider: 'deepseek-official', model: 'deepseek-flash' },
+    { provider: 'openai-codex', model: 'gpt-6.1-sol' },
+];
+
+/** 从未做过端侧选择（DSH 补丁无模型条目）时对外呈现的默认模型选项 */
+const DEFAULT_MODEL_OPTION: DshModelSelection = MODEL_OPTIONS[MODEL_OPTIONS.length - 1];
 
 interface AuthenticatedSocket extends WebSocket {
     isAuthenticated?: boolean;
@@ -259,6 +281,9 @@ export class LvtianServer {
                     await this.acpEngine.triggerHandover('main', `permission_switch_to_${targetMode}`);
                 }
 
+                // 3. 交接窗口内被任务运行门禁排队的聊天消息，须在交接结束后显式唤醒队列推进（对齐 /api/session/reset）
+                this.scheduleProcessQueue('main');
+
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, permissionMode: targetMode, changed }));
             } catch (err: unknown) {
@@ -266,6 +291,69 @@ export class LvtianServer {
                 res.end(
                     JSON.stringify({
                         error: `修改权限模式失败: ${err instanceof Error ? err.message : String(err)}`,
+                    })
+                );
+            }
+            return;
+        }
+
+        // 查询当前助理模型与可选项（DSH 补丁未记录选择时呈现默认选项）
+        if (pathname === '/api/model' && req.method === 'GET') {
+            const current = getDshModelSelection(this.config.dshProfileDir) ?? DEFAULT_MODEL_OPTION;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ provider: current.provider, model: current.model, options: MODEL_OPTIONS }));
+            return;
+        }
+
+        // 修改助理模型并触发统一会话交接（新模型自下一个会话生效）
+        if (pathname === '/api/model' && req.method === 'POST') {
+            try {
+                const body = await this.readJsonBody<{ provider?: string; model?: string }>(req, 1024);
+                const target = MODEL_OPTIONS.find(
+                    (option) => option.provider === body.provider && option.model === body.model
+                );
+                if (!target) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(
+                        JSON.stringify({
+                            error: '无效的模型选择，provider 与 model 必须来自服务端下发的可选项',
+                            code: 'PARAM_INVALID',
+                        })
+                    );
+                    return;
+                }
+
+                // 门禁检查：若本次选择将导致补丁配置变更与会话交接，严格禁止在任务执行中途切换
+                const willChange = willDshModelChange(target, this.config.dshProfileDir);
+                if (willChange && this.acpEngine.isRunning('main')) {
+                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    res.end(
+                        JSON.stringify({
+                            error: '当前有正在执行的任务，请先停止任务后再切换模型',
+                            code: 'TASK_RUNNING',
+                        })
+                    );
+                    return;
+                }
+
+                // 1. 原子更新 DSH 官方配置文件 cordis.patch.yml（由配置管理器验证语法并返回是否发生真正变更）
+                const changed = setDshModelSelection(target, this.config.dshProfileDir);
+
+                // 2. 仅当配置真正发生变更时触发会话交接，避免无谓中断与提炼开销
+                if (changed) {
+                    await this.acpEngine.triggerHandover('main', `model_switch_to_${target.provider}_${target.model}`);
+                }
+
+                // 3. 交接窗口内被任务运行门禁排队的聊天消息，须在交接结束后显式唤醒队列推进（对齐 /api/session/reset）
+                this.scheduleProcessQueue('main');
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, provider: target.provider, model: target.model, changed }));
+            } catch (err: unknown) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(
+                    JSON.stringify({
+                        error: `修改助理模型失败: ${err instanceof Error ? err.message : String(err)}`,
                     })
                 );
             }

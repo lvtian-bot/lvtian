@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     View,
     Text,
@@ -15,6 +15,7 @@ import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
+import { AgentModelOption } from '../types/assistantProtocol';
 import { RootStackParamList } from '../types/navigation';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -27,6 +28,8 @@ export const AgentConfigScreen = () => {
         serverToken,
         permissionMode,
         setPermissionMode,
+        agentModelSelection,
+        setAgentModelSelection,
         taskState,
         connectionState,
     } = useAssistantStore();
@@ -39,6 +42,14 @@ export const AgentConfigScreen = () => {
     );
     const [switchingPerm, setSwitchingPerm] = useState(false);
     const hasUserSelectedRef = useRef(false);
+
+    const [selectedModel, setSelectedModel] = useState<{ provider: string; model: string } | null>(
+        agentModelSelection
+    );
+    const [modelOptions, setModelOptions] = useState<AgentModelOption[]>([]);
+    const [switchingModel, setSwitchingModel] = useState(false);
+    /** 用户最近一次本地切换模型的时刻：仅用于丢弃在此之前发起的过期查询结果 */
+    const lastModelSwitchAtRef = useRef(0);
 
     useEffect(() => {
         if (permissionMode && !hasUserSelectedRef.current) {
@@ -53,6 +64,168 @@ export const AgentConfigScreen = () => {
             });
         }
     }, [permissionMode, serverUrl, serverToken, setPermissionMode]);
+
+    /**
+     * 拉取服务端模型选项与当前选择。
+     * 依赖连接状态：断网或首次查询失败时卡片停留加载态，连接恢复后自动重查；
+     * 加载行亦可点击手动重试。仅丢弃在用户本地切换之前发起的过期查询结果，
+     * 其后发起的重连查询始终如实反映服务端状态（含其他客户端的修改）。
+     */
+    const loadModelSelection = useCallback(() => {
+        if (!serverUrl || !serverToken) {
+            return;
+        }
+        const requestedAt = Date.now();
+        AssistantClient.fetchModelSelection(serverUrl, serverToken).then((data) => {
+            if (data && requestedAt >= lastModelSwitchAtRef.current) {
+                setModelOptions(data.options);
+                const selection = { provider: data.provider, model: data.model };
+                setSelectedModel(selection);
+                setAgentModelSelection(selection);
+            }
+        });
+    }, [serverUrl, serverToken, setAgentModelSelection]);
+
+    useEffect(() => {
+        if (isConnected) {
+            loadModelSelection();
+        }
+    }, [isConnected, loadModelSelection]);
+
+    /** 已知模型组合映射为本地化名称与说明，未知组合回退展示原始模型 ID */
+    const resolveModelPresentation = (option: AgentModelOption): { title: string; desc: string } => {
+        if (option.provider === 'deepseek-official' && option.model === 'deepseek-flash') {
+            return {
+                title: t('assistant.modelDeepseekFlashName', { defaultValue: 'DeepSeek V4.1-Flash' }),
+                desc: t('assistant.modelDeepseekFlashDesc', {
+                    defaultValue: 'DeepSeek 官方直连，响应快、成本低，适合日常任务。',
+                }),
+            };
+        }
+        if (option.provider === 'openai-codex' && option.model === 'gpt-6.1-sol') {
+            return {
+                title: t('assistant.modelGptSolName', { defaultValue: 'GPT-6.1-Sol' }),
+                desc: t('assistant.modelGptSolDesc', {
+                    defaultValue: '经第三方 Codex 路由接入的模型。',
+                }),
+            };
+        }
+        return {
+            title: option.model,
+            desc: t('assistant.modelUnknownDesc', { defaultValue: '服务端当前启用的模型。' }),
+        };
+    };
+
+    const applyModelSwitch = async (option: AgentModelOption) => {
+        if (!serverUrl || !serverToken) {
+            Alert.alert(
+                t('settings.notice', { defaultValue: '提示' }),
+                t('assistant.serverConfigRequiredForModel', {
+                    defaultValue: '请先配置并连接服务，再调整助理模型',
+                })
+            );
+            return;
+        }
+
+        setSwitchingModel(true);
+        try {
+            const res = await AssistantClient.updateModelSelection(serverUrl, serverToken, option.provider, option.model);
+            if (res.success) {
+                setSwitchingModel(false);
+                lastModelSwitchAtRef.current = Date.now();
+                setSelectedModel(option);
+                setAgentModelSelection(option);
+                Alert.alert(
+                    t('settings.success', { defaultValue: '成功' }),
+                    t('assistant.modelSwitchSuccess', { defaultValue: '模型已切换，新会话即刻生效' })
+                );
+                return;
+            }
+
+            // 超时中止不代表切换失败：服务端在交接前已写入新配置，须重查核对实际生效模型
+            if (res.code === 'MODEL_SWITCH_UNCONFIRMED') {
+                const remote = await AssistantClient.fetchModelSelection(serverUrl, serverToken);
+                setSwitchingModel(false);
+                if (remote) {
+                    const actual = { provider: remote.provider, model: remote.model };
+                    setModelOptions(remote.options);
+                    setSelectedModel(actual);
+                    setAgentModelSelection(actual);
+                    if (actual.provider === option.provider && actual.model === option.model) {
+                        lastModelSwitchAtRef.current = Date.now();
+                        Alert.alert(
+                            t('settings.success', { defaultValue: '成功' }),
+                            t('assistant.modelSwitchSuccess', { defaultValue: '模型已切换，新会话即刻生效' })
+                        );
+                    } else {
+                        Alert.alert(
+                            t('settings.notice', { defaultValue: '提示' }),
+                            t('assistant.modelSwitchSettled', {
+                                defaultValue: '切换请求超时，服务端当前实际生效模型为「{{model}}」，已按服务端状态刷新',
+                                model: resolveModelPresentation(actual).title,
+                            })
+                        );
+                    }
+                } else {
+                    Alert.alert(
+                        t('settings.notice', { defaultValue: '提示' }),
+                        t('assistant.modelSwitchUnconfirmed', {
+                            defaultValue: '切换请求超时，结果未确认；请稍后重新进入本页查看实际生效模型',
+                        })
+                    );
+                }
+                return;
+            }
+
+            setSwitchingModel(false);
+            const failMessage = res.code === 'TASK_RUNNING'
+                ? t('assistant.taskRunningCannotSwitchModel', {
+                      defaultValue: '当前有正在执行的任务，请先在聊天界面停止任务后再切换模型',
+                  })
+                : t('assistant.modelSwitchFailed', { defaultValue: '切换模型失败，请检查服务连接' });
+            Alert.alert(t('settings.failure', { defaultValue: '失败' }), failMessage);
+        } catch {
+            setSwitchingModel(false);
+            Alert.alert(
+                t('settings.failure', { defaultValue: '失败' }),
+                t('assistant.modelSwitchFailed', { defaultValue: '切换模型失败，请检查服务连接' })
+            );
+        }
+    };
+
+    const handleSelectModel = (option: AgentModelOption) => {
+        if (switchingModel || !isConnected) {
+            return;
+        }
+        if (selectedModel && selectedModel.provider === option.provider && selectedModel.model === option.model) {
+            return;
+        }
+        if (isTaskRunning) {
+            Alert.alert(
+                t('settings.failure', { defaultValue: '失败' }),
+                t('assistant.taskRunningCannotSwitchModel', {
+                    defaultValue: '当前有正在执行的任务，请先在聊天界面停止任务后再切换模型',
+                })
+            );
+            return;
+        }
+        const { title } = resolveModelPresentation(option);
+        Alert.alert(
+            t('assistant.modelSwitchConfirmTitle', { defaultValue: '确认切换模型？' }),
+            t('assistant.modelSwitchConfirmContent', {
+                defaultValue:
+                    '切换模型将重启助理会话：当前对话会自动提炼备忘录并无缝接力；有任务运行时需先停止。确认切换到「{{model}}」？',
+                model: title,
+            }),
+            [
+                { text: t('common.cancel', { defaultValue: '取消' }), style: 'cancel' },
+                {
+                    text: t('common.confirm', { defaultValue: '确认' }),
+                    onPress: () => applyModelSwitch(option),
+                },
+            ]
+        );
+    };
 
     const applyPermissionSwitch = async (targetMode: 'workspace-write' | 'danger-full-access') => {
         if (!serverUrl || !serverToken) {
@@ -249,7 +422,77 @@ export const AgentConfigScreen = () => {
                 </TouchableOpacity>
             </View>
 
-            {/* 模型与中枢架构说明（为后续模型切换预留） */}
+            {/* 助理模型选择卡片 */}
+            <View style={styles.card}>
+                <View style={styles.sectionTitleRow}>
+                    <Icon name="memory" size={20} color={theme.colors.primary} />
+                    <Text style={styles.sectionTitleText}>
+                        {t('assistant.modelTitle', { defaultValue: '助理模型' })}
+                    </Text>
+                    {switchingModel && (
+                        <ActivityIndicator size="small" color={theme.colors.primary} style={styles.switchingIndicator} />
+                    )}
+                </View>
+
+                {modelOptions.length === 0 ? (
+                    <TouchableOpacity
+                        style={styles.modelLoadingButton}
+                        onPress={loadModelSelection}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={styles.modelLoadingText}>
+                            {t('assistant.modelLoading', { defaultValue: '正在读取服务端模型配置...' })}
+                        </Text>
+                        <Icon name="refresh" size={16} color={theme.colors.textSecondary} />
+                    </TouchableOpacity>
+                ) : (
+                    modelOptions.map((option, index) => {
+                        const isSelected = Boolean(
+                            selectedModel
+                                && selectedModel.provider === option.provider
+                                && selectedModel.model === option.model
+                        );
+                        const { title, desc } = resolveModelPresentation(option);
+                        return (
+                            <TouchableOpacity
+                                key={`${option.provider}/${option.model}`}
+                                style={[
+                                    styles.modeOption,
+                                    isSelected && styles.modeOptionSelected,
+                                    index > 0 && styles.modeOptionMarginTop,
+                                ]}
+                                onPress={() => handleSelectModel(option)}
+                                activeOpacity={0.7}
+                                disabled={switchingModel || !isConnected}
+                            >
+                                <View style={styles.modeRadio}>
+                                    <View
+                                        style={[
+                                            styles.radioOuter,
+                                            isSelected && styles.radioOuterActive,
+                                        ]}
+                                    >
+                                        {isSelected && <View style={styles.radioInner} />}
+                                    </View>
+                                </View>
+                                <View style={styles.modeTextWrap}>
+                                    <Text
+                                        style={[
+                                            styles.modeTitle,
+                                            isSelected && styles.modeTitleActive,
+                                        ]}
+                                    >
+                                        {title}
+                                    </Text>
+                                    <Text style={styles.modeDesc}>{desc}</Text>
+                                </View>
+                            </TouchableOpacity>
+                        );
+                    })
+                )}
+            </View>
+
+            {/* 大模型中枢与记忆体系说明 */}
             <View style={styles.card}>
                 <View style={styles.sectionTitleRow}>
                     <Icon name="psychology" size={20} color={theme.colors.primary} />
@@ -261,15 +504,9 @@ export const AgentConfigScreen = () => {
                     <Text style={styles.infoLabel}>{t('settings.agentHubEngine', '执行中枢')}</Text>
                     <Text style={styles.infoValue}>{t('settings.agentHubEngineDesc', 'DeepSeek Harness (ACP 协议)')}</Text>
                 </View>
-                <View style={styles.infoRow}>
+                <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
                     <Text style={styles.infoLabel}>{t('settings.agentHubMemory', '长期记忆')}</Text>
                     <Text style={styles.infoValue}>{t('settings.agentHubMemoryDesc', 'SOUL.md / MEMORY.md 持续沉淀')}</Text>
-                </View>
-                <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-                    <Text style={styles.infoLabel}>{t('settings.agentHubModel', '模型选择')}</Text>
-                    <Text style={styles.infoValueMuted}>
-                        {t('settings.agentHubModelDesc', '由服务端统一调度 (后续版本支持端侧切换)')}
-                    </Text>
                 </View>
             </View>
         </ScrollView>
@@ -459,9 +696,15 @@ const styles = StyleSheet.create({
         color: theme.colors.textSecondary,
         fontWeight: '500',
     },
-    infoValueMuted: {
+    modelLoadingButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+    },
+    modelLoadingText: {
         fontSize: 12,
         color: theme.colors.textSecondary,
         fontStyle: 'italic',
+        marginRight: 6,
     },
 });

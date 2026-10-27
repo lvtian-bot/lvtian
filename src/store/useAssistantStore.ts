@@ -26,6 +26,8 @@ interface AssistantState {
     currentSeq: number;
     hasHydrated: boolean;
     permissionMode: 'workspace-write' | 'danger-full-access';
+    /** 服务端当前助理模型选择（provider 路由 + 模型 ID），未拉取到时为 null */
+    agentModelSelection: { provider: string; model: string } | null;
     /** 服务端是否正在优雅升级中 */
     isServerUpgrading: boolean;
     /** 待发送消息队列（离线/升级期间乐观入队，重连对账后自动静默补发） */
@@ -38,6 +40,7 @@ interface AssistantState {
     // Actions
     setHasHydrated: (hydrated: boolean) => void;
     setPermissionMode: (mode: 'workspace-write' | 'danger-full-access') => void;
+    setAgentModelSelection: (selection: { provider: string; model: string } | null) => void;
     setSkills: (skills: AgentSkill[]) => void;
     setServerConfig: (url: string, token: string) => Promise<void>;
     loadSavedCredentials: () => Promise<{ url: string; token: string }>;
@@ -76,6 +79,7 @@ export const useAssistantStore = create<AssistantState>()(
             clearedSeq: 0,
             hasHydrated: false,
             permissionMode: 'workspace-write',
+            agentModelSelection: null,
             isServerUpgrading: false,
             pendingSendQueue: [],
             pendingCancelQueue: [],
@@ -83,6 +87,7 @@ export const useAssistantStore = create<AssistantState>()(
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
             setPermissionMode: (mode) => set({ permissionMode: mode }),
+            setAgentModelSelection: (agentModelSelection) => set({ agentModelSelection }),
             setSkills: (skills) => set({ skills }),
 
             setServerConfig: async (url, token) => {
@@ -116,6 +121,7 @@ export const useAssistantStore = create<AssistantState>()(
                         isServerUpgrading: false,
                         pendingSendQueue: [],
                         skills: [],
+                        agentModelSelection: null,
                     });
                 } else {
                     set({ serverUrl: cleanUrl, serverToken: cleanToken });
@@ -335,6 +341,7 @@ export const useAssistantStore = create<AssistantState>()(
                     pendingSendQueue: sanitizedPendingSendQueue,
                     pendingCancelQueue: state.pendingCancelQueue ?? [],
                     permissionMode: state.permissionMode ?? 'workspace-write',
+                    agentModelSelection: state.agentModelSelection ?? null,
                 };
             },
             onRehydrateStorage: () => (state) => {
