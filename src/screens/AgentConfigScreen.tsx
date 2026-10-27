@@ -176,6 +176,8 @@ export const AgentConfigScreen = () => {
             permissionSetting.switchTo('workspace-write');
             return;
         }
+        // 打开弹层前重查服务端：选中标记立即对齐实际生效值，上次核对失败时此处即为重试入口
+        (picker === 'permission' ? permissionSetting : modelSetting).refresh();
         setActivePicker(picker);
     };
 
