@@ -7,6 +7,7 @@ import {
     ServerMessage,
     AssistantMessage,
     ChatAttachment,
+    AgentSkill,
 } from '../types/assistantProtocol';
 
 export class AssistantClient {
@@ -24,9 +25,18 @@ export class AssistantClient {
     private currentAppState: AppStateStatus = (AppState.currentState as AppStateStatus) || 'active';
     private lastBackgroundTimestamp = 0;
     private appStateSubscription: { remove: () => void } | null = null;
+    private pendingResetCallbacks: Map<string, Array<(success: boolean) => void>> = new Map();
 
     private constructor() {
         this.setupAppStateListener();
+    }
+
+    /**
+     * 将 ws:// / wss:// 协议头标准化转换为 fetch 支持的 http:// / https://
+     */
+    public static toHttpUrl(rawUrl: string): string {
+        const cleanUrl = rawUrl.trim().replace(/\/+$/, '');
+        return cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
     }
 
     public static getInstance(): AssistantClient {
@@ -623,6 +633,116 @@ export class AssistantClient {
     }
 
     /**
+     * 重置会话上下文（无感新建会话，复用底层交接流水线）
+     */
+    public async resetSession(sessionId = 'main'): Promise<boolean> {
+        // 1. 若 WebSocket 处于连接状态，仅通过 WS 发送并等待 session_reset_ack 回执，避免与 HTTP 兜底产生双重重置
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            return new Promise<boolean>((resolve) => {
+                let resolved = false;
+                const finish = (ok: boolean) => {
+                    if (resolved) return;
+                    resolved = true;
+                    clearTimeout(timer);
+                    const list = this.pendingResetCallbacks.get(sessionId) || [];
+                    this.pendingResetCallbacks.set(
+                        sessionId,
+                        list.filter((cb) => cb !== finish)
+                    );
+                    resolve(ok);
+                };
+
+                const timer = setTimeout(() => {
+                    // WS 等待超时直接判定失败（与修改权限模式统一放宽至 60 秒，覆盖即时心智提炼耗时），不追加破坏性的 HTTP 重试
+                    console.warn('[AssistantClient] resetSession WS 回执超时');
+                    finish(false);
+                }, 60000);
+
+                const list = this.pendingResetCallbacks.get(sessionId) || [];
+                list.push(finish);
+                this.pendingResetCallbacks.set(sessionId, list);
+
+                const sent = this.sendRaw({
+                    type: 'reset_session',
+                    sessionId,
+                });
+                if (!sent) {
+                    finish(false);
+                }
+            });
+        }
+
+        // 2. 若 WebSocket 未连接（离线/纯 HTTP 模式），走 HTTP 接口兜底
+        return this.resetSessionHttpFallback(sessionId);
+    }
+
+    private async resetSessionHttpFallback(sessionId: string): Promise<boolean> {
+        const store = useAssistantStore.getState();
+        const rawUrl = store.serverUrl;
+        const token = store.serverToken;
+        if (rawUrl && token) {
+            try {
+                const httpUrl = AssistantClient.toHttpUrl(rawUrl);
+                const controller = new AbortController();
+                // 与修改权限模式统一放宽至 60 秒，覆盖服务端心智提炼的最大耗时
+                const timeoutId = setTimeout(() => controller.abort(), 60000);
+                const res = await fetch(`${httpUrl}/api/session/reset`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ sessionId }),
+                    signal: controller.signal,
+                });
+                clearTimeout(timeoutId);
+                return res.ok;
+            } catch (err) {
+                console.warn('[AssistantClient] resetSession 异常:', err);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 获取服务端可用技能列表并更新 Store
+     */
+    public async fetchSkills(): Promise<AgentSkill[]> {
+        const store = useAssistantStore.getState();
+        const rawUrl = store.serverUrl;
+        const token = store.serverToken;
+        if (!rawUrl || !token) {
+            return [];
+        }
+
+        try {
+            const httpUrl = AssistantClient.toHttpUrl(rawUrl);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const res = await fetch(`${httpUrl}/api/skills`, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (res.ok) {
+                const data = (await res.json()) as { skills?: AgentSkill[] };
+                const skills = data.skills || [];
+                // 核验当前活跃的配置是否仍与发起请求时一致，丢弃旧服务器的迟到响应
+                const currentStore = useAssistantStore.getState();
+                if (currentStore.serverUrl === rawUrl && currentStore.serverToken === token) {
+                    currentStore.setSkills(skills);
+                    return skills;
+                }
+            }
+        } catch (err) {
+            console.warn('[AssistantClient] 获取技能列表失败:', err);
+        }
+        return [];
+    }
+
+    /**
      * 取消排队中的消息
      * 本地立即将消息从聊天列表与待发队列中移除（文字退回输入框），同时向服务端发送撤销报文彻底删除该记录；
      * 无条件将撤销请求纳入 pendingCancelQueue 持久化队列，待收到服务端确认回执（message_deleted、增量对账剔除或 cancel_failed）后才出队；
@@ -677,6 +797,7 @@ export class AssistantClient {
                 if (msg.success) {
                     // 仅在鉴权真正成功后才重置重连尝试计数，防止闪断网络进入 1s 高频重试死循环
                     this.reconnectAttempts = 0;
+                    this.fetchSkills().catch(() => {});
                 } else {
                     store.setConnectionState('error', msg.error || '认证失败，请检查访问令牌');
                     this.isExplicitlyClosed = true;
@@ -936,6 +1057,14 @@ export class AssistantClient {
                     store.addOrUpdateMessage(backup);
                 }
                 this.cancellingMessages.delete(msg.messageId);
+                break;
+            }
+
+            case 'session_reset_ack': {
+                console.log('[AssistantClient] 会话上下文重置已完成:', msg.sessionId);
+                const callbacks = this.pendingResetCallbacks.get(msg.sessionId) || [];
+                this.pendingResetCallbacks.delete(msg.sessionId);
+                callbacks.forEach((cb) => cb(msg.success !== false));
                 break;
             }
 

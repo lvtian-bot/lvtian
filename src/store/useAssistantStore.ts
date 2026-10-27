@@ -9,6 +9,7 @@ import {
     ApprovalRequest,
     ToolCallState,
     ChatAttachment,
+    AgentSkill,
 } from '../types/assistantProtocol';
 
 const ASSISTANT_TOKEN_KEY = 'lvtian_assistant_token';
@@ -31,10 +32,13 @@ interface AssistantState {
     pendingSendQueue: Array<{ sessionId: string; messageId: string; content: string; attachments?: ChatAttachment[] }>;
     /** 待撤销排队消息队列（离线取消时入队，重连对账后自动静默补发） */
     pendingCancelQueue: string[];
+    /** 服务端加载的可用技能列表 */
+    skills: AgentSkill[];
 
     // Actions
     setHasHydrated: (hydrated: boolean) => void;
     setPermissionMode: (mode: 'workspace-write' | 'danger-full-access') => void;
+    setSkills: (skills: AgentSkill[]) => void;
     setServerConfig: (url: string, token: string) => Promise<void>;
     loadSavedCredentials: () => Promise<{ url: string; token: string }>;
     setConnectionState: (state: ConnectionState, error?: string | null) => void;
@@ -75,9 +79,11 @@ export const useAssistantStore = create<AssistantState>()(
             isServerUpgrading: false,
             pendingSendQueue: [],
             pendingCancelQueue: [],
+            skills: [],
 
             setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
             setPermissionMode: (mode) => set({ permissionMode: mode }),
+            setSkills: (skills) => set({ skills }),
 
             setServerConfig: async (url, token) => {
                 const cleanUrl = url.trim().replace(/\/+$/, '');
@@ -109,6 +115,7 @@ export const useAssistantStore = create<AssistantState>()(
                         pendingApprovals: [],
                         isServerUpgrading: false,
                         pendingSendQueue: [],
+                        skills: [],
                     });
                 } else {
                     set({ serverUrl: cleanUrl, serverToken: cleanToken });

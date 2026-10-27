@@ -544,6 +544,12 @@
     "toolStatusFailed": "失败",
     "toolDetailSummary": "摘要",
     "toolDetailInput": "输入",
-    "toolDetailOutput": "输出"
+    "toolDetailOutput": "输出",
+    "commandNewDesc": "重置会话上下文",
+    "sessionResetToast": "上下文已重置",
+    "sessionResetting": "正在重置上下文...",
+    "sessionResetFailed": "重置上下文失败，请稍后重试",
+    "slashMenuCommands": "命令",
+    "slashMenuSkills": "技能"
   }
 }
