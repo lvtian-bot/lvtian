@@ -149,14 +149,8 @@ export const AssistantConfigScreen = () => {
                 <SettingsGroup>
                     <SettingsRow
                         icon="dns"
-                        title={t('assistant.serverUrlRow', '服务地址')}
+                        title={t('settings.serverConfigRow', '服务端配置')}
                         value={displayHost || t('assistant.valueNotSet', '未设置')}
-                        onPress={openSheet}
-                    />
-                    <SettingsRow
-                        icon="key"
-                        title={t('assistant.tokenRow', '访问令牌')}
-                        value={serverToken ? t('assistant.valueSet', '已设置') : t('assistant.valueNotSet', '未设置')}
                         onPress={openSheet}
                         last
                     />
@@ -250,12 +244,12 @@ const styles = StyleSheet.create({
         marginBottom: 4,
     },
     pasteBarText: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '600',
         color: theme.colors.successText,
     },
     note: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#9AA3B2',
         lineHeight: 18,
         textAlign: 'center',

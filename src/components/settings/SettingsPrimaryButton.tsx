@@ -3,6 +3,7 @@ import { Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-nat
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { type ComponentProps } from 'react';
 import { theme } from '../../utils/theme';
+import { useSettingsFont } from './useSettingsFont';
 
 interface SettingsPrimaryButtonProps {
     label: string;
@@ -19,6 +20,7 @@ export const SettingsPrimaryButton: React.FC<SettingsPrimaryButtonProps> = ({
     disabled,
     icon,
 }) => {
+    const font = useSettingsFont();
     return (
         <TouchableOpacity
             style={[styles.button, (loading || disabled) && styles.buttonDisabled]}
@@ -38,7 +40,7 @@ export const SettingsPrimaryButton: React.FC<SettingsPrimaryButtonProps> = ({
                             style={styles.icon}
                         />
                     ) : null}
-                    <Text style={styles.text}>{label}</Text>
+                    <Text style={[styles.text, { fontSize: font.chatBody }]}>{label}</Text>
                 </>
             )}
         </TouchableOpacity>
@@ -68,7 +70,6 @@ const styles = StyleSheet.create({
         marginRight: 7,
     },
     text: {
-        fontSize: 15,
         fontWeight: '600',
         color: theme.colors.white,
     },

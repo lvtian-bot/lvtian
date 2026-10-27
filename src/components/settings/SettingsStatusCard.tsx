@@ -2,6 +2,7 @@ import React, { type ComponentProps } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
+import { useSettingsFont } from './useSettingsFont';
 
 interface SettingsStatusCardProps {
     /** 传入则显示圆底图标，否则显示状态圆点 */
@@ -21,6 +22,7 @@ export const SettingsStatusCard: React.FC<SettingsStatusCardProps> = ({
     badge,
     onPress,
 }) => {
+    const font = useSettingsFont();
     const body = (
         <>
             {icon ? (
@@ -35,7 +37,7 @@ export const SettingsStatusCard: React.FC<SettingsStatusCardProps> = ({
                 <View style={[styles.dot, tone === 'muted' && styles.dotMuted]} />
             )}
             <View style={styles.main}>
-                <Text style={styles.title}>{title}</Text>
+                <Text style={[styles.title, { fontSize: font.chatBody }]}>{title}</Text>
                 {subtitle ? <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text> : null}
             </View>
             {badge ? (
@@ -107,12 +109,11 @@ const styles = StyleSheet.create({
         gap: 2,
     },
     title: {
-        fontSize: 15,
         fontWeight: '600',
         color: theme.colors.text,
     },
     subtitle: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#8A94A6',
     },
     badge: {
@@ -127,7 +128,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#F0F1F3',
     },
     badgeText: {
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: '600',
     },
     badgeTextOk: {

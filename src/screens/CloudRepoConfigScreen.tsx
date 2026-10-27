@@ -32,7 +32,6 @@ export const CloudRepoConfigScreen = () => {
     const [server, setServer] = useState(webDavConfig.server);
     const [username, setUsername] = useState(webDavConfig.username);
     const [password, setPassword] = useState('');
-    const [hasStoredPassword, setHasStoredPassword] = useState(false);
     const [sheetOpen, setSheetOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [sheetError, setSheetError] = useState<SheetError | null>(null);
@@ -45,7 +44,6 @@ export const CloudRepoConfigScreen = () => {
                 const storedPassword = await SecureStore.getItemAsync('WEBDAV_PASSWORD');
                 if (storedPassword) {
                     setPassword(storedPassword);
-                    setHasStoredPassword(true);
                 }
             } catch (error) {
                 console.error('Failed to load credentials', error);
@@ -61,7 +59,6 @@ export const CloudRepoConfigScreen = () => {
 
     const performSave = async () => {
         await SecureStore.setItemAsync('WEBDAV_PASSWORD', password);
-        setHasStoredPassword(true);
         setWebDavConfig({ server, username });
         setCloudProvider('webdav');
         await cloudService.initProvider();
@@ -159,24 +156,8 @@ export const CloudRepoConfigScreen = () => {
                 <SettingsGroup>
                     <SettingsRow
                         icon="link-variant"
-                        title={t('settings.cloudProvider.webdav.serverAddress')}
+                        title={t('settings.connectionGroup', '连接信息')}
                         value={displayServer || t('assistant.valueNotSet', '未设置')}
-                        onPress={openSheet}
-                    />
-                    <SettingsRow
-                        icon="account"
-                        title={t('settings.cloudProvider.webdav.username')}
-                        value={webDavConfig.username || t('assistant.valueNotSet', '未设置')}
-                        onPress={openSheet}
-                    />
-                    <SettingsRow
-                        icon="lock"
-                        title={t('settings.cloudProvider.webdav.password')}
-                        value={
-                            hasStoredPassword
-                                ? t('assistant.valueSet', '已设置')
-                                : t('assistant.valueNotSet', '未设置')
-                        }
                         onPress={openSheet}
                         last
                     />
@@ -257,12 +238,12 @@ const styles = StyleSheet.create({
     },
     hintText: {
         flex: 1,
-        fontSize: 12,
+        fontSize: 13,
         color: '#2563EB',
         lineHeight: 18,
     },
     note: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#9AA3B2',
         lineHeight: 18,
         textAlign: 'center',

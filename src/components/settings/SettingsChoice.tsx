@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { theme } from '../../utils/theme';
+import { useSettingsFont } from './useSettingsFont';
 
 interface SettingsChoiceProps {
     title: string;
@@ -21,6 +22,7 @@ export const SettingsChoice: React.FC<SettingsChoiceProps> = ({
     disabled,
     onPress,
 }) => {
+    const font = useSettingsFont();
     const activeTone = danger ? 'danger' : 'primary';
     return (
         <TouchableOpacity
@@ -38,6 +40,7 @@ export const SettingsChoice: React.FC<SettingsChoiceProps> = ({
                     <Text
                         style={[
                             styles.title,
+                            { fontSize: font.chatBody },
                             selected && (activeTone === 'danger' ? styles.titleDangerActive : styles.titleActive),
                         ]}
                     >
@@ -104,7 +107,6 @@ const styles = StyleSheet.create({
         gap: 7,
     },
     title: {
-        fontSize: 14,
         fontWeight: '600',
         color: theme.colors.text,
     },
@@ -115,7 +117,7 @@ const styles = StyleSheet.create({
         color: '#B45309',
     },
     desc: {
-        fontSize: 12,
+        fontSize: 13,
         color: '#8A94A6',
         lineHeight: 18,
     },
