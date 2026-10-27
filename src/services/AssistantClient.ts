@@ -9,6 +9,7 @@ import {
     AssistantMessage,
     ChatAttachment,
     AgentSkill,
+    AgentModelOption,
 } from '../types/assistantProtocol';
 
 export class AssistantClient {
@@ -240,6 +241,80 @@ export class AssistantClient {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ permissionMode: mode }),
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (res.ok) {
+                const data = (await res.json().catch(() => null)) as { changed?: boolean } | null;
+                return { success: true, changed: data?.changed };
+            }
+            const data = (await res.json().catch(() => null)) as { code?: string; error?: string } | null;
+            return {
+                success: false,
+                code: data?.code,
+                message: data?.error,
+            };
+        } catch {
+            return { success: false, code: 'NETWORK_ERROR' };
+        }
+    }
+
+    /**
+     * 查询服务端当前助理模型与可选项
+     */
+    public static async fetchModelSelection(
+        serverUrl: string,
+        token: string
+    ): Promise<{ provider: string; model: string; options: AgentModelOption[] } | null> {
+        const httpUrl = AssistantClient.toHttpUrl(serverUrl);
+        if (!httpUrl || !token) return null;
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const res = await fetch(`${httpUrl}/api/model`, {
+                headers: { Authorization: `Bearer ${token.trim()}` },
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (!res.ok) return null;
+            const data = (await res.json()) as {
+                provider?: string;
+                model?: string;
+                options?: AgentModelOption[];
+            };
+            if (!data.provider || !data.model) return null;
+            return {
+                provider: data.provider,
+                model: data.model,
+                options: Array.isArray(data.options) ? data.options : [],
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * 修改服务端助理模型并触发统一会话交接（新模型自下一个会话生效）
+     */
+    public static async updateModelSelection(
+        serverUrl: string,
+        token: string,
+        provider: string,
+        model: string
+    ): Promise<{ success: boolean; changed?: boolean; code?: string; message?: string }> {
+        const httpUrl = AssistantClient.toHttpUrl(serverUrl);
+        if (!httpUrl || !token) return { success: false, code: 'PARAM_INVALID' };
+        try {
+            const controller = new AbortController();
+            // 模型切换与会话交接共用流水线，可能包含服务端即时提炼《心智接力备忘录》的深度大模型调用，放宽超时至 60 秒
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            const res = await fetch(`${httpUrl}/api/model`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token.trim()}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ provider, model }),
                 signal: controller.signal,
             });
             clearTimeout(timeoutId);

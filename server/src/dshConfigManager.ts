@@ -247,3 +247,180 @@ export function setDshPermissionMode(mode: DshPermissionMode, customDir?: string
         throw new Error(`写入 DSH 配置文件失败: ${err instanceof Error ? err.message : String(err)}`);
     }
 }
+
+// ----------------------------------------------------------------------
+// 助理模型选择：DSH 官方 acp / agent-default-model 补丁的 provider+model 配置。
+// acp 决定每个 ACP 新建会话使用的模型；agent-default-model 为所有入口共享的
+// 默认模型。两者同步写入保持一致；已存在的 DSH 会话不受影响，须由调用方触发
+// 会话交接让新模型在下一个会话生效。
+// ----------------------------------------------------------------------
+
+/** DSH 官方标准补丁 ID：ACP 入口的会话模型选择 */
+export const DSH_PATCH_ACP_ID = 'acp';
+/** DSH 官方标准补丁 ID：新建 Agent 的共享默认模型 */
+export const DSH_PATCH_AGENT_DEFAULT_MODEL_ID = 'agent-default-model';
+
+export interface DshModelSelection {
+    /** DSH 已注册的 provider 路由（如 deepseek-official / openai-codex） */
+    provider: string;
+    /** provider 侧的模型 ID（如 deepseek-flash / gpt-6.1-sol） */
+    model: string;
+}
+
+/** 读取 ACP 补丁条目中的助理模型选择；补丁文件、条目或字段不完整时返回 null */
+export function getDshModelSelection(customDir?: string): DshModelSelection | null {
+    const filePath = resolveDshProfilePatchPath(customDir);
+    if (!fs.existsSync(filePath)) {
+        return null;
+    }
+
+    try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const parsed = yaml.parse(content);
+        if (!Array.isArray(parsed)) {
+            return null;
+        }
+        const entry = parsed.find(
+            (item: unknown) =>
+                item &&
+                typeof item === 'object' &&
+                (item as { id?: string }).id === DSH_PATCH_ACP_ID
+        ) as { config?: { provider?: unknown; model?: unknown } } | undefined;
+        const provider = entry?.config?.provider;
+        const model = entry?.config?.model;
+        if (typeof provider === 'string' && provider && typeof model === 'string' && model) {
+            return { provider, model };
+        }
+    } catch (err) {
+        console.warn(`[DshConfig] 读取模型选择失败，视为未选择: ${err}`);
+    }
+    return null;
+}
+
+/** 预测写入目标模型选择是否会导致补丁配置变更（含补丁文件或任一标准条目缺失的情形） */
+export function willDshModelChange(target: DshModelSelection, customDir?: string): boolean {
+    const filePath = resolveDshProfilePatchPath(customDir);
+    if (!fs.existsSync(filePath)) {
+        return true;
+    }
+
+    try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const parsed = yaml.parse(content);
+        if (!Array.isArray(parsed)) {
+            return true;
+        }
+        const expectedEntries = [DSH_PATCH_ACP_ID, DSH_PATCH_AGENT_DEFAULT_MODEL_ID];
+        for (const id of expectedEntries) {
+            const entry = parsed.find(
+                (item: unknown) =>
+                    item &&
+                    typeof item === 'object' &&
+                    (item as { id?: string }).id === id
+            ) as { config?: Record<string, unknown> } | undefined;
+            if (!entry) {
+                return true;
+            }
+            const config = entry.config && typeof entry.config === 'object' && !Array.isArray(entry.config)
+                ? entry.config
+                : undefined;
+            if (config?.provider !== target.provider || config?.model !== target.model) {
+                return true;
+            }
+        }
+        return false;
+    } catch {
+        return true;
+    }
+}
+
+/**
+ * 将目标模型选择原子写入 DSH profile 的 cordis.patch.yml，同步维护官方标准
+ * 'acp' 与 'agent-default-model' 两个补丁条目的 provider/model 字段：
+ * - 条目已存在时仅合并这两个字段，其余既有配置（如 sessionListPageSize）原样保留；
+ * - 自动兼容条目 config 缺失或结构异常的情形（整体重建该条目的 config）；
+ * 返回 boolean：true 表示配置发生变更并已写入，false 表示两个条目均已与目标一致（幂等未变更）。
+ * 现有配置文件损坏或不可读时立即抛出异常以保护既有配置，绝不进行隐式回退或误判为幂等未变更。
+ */
+export function setDshModelSelection(target: DshModelSelection, customDir?: string): boolean {
+    const filePath = resolveDshProfilePatchPath(customDir);
+    const parentDir = path.dirname(filePath);
+
+    if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true, mode: 0o755 });
+    }
+
+    let parsed: unknown[] = [];
+    const fileExisted = fs.existsSync(filePath);
+    if (fileExisted) {
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const data = yaml.parse(content);
+            if (Array.isArray(data)) {
+                parsed = data;
+            } else {
+                throw new Error('DSH 配置文件格式非法（根结构非数组）');
+            }
+        } catch (err) {
+            throw new Error(`读取或解析现有 DSH 配置文件失败，中止更新以保护既有配置: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+
+    let changed = false;
+    for (const id of [DSH_PATCH_ACP_ID, DSH_PATCH_AGENT_DEFAULT_MODEL_ID]) {
+        const idx = parsed.findIndex(
+            (item: unknown) =>
+                item &&
+                typeof item === 'object' &&
+                (item as { id?: string }).id === id
+        );
+
+        if (idx >= 0) {
+            const existing = parsed[idx] as { id: string; config?: unknown };
+            const config = existing.config && typeof existing.config === 'object' && !Array.isArray(existing.config)
+                ? (existing.config as Record<string, unknown>)
+                : undefined;
+            if (!config) {
+                // config 缺失或结构异常：整体重建，避免向非对象展开造成字段丢失或类型污染
+                existing.config = { provider: target.provider, model: target.model };
+                changed = true;
+            } else if (config.provider !== target.provider || config.model !== target.model) {
+                existing.config = {
+                    ...config,
+                    provider: target.provider,
+                    model: target.model,
+                };
+                changed = true;
+            }
+        } else {
+            parsed.push({
+                id,
+                config: {
+                    provider: target.provider,
+                    model: target.model,
+                },
+            });
+            changed = true;
+        }
+    }
+
+    if (!changed) {
+        return false;
+    }
+
+    const newYaml = yaml.stringify(parsed);
+    const tmpFile = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+
+    try {
+        fs.writeFileSync(tmpFile, newYaml, { encoding: 'utf8', mode: 0o644 });
+        fs.renameSync(tmpFile, filePath);
+        return true;
+    } catch (err) {
+        try {
+            if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+        } catch {
+            // ignore
+        }
+        throw new Error(`写入 DSH 配置文件失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
