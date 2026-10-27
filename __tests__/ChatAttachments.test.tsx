@@ -143,6 +143,83 @@ describe('聊天附件待发送', () => {
         expect(Alert.alert).toHaveBeenCalledWith(i18n.t('common.notice'), i18n.t('chat.attachmentTooLarge'));
         expect(send).not.toHaveBeenCalled();
     });
+    it.each(['\t', '\\', '\u0000'])('JSON 转义文本 %p 合计超限时保留已有文字与附件', async (character) => {
+        jest.mocked(DocumentPicker.getDocumentAsync).mockResolvedValue(fileResult());
+        const content = character.repeat((character === '\u0000' ? 3 : 6) * 1024 * 1024);
+        jest.mocked(fsService.readAttachment).mockResolvedValue({ content, size: content.length });
+        await type('保留草稿');
+        await choose('pickDocument');
+        await choose('pickDocument');
+        expect(drafts()).toHaveLength(1);
+        expect(renderer.root.findByType(TextInput).props.value).toBe('保留草稿');
+        expect(Alert.alert).toHaveBeenCalledWith(i18n.t('common.notice'), i18n.t('chat.attachmentTooLarge'));
+        expect(send).not.toHaveBeenCalled();
+    });
+    it('中文文本以 UTF-8 实际字节计费，不按字符数低估或对物理字节额外乘系数', async () => {
+        jest.mocked(DocumentPicker.getDocumentAsync).mockResolvedValue(fileResult());
+        const content = '中'.repeat(3 * 1024 * 1024);
+        jest.mocked(fsService.readAttachment).mockResolvedValue({ content, size: 9 * 1024 * 1024 });
+        await choose('pickDocument');
+        await choose('pickDocument');
+        expect(drafts()).toHaveLength(2); // 18MiB UTF-8，旧 1.2 倍估算会错误拒绝。
+        expect(Alert.alert).not.toHaveBeenCalled();
+        await choose('pickDocument');
+        expect(drafts()).toHaveLength(2);
+        expect(Alert.alert).toHaveBeenCalled();
+    });
+    it('多张各自未超限的图片按实际 Base64 合计拦截并保留既有草稿', async () => {
+        jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValueOnce(imageResult('first.jpg'));
+        await choose('pickImage');
+        await type('原有文字');
+        const result = imageResult('large.jpg', 8 * 1024 * 1024);
+        if (result.assets) {
+            result.assets[0].base64 = 'a'.repeat(Math.ceil(8 * 1024 * 1024 / 3) * 4);
+            result.assets.push({ ...result.assets[0], fileName: 'another.jpg', uri: 'file:///another.jpg' });
+        }
+        jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValueOnce(result);
+        await choose('pickImage');
+        expect(drafts()).toHaveLength(1);
+        expect(renderer.root.findByType(TextInput).props.value).toBe('原有文字');
+        expect(Alert.alert).toHaveBeenCalledWith(i18n.t('common.notice'), i18n.t('chat.attachmentTooLarge'));
+        expect(send).not.toHaveBeenCalled();
+    });
+    it('图片选择器仅返回 URI 时先读取真实 Base64，按实际编码合计控制预算', async () => {
+        const result = imageResult('uri-only.png', 1);
+        if (result.assets) result.assets[0].base64 = undefined;
+        jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValue(result);
+        jest.mocked(fsService.readAttachment).mockResolvedValue({ data: 'a'.repeat(11 * 1024 * 1024), size: 8 * 1024 * 1024 });
+        await choose('pickImage');
+        await choose('pickImage');
+        expect(fsService.readAttachment).toHaveBeenCalledWith('file:///uri-only.png', 10 * 1024 * 1024, 'image/jpeg', 'uri-only.png');
+        expect(drafts()).toHaveLength(1);
+        expect(Alert.alert).toHaveBeenCalledWith(i18n.t('common.notice'), i18n.t('chat.attachmentTooLarge'));
+    });
+    it.each(['ATTACHMENT_TOO_LARGE', 'ATTACHMENT_DATA_MISSING'])('URI 图片读取异常 %s 不添加无数据草稿', async (error) => {
+        const result = imageResult();
+        if (result.assets) result.assets[0].base64 = undefined;
+        jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValue(result);
+        if (error === 'ATTACHMENT_TOO_LARGE') {
+            jest.mocked(fsService.readAttachment).mockRejectedValueOnce(new Error(error));
+        } else {
+            jest.mocked(fsService.readAttachment).mockResolvedValueOnce({ content: 'not image data', size: 1 });
+        }
+        await choose('pickImage');
+        expect(drafts()).toHaveLength(0);
+        expect(Alert.alert).toHaveBeenCalledWith(
+            i18n.t(error === 'ATTACHMENT_TOO_LARGE' ? 'common.notice' : 'common.error'),
+            i18n.t(error === 'ATTACHMENT_TOO_LARGE' ? 'chat.attachmentTooLarge' : 'chat.pickImageError'));
+        expect(send).not.toHaveBeenCalled();
+    });
+    it('文件读取仍使用 10MiB 单文件上限，超限不替换草稿', async () => {
+        jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValueOnce(imageResult());
+        await choose('pickImage');
+        jest.mocked(DocumentPicker.getDocumentAsync).mockResolvedValue(fileResult());
+        jest.mocked(fsService.readAttachment).mockRejectedValueOnce(new Error('ATTACHMENT_TOO_LARGE'));
+        await choose('pickDocument');
+        expect(fsService.readAttachment).toHaveBeenCalledWith('file:///notes.txt', 10 * 1024 * 1024, 'text/plain', 'notes.txt');
+        expect(drafts()).toHaveLength(1);
+        expect(Alert.alert).toHaveBeenCalledWith(i18n.t('common.notice'), i18n.t('chat.attachmentTooLarge'));
+    });
     it('选择器尚未返回时输入的新文字不会被清空或自动发送', async () => {
         let resolvePicker!: (result: ImagePicker.ImagePickerResult) => void;
         jest.mocked(ImagePicker.launchImageLibraryAsync).mockReturnValueOnce(new Promise((resolve) => { resolvePicker = resolve; }));
@@ -168,6 +245,22 @@ describe('聊天附件待发送', () => {
         ]);
         expect(drafts()).toHaveLength(0);
         expect(renderer.root.findByType(TextInput).props.value).toBe('');
+    });
+    it('失败消息重新水合后按附件合计拦截，不删除原失败记录或输入草稿', async () => {
+        await type('不要丢失草稿');
+        await ReactTestRenderer.act(async () => { useAssistantStore.setState({ messages: [{
+            id: 'retry-large', seq: 1, role: 'user', content: 'retry original', status: 'error', timestamp: Date.now(),
+            attachments: [1, 2].map((id) => ({ type: 'file', name: `${id}.txt`, uri: `file:///${id}.txt`, size: 1 })),
+        }] }); });
+        jest.mocked(fsService.readAttachment).mockResolvedValue({ content: '\t'.repeat(6 * 1024 * 1024), size: 6 * 1024 * 1024 });
+        const retry = renderer.root.findAllByType(TouchableOpacity).find((node) =>
+            node.findAll((child) => child.props.name === 'error-outline').length > 0);
+        expect(retry).toBeDefined();
+        await ReactTestRenderer.act(async () => { retry!.props.onPress(); });
+        expect(send).not.toHaveBeenCalled();
+        expect(useAssistantStore.getState().messages.some((item) => item.id === 'retry-large')).toBe(true);
+        expect(renderer.root.findByType(TextInput).props.value).toBe('不要丢失草稿');
+        expect(Alert.alert).toHaveBeenCalledWith(i18n.t('common.notice'), i18n.t('chat.attachmentTooLarge'));
     });
     it('发送同步失败保留文字和附件，避免草稿丢失', async () => {
         jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValue(imageResult());

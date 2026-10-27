@@ -51,6 +51,7 @@ import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ChatAttachment, ToolCallState } from '../types/assistantProtocol';
 import { getAssistantDisplayParts } from '../utils/assistantMessageParts';
+import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import { ChatBubbleText } from '../components/ChatBubbleText';
 import { formatChatDate, formatChatTime, isPlainChatText, startsChatDay } from '../utils/chatDate';
 import { RootStackParamList } from '../types/navigation';
@@ -323,19 +324,9 @@ export const ChatScreen = () => {
         setPendingAttachments(attachments);
     }, []);
     const appendPendingAttachments = useCallback((newAttachments: ChatAttachment[]) => {
-        // 服务端 WebSocket 报文上限 30MB；客户端按 Base64 编码后的实际报文大小校验总预算（上限 20MB），为 JSON 结构与文字预留 10MB 余量
-        const MAX_ENCODED_BUDGET = 20 * 1024 * 1024;
+        // 服务端上限 30MiB；附件按实际 JSON UTF-8 字节计入 20MiB 预算，为正文及协议预留余量。
         const attachments = [...pendingAttachmentsRef.current, ...newAttachments];
-        const estimatedEncodedSize = attachments.reduce((total, item) => {
-            if (item.data) return total + item.data.length;
-            const rawSize = item.size ?? 0;
-            // 图片及二进制走 Base64 编码（增加约 33% 报文体积）；文本直接按 UTF-8 文件字节数并预留 JSON 转义开销
-            const encoded = (item.type === 'image' || !item.content)
-                ? Math.ceil(rawSize * 4 / 3)
-                : Math.ceil(rawSize * 1.2);
-            return total + encoded;
-        }, 0);
-        if (estimatedEncodedSize > MAX_ENCODED_BUDGET) {
+        if (isAttachmentBudgetExceeded(attachments)) {
             Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
             return;
         }
@@ -484,20 +475,28 @@ export const ChatScreen = () => {
                 const newAttachments: ChatAttachment[] = [];
                 for (let i = 0; i < result.assets.length; i++) {
                     const asset = result.assets[i];
-                    const base64Data = asset.base64 || undefined;
+                    let base64Data = asset.base64 || undefined;
                     const approxSize = asset.fileSize ?? (base64Data ? Math.round((base64Data.length * 3) / 4) : 0);
                     if (approxSize > MAX_SINGLE_SIZE) {
                         Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
                         continue;
                     }
                     const name = asset.fileName || `image_${Date.now()}_${i}.jpg`;
+                    // 无内联数据时先读取，避免仅按 URI 元数据计算草稿预算。
+                    let size = approxSize;
+                    if (!base64Data) {
+                        const readResult = await fsService.readAttachment(asset.uri, MAX_SINGLE_SIZE, asset.mimeType || 'image/jpeg', name);
+                        if (!readResult.data) throw new Error('ATTACHMENT_DATA_MISSING');
+                        base64Data = readResult.data;
+                        size = readResult.size;
+                    }
                     // expo-image-picker 在开启 base64 导出时统一压缩输出为 JPEG 编码，匹配声明类型以防模型 Provider 拒收
-                    const mimeType = base64Data ? 'image/jpeg' : (asset.mimeType || 'image/jpeg');
+                    const mimeType = asset.base64 ? 'image/jpeg' : (asset.mimeType || 'image/jpeg');
                     newAttachments.push({
                         type: 'image',
                         name,
                         mimeType,
-                        size: approxSize,
+                        size,
                         uri: asset.uri,
                         data: base64Data,
                     });
@@ -506,8 +505,12 @@ export const ChatScreen = () => {
                     appendPendingAttachments(newAttachments);
                 }
             }
-        } catch {
-            Alert.alert(t('common.error', '错误'), t('chat.pickImageError', '选择图片失败'));
+        } catch (error: unknown) {
+            if (error instanceof Error && error.message === 'ATTACHMENT_TOO_LARGE') {
+                Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
+            } else {
+                Alert.alert(t('common.error', '错误'), t('chat.pickImageError', '选择图片失败'));
+            }
         }
     }, [appendPendingAttachments, t]);
 
@@ -559,7 +562,7 @@ export const ChatScreen = () => {
             try {
                 attachments = await Promise.all(
                     attachments.map(async (att) => {
-                        if (att.data || att.content) {
+                        if (att.data !== undefined || att.content !== undefined) {
                             return att;
                         }
                         if (!att.uri) {
@@ -580,6 +583,10 @@ export const ChatScreen = () => {
                 return;
             }
         }
+        if (isAttachmentBudgetExceeded(attachments)) {
+            Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
+            return;
+        }
         // 关键修复：重发前先从本地状态中移除该条失败消息，避免重发后列表中残留重复的失败气泡与红感叹号
         useAssistantStore.getState().removeMessage(item.id);
         const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
@@ -595,6 +602,10 @@ export const ChatScreen = () => {
                 : `${t('chat.attachedFile', '发送了文件')}: ${attachments.map((attachment) => attachment.name).join(', ')}`)
             : '');
         if (!text) return;
+        if (isAttachmentBudgetExceeded(attachments)) {
+            Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
+            return;
+        }
         AssistantClient.getInstance().sendMessage(text, attachments.length > 0 ? attachments : undefined);
         setInputContent('');
         updatePendingAttachments([]);

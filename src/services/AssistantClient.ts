@@ -2,6 +2,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
+import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import {
     ClientMessage,
     ServerMessage,
@@ -444,6 +445,9 @@ export class AssistantClient {
      * 消息乐观上屏并在本地队列排队，连上对账后自动静默补发。
      */
     public sendMessage(content: string, attachments?: ChatAttachment[], customMessageId?: string): string {
+        if (isAttachmentBudgetExceeded(attachments)) {
+            throw new Error(i18n.t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
+        }
         const store = useAssistantStore.getState();
         const messageId = customMessageId || `msg-${Date.now()}-${++AssistantClient.messageSeq}`;
 
@@ -523,7 +527,7 @@ export class AssistantClient {
             try {
                 attachments = await Promise.all(
                     attachments.map(async (att) => {
-                        if (att.data || att.content || !att.uri) {
+                        if (att.data !== undefined || att.content !== undefined || !att.uri) {
                             return att;
                         }
                         const isImg = att.type === 'image';
@@ -541,8 +545,11 @@ export class AssistantClient {
                         };
                     })
                 );
-            } catch {
-                // 原文件失效：若在此期间会话已被清空或重置，不再写入旧消息
+                if (isAttachmentBudgetExceeded(attachments)) {
+                    throw new Error('ATTACHMENT_TOO_LARGE');
+                }
+            } catch (error: unknown) {
+                // 原文件失效或重新读取后附件合计超限：若在此期间会话已被清空或重置，不再写入旧消息
                 const currentStore = useAssistantStore.getState();
                 if (!currentStore.pendingSendQueue.some((q) => q.messageId === nextItem.messageId)) {
                     return;
@@ -555,7 +562,9 @@ export class AssistantClient {
                     content: nextItem.content,
                     timestamp: existing?.timestamp ?? Date.now(),
                     status: 'error',
-                    errorMessage: i18n.t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'),
+                    errorMessage: error instanceof Error && error.message === 'ATTACHMENT_TOO_LARGE'
+                        ? i18n.t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）')
+                        : i18n.t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'),
                     attachments: nextItem.attachments,
                 });
                 currentStore.removeFromPendingSendQueue(nextItem.messageId);

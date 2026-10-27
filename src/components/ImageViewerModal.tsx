@@ -36,6 +36,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
     const scaleValue = useRef(1);
     const panValue = useRef({ x: 0, y: 0 });
     const dragStartOffset = useRef({ x: 0, y: 0 });
+    const dragStartDisplacement = useRef({ x: 0, y: 0 });
     const initialDistance = useRef<number | null>(null);
     const initialScale = useRef(1);
     const lastTapTime = useRef(0);
@@ -71,6 +72,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
             scaleValue.current = 1;
             panValue.current = { x: 0, y: 0 };
             dragStartOffset.current = { x: 0, y: 0 };
+            dragStartDisplacement.current = { x: 0, y: 0 };
             initialDistance.current = null;
             isMultiTouchGesture.current = false;
             lastTapTime.current = 0;
@@ -100,13 +102,23 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
                 }
                 touchStartTime.current = Date.now();
                 dragStartOffset.current = { x: panValue.current.x, y: panValue.current.y };
+                dragStartDisplacement.current = { x: 0, y: 0 };
                 initialDistance.current = null;
                 isMultiTouchGesture.current = evt.nativeEvent.touches.length >= 2;
+                if (isMultiTouchGesture.current) lastTapTime.current = 0;
+            },
+            onPanResponderStart: (evt) => {
+                if (evt.nativeEvent.touches.length >= 2) {
+                    // 第二指无需移动也属于多指手势，不能参与单击或沿用双击历史。
+                    isMultiTouchGesture.current = true;
+                    lastTapTime.current = 0;
+                }
             },
             onPanResponderMove: (evt, gestureState) => {
                 const touches = evt.nativeEvent.touches;
                 if (touches.length >= 2) {
                     isMultiTouchGesture.current = true;
+                    lastTapTime.current = 0;
                     // 双指捏合缩放（支持先后落指的动态初始化）
                     const dx = touches[0].pageX - touches[1].pageX;
                     const dy = touches[0].pageY - touches[1].pageY;
@@ -124,8 +136,16 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
                 } else if (touches.length === 1 && scaleValue.current > 1) {
                     // 单指拖拽平移：基于手势开始时的固定基准进行平移，避免累计位移累加漂移
                     initialDistance.current = null;
-                    translateX.setValue(dragStartOffset.current.x + gestureState.dx);
-                    translateY.setValue(dragStartOffset.current.y + gestureState.dy);
+                    translateX.setValue(dragStartOffset.current.x + gestureState.dx - dragStartDisplacement.current.x);
+                    translateY.setValue(dragStartOffset.current.y + gestureState.dy - dragStartDisplacement.current.y);
+                }
+            },
+            onPanResponderEnd: (evt, gestureState) => {
+                if (evt.nativeEvent.touches.length === 1) {
+                    // dx/dy 在整个 responder 周期内累计；回到单指时排除捏合阶段的位移。
+                    dragStartOffset.current = { x: panValue.current.x, y: panValue.current.y };
+                    dragStartDisplacement.current = { x: gestureState.dx, y: gestureState.dy };
+                    initialDistance.current = null;
                 }
             },
             onPanResponderRelease: (_evt, gestureState) => {
