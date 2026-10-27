@@ -281,6 +281,9 @@ export class LvtianServer {
                     await this.acpEngine.triggerHandover('main', `permission_switch_to_${targetMode}`);
                 }
 
+                // 3. 交接窗口内被任务运行门禁排队的聊天消息，须在交接结束后显式唤醒队列推进（对齐 /api/session/reset）
+                this.scheduleProcessQueue('main');
+
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, permissionMode: targetMode, changed }));
             } catch (err: unknown) {
@@ -340,6 +343,9 @@ export class LvtianServer {
                 if (changed) {
                     await this.acpEngine.triggerHandover('main', `model_switch_to_${target.provider}_${target.model}`);
                 }
+
+                // 3. 交接窗口内被任务运行门禁排队的聊天消息，须在交接结束后显式唤醒队列推进（对齐 /api/session/reset）
+                this.scheduleProcessQueue('main');
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, provider: target.provider, model: target.model, changed }));

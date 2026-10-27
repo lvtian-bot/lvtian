@@ -167,6 +167,12 @@ test('DshConfigManager: 模型选择读写、双条目同步维护、既有字�
         assert.equal(afterRebuild[0].config.provider, 'deepseek-official');
         assert.equal(afterRebuild[1].id, 'agent-default-model');
 
+        // 5.5 仅配置共享默认条目：读取应回退到 agent-default-model，不再误报未选择
+        fs.writeFileSync(patchFile, yaml.stringify([
+            { id: 'agent-default-model', config: { provider: 'deepseek-official', model: 'deepseek-flash' } },
+        ]), 'utf8');
+        assert.deepEqual(getDshModelSelection(tmpDir), flashOption, '仅共享默认条目时应回退读取');
+
         // 6. 损坏或非法 YAML 保护：抛出异常并保留原始文件内容，禁止静默覆盖清空
         const corruptedContent = ':::invalid:model:yaml:::';
         fs.writeFileSync(patchFile, corruptedContent, 'utf8');
@@ -492,12 +498,15 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         const contextConsolidator = new ContextConsolidator(sessionManager);
 
         let handoverTriggered = false;
+        let executeCount = 0;
         const mockEngine = {
             isRunning: () => false,
             stop: () => false,
             stopAll: async () => {},
             rebuildSystemPrompt: () => false,
-            execute: async () => {},
+            execute: async () => {
+                executeCount++;
+            },
             handleApproval: () => false,
             triggerHandover: async (sid, reason) => {
                 handoverTriggered = true;
@@ -575,7 +584,15 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         assert.equal(busyData.code, 'TASK_RUNNING');
         mockEngine.isRunning = () => false;
 
-        // 5. POST 正确切换至 danger-full-access
+        // 5. POST 正确切换至 danger-full-access；交接窗口内排队的聊天消息在交接结束后被队列唤醒推进
+        sessionManager.getOrCreateSession('main');
+        sessionManager.addMessage('main', {
+            id: 'queued-during-permission-handover',
+            role: 'user',
+            content: '交接期间的排队消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        });
         let handoverCount = 0;
         mockEngine.triggerHandover = async () => {
             handoverCount++;
@@ -594,6 +611,13 @@ test('Server API: GET/POST /api/permission 接口鉴权、参数校验与联动'
         assert.equal(postData.permissionMode, 'danger-full-access');
         assert.equal(postData.changed, true);
         assert.equal(handoverCount, 1);
+
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const queuedMsg = sessionManager
+            .getOrCreateSession('main')
+            .messages.find((m) => m.id === 'queued-during-permission-handover');
+        assert.equal(queuedMsg?.status, 'sent', '权限交接结束后排队消息应被队列唤醒推进为已发送');
+        assert.ok(executeCount >= 1, '队列唤醒后应驱动助理执行排队消息');
 
         // 6. 相同模式再次 POST：即便是任务执行中，也应幂等放行返回 changed: false，且不触发 handover
         mockEngine.isRunning = (sid) => sid === 'main';
@@ -673,12 +697,15 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
         const contextConsolidator = new ContextConsolidator(sessionManager);
 
         let handoverCount = 0;
+        let executeCount = 0;
         const mockEngine = {
             isRunning: () => false,
             stop: () => false,
             stopAll: async () => {},
             rebuildSystemPrompt: () => false,
-            execute: async () => {},
+            execute: async () => {
+                executeCount++;
+            },
             handleApproval: () => false,
             triggerHandover: async () => {
                 handoverCount++;
@@ -726,6 +753,17 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
         assert.equal(getData.options.length, 2);
         assert.ok(getData.options.some((o) => o.provider === flashOption.provider && o.model === flashOption.model));
 
+        // 2.5 仅配置共享默认条目（无 acp 条目）时，GET 应回退读取而非显示默认选项
+        fs.writeFileSync(path.join(dshProfileDir, 'cordis.patch.yml'), yaml.stringify([
+            { id: 'agent-default-model', config: flashOption },
+        ]), 'utf8');
+        const getFallbackRes = await fetch(`${baseUrl}/api/model`, {
+            headers: { Authorization: `Bearer ${config.token}` },
+        });
+        const getFallbackData = await getFallbackRes.json();
+        assert.equal(getFallbackData.provider, flashOption.provider);
+        assert.equal(getFallbackData.model, flashOption.model);
+
         // 3. POST 白名单外的组合返回 400
         const badPostRes = await fetch(`${baseUrl}/api/model`, {
             method: 'POST',
@@ -753,6 +791,15 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
         mockEngine.isRunning = () => false;
 
         // 5. POST 正确切换模型：补丁双条目落盘并触发一次会话交接
+        // 5.5 模拟交接窗口内排队的聊天消息：交接结束后应被显式唤醒队列推进为已发送并执行
+        sessionManager.getOrCreateSession('main');
+        sessionManager.addMessage('main', {
+            id: 'queued-during-model-handover',
+            role: 'user',
+            content: '交接期间的排队消息',
+            timestamp: Date.now(),
+            status: 'queued',
+        });
         const postRes = await fetch(`${baseUrl}/api/model`, {
             method: 'POST',
             headers: {
@@ -768,6 +815,13 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
         assert.equal(postData.model, flashOption.model);
         assert.equal(postData.changed, true);
         assert.equal(handoverCount, 1);
+
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const queuedMsg = sessionManager
+            .getOrCreateSession('main')
+            .messages.find((m) => m.id === 'queued-during-model-handover');
+        assert.equal(queuedMsg?.status, 'sent', '交接结束后排队消息应被队列唤醒推进为已发送');
+        assert.ok(executeCount >= 1, '队列唤醒后应驱动助理执行排队消息');
 
         const patchFile = path.join(dshProfileDir, 'cordis.patch.yml');
         const afterSwitch = yaml.parse(fs.readFileSync(patchFile, 'utf8'));

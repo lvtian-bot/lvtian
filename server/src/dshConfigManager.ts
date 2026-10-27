@@ -267,7 +267,7 @@ export interface DshModelSelection {
     model: string;
 }
 
-/** 读取 ACP 补丁条目中的助理模型选择；补丁文件、条目或字段不完整时返回 null */
+/** 读取助理模型选择：优先 ACP 补丁条目，其次共享默认条目；两者均缺失或字段不完整时返回 null */
 export function getDshModelSelection(customDir?: string): DshModelSelection | null {
     const filePath = resolveDshProfilePatchPath(customDir);
     if (!fs.existsSync(filePath)) {
@@ -280,16 +280,18 @@ export function getDshModelSelection(customDir?: string): DshModelSelection | nu
         if (!Array.isArray(parsed)) {
             return null;
         }
-        const entry = parsed.find(
-            (item: unknown) =>
-                item &&
-                typeof item === 'object' &&
-                (item as { id?: string }).id === DSH_PATCH_ACP_ID
-        ) as { config?: { provider?: unknown; model?: unknown } } | undefined;
-        const provider = entry?.config?.provider;
-        const model = entry?.config?.model;
-        if (typeof provider === 'string' && provider && typeof model === 'string' && model) {
-            return { provider, model };
+        for (const id of [DSH_PATCH_ACP_ID, DSH_PATCH_AGENT_DEFAULT_MODEL_ID]) {
+            const entry = parsed.find(
+                (item: unknown) =>
+                    item &&
+                    typeof item === 'object' &&
+                    (item as { id?: string }).id === id
+            ) as { config?: { provider?: unknown; model?: unknown } } | undefined;
+            const provider = entry?.config?.provider;
+            const model = entry?.config?.model;
+            if (typeof provider === 'string' && provider && typeof model === 'string' && model) {
+                return { provider, model };
+            }
         }
     } catch (err) {
         console.warn(`[DshConfig] 读取模型选择失败，视为未选择: ${err}`);
