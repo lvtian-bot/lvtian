@@ -1,4 +1,6 @@
 import http from 'node:http';
+import path from 'node:path';
+import { NativeTaskReporting, TaskReportStore, reportMessageId, taskReportPrompt, type TaskReport } from './nativeTaskReporting.js';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
@@ -8,6 +10,7 @@ import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
+import { SkillManager } from './skillManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
 import { handleNativeTaskHttp, isNativeTaskPath } from './nativeTaskHttp.js';
 import type { NativeTaskRuntime } from './nativeTaskRuntime.js';
@@ -40,12 +43,15 @@ export class LvtianServer {
     private memoryManager: MemoryManager;
     private acpEngine: AcpEngineManager;
     private fileManager: FileManager;
+    private skillManager: SkillManager;
     private contextConsolidator: ContextConsolidator;
     private httpServer: http.Server;
     private wss: WebSocketServer;
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     private consolidationInterval: ReturnType<typeof setInterval> | null = null;
     private isDraining = false;
+    private taskReporting?: NativeTaskReporting;
+    private taskReportStore?: TaskReportStore;
 
     constructor(
         config: ServerConfig,
@@ -54,13 +60,15 @@ export class LvtianServer {
         acpEngine: AcpEngineManager,
         fileManager?: FileManager,
         contextConsolidator?: ContextConsolidator,
-        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'>
+        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'> & Partial<Pick<NativeTaskRuntime, 'watchChanges'>>,
+        skillManager?: SkillManager
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
         this.memoryManager = memoryManager;
         this.acpEngine = acpEngine;
         this.fileManager = fileManager || new FileManager(config.workspace);
+        this.skillManager = skillManager || new SkillManager(config.workspace);
         this.contextConsolidator = contextConsolidator || new ContextConsolidator(sessionManager);
 
         const scanMs = Number.parseInt(process.env.LVTIAN_IDLE_SCAN_INTERVAL_MS ?? '', 10);
@@ -264,6 +272,40 @@ export class LvtianServer {
             return;
         }
 
+        // 获取所有可用技能列表
+        if (pathname === '/api/skills' && req.method === 'GET') {
+            const skills = this.skillManager.listSkills();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ skills }));
+            return;
+        }
+
+        // 手动重置会话上下文（复用统一会话交接流水线）
+        if (pathname === '/api/session/reset' && req.method === 'POST') {
+            try {
+                const body = await this.readJsonBody<{ sessionId?: string }>(req, 1024);
+                const targetSessionId = body?.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(targetSessionId)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: '非法 sessionId', code: 'PARAM_INVALID' }));
+                    return;
+                }
+                await this.acpEngine.triggerHandover(targetSessionId, 'manual_new_session');
+                this.scheduleProcessQueue(targetSessionId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, sessionId: targetSessionId }));
+            } catch (err: unknown) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(
+                    JSON.stringify({
+                        error: `重置会话请求无效: ${err instanceof Error ? err.message : String(err)}`,
+                        code: 'BAD_REQUEST',
+                    })
+                );
+            }
+            return;
+        }
+
         // 获取文件系统与环境信息
         if (pathname === '/api/files/info' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -393,7 +435,9 @@ export class LvtianServer {
             ws.on('message', (raw: Buffer) => {
                 try {
                     const msg = JSON.parse(raw.toString('utf8')) as ClientMessage;
-                    this.handleClientMessage(ws, msg);
+                    this.handleClientMessage(ws, msg).catch((err) => {
+                        console.warn(`[Server] 处理客户端消息异常: ${err}`);
+                    });
                 } catch (err) {
                     console.warn(`[Server] 解析客户端消息失败: ${err}`);
                 }
@@ -417,7 +461,7 @@ export class LvtianServer {
         }, 30000);
     }
 
-    private handleClientMessage(ws: AuthenticatedSocket, msg: ClientMessage): void {
+    private async handleClientMessage(ws: AuthenticatedSocket, msg: ClientMessage): Promise<void> {
         // 收到客户端任何上行报文均标记连接存活，避免被心跳检测误杀
         ws.isAlive = true;
 
@@ -580,6 +624,23 @@ export class LvtianServer {
                         state: 'processing',
                     });
                 }
+                break;
+            }
+
+            case 'reset_session': {
+                const rawSessionId = msg.sessionId || ws.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(rawSessionId)) {
+                    console.warn(`[Server] 拒绝非法 sessionId 重置报文: ${rawSessionId}`);
+                    break;
+                }
+                const sessionId = rawSessionId;
+                await this.acpEngine.triggerHandover(sessionId, 'manual_new_session');
+                this.scheduleProcessQueue(sessionId);
+                this.send(ws, {
+                    type: 'session_reset_ack',
+                    sessionId,
+                    success: true,
+                });
                 break;
             }
         }
@@ -872,6 +933,7 @@ export class LvtianServer {
             (m) => m.role === 'user' && m.status === 'queued'
         );
         if (!nextQueued) {
+            if (sessionId === 'main') this.taskReporting?.wake();
             return;
         }
 
@@ -893,6 +955,72 @@ export class LvtianServer {
 
         // 3. 启动助理执行
         this.executeAssistantPrompt(sessionId, nextQueued.content, nextQueued.attachments);
+    }
+
+    /** Deliver through the SAME main ACP agent, never as a synthetic user message.
+     * Buffer model output until terminal success, then persist outbox before publishing a stable-ID message. */
+    private async reportNativeTask(report: TaskReport): Promise<boolean> {
+        const sessionId = 'main';
+        const store = this.taskReportStore;
+        if (!store || this.isDraining || this.acpEngine.isRunning(sessionId)) return false;
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        if (session.messages.some(m => m.role === 'user' && m.status === 'queued') || session.pendingApprovals.length) return false;
+        const messageId = reportMessageId(report.id);
+        try {
+            const existing = session.messages.find(m => m.id === messageId);
+            if (existing && (existing.role !== 'assistant' || existing.source !== 'native_task_report'
+                || existing.reportDeliveryId !== (report.result.delivery?.messageId ?? report.id))) {
+                throw new Error('task_report_message_identity_conflict');
+            }
+            if (!existing && report.reply === undefined) {
+                store.accepted(report.id);
+                let text = '';
+                let completed = false;
+                let toolsUsed = false;
+                await this.acpEngine.execute(sessionId, messageId, taskReportPrompt(report), {
+                    onDelta: delta => { text += delta; },
+                    onToolCall: () => { toolsUsed = true; this.acpEngine.stop(sessionId); },
+                    onApprovalRequest: request => { toolsUsed = true; this.acpEngine.handleApproval(sessionId, request.approvalId, false); },
+                    onStatusChange: (status, payload) => { if (status === 'done' && payload?.stopReason === 'end_turn') completed = true; },
+                }, undefined, 'task_report');
+                if (!completed || toolsUsed || !text.trim()) throw new Error('task_report_agent_incomplete');
+                store.generated(report.id, text);
+                report.reply = text;
+            }
+            if (!existing) {
+                this.sessionManager.addMessage(sessionId, {
+                    id: messageId, role: 'assistant', source: 'native_task_report', reportDeliveryId: report.result.delivery?.messageId ?? report.id,
+                    content: report.reply!, timestamp: Date.now(), completedAt: Date.now(), status: 'done',
+                });
+            }
+            // A pre-generated handoff must not silently omit reports received after it was built.
+            const background = this.sessionManager.getPendingBackground(sessionId);
+            const marker = `[后台任务报告 ${report.id}]`;
+            if (background) {
+                const updated = background.includes(marker) ? background : `${background}\n\n${marker}\n${existing?.content ?? report.reply}`;
+                this.sessionManager.setPendingBackground(sessionId, updated, true);
+            }
+            this.sessionManager.persistDurableMessage(sessionId, messageId);
+            store.delivered(report.id);
+            // Full state reconciles both currently-online and reconnecting clients. No internal input is exposed.
+            const reconcile = this.sessionManager.getReconcileData(sessionId, 0);
+            this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...reconcile });
+            this.scheduleProcessQueue(sessionId);
+            return true;
+        } catch {
+            store.failed(report.id);
+            console.warn('[TaskReporting] Main agent report deferred after failure');
+            // A reconnect may have observed the buffered round's processing state.
+            // Publish current authoritative status only (never buffered text), without
+            // overwriting a newer user/queue execution that may already own main.
+            const current = this.sessionManager.getOrCreateSession(sessionId);
+            this.broadcastSession(sessionId, {
+                type: 'task_status', seq: current.currentSeq, sessionId, state: current.taskState,
+                ...(current.taskState === 'error' ? { error: 'engine_error' } : {}),
+            });
+            this.scheduleProcessQueue(sessionId);
+            return false;
+        }
     }
 
     private send(ws: WebSocket, msg: ServerMessage): void {
@@ -1015,6 +1143,13 @@ export class LvtianServer {
         // Keep main chat available if the optional native host is temporarily unavailable.
         if (this.nativeTasks) {
             this.nativeTasks.start().catch(() => console.warn('[Server] Native task host unavailable; recovery remains active'));
+            this.taskReportStore = new TaskReportStore(path.join(this.config.dataDir, 'native-tasks', 'reports.sqlite'));
+            this.taskReporting = new NativeTaskReporting({
+                service: this.nativeTasks.service, store: this.taskReportStore,
+                ...(this.nativeTasks.watchChanges ? { watchChanges: (onChange, signal) => this.nativeTasks!.watchChanges!(onChange, signal) } : {}),
+                report: report => this.reportNativeTask(report),
+            });
+            this.taskReporting.start();
         }
     }
 
@@ -1025,8 +1160,13 @@ export class LvtianServer {
         }
 
         // 优雅关停 ACP 引擎：停止全部受理中任务、关闭引擎连接并回收子进程，防止僵尸进程常驻
+        this.isDraining = true;
+        const reportingStopped = this.taskReporting?.stop();
         try { await this.acpEngine.stopAll(); }
-        finally { await this.nativeTasks?.stop(); }
+        finally {
+            await reportingStopped;
+            await this.nativeTasks?.stop();
+        }
 
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);

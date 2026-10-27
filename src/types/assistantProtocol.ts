@@ -19,6 +19,11 @@ export interface ApprovalRequest {
     status: 'pending' | 'approved' | 'rejected';
 }
 
+export interface AgentSkill {
+    name: string;
+    description: string;
+}
+
 export interface ChatAttachment {
     type: 'image' | 'file';
     name: string;
@@ -36,6 +41,9 @@ export interface AssistantMessage {
     id: string;
     seq: number;
     role: 'user' | 'assistant' | 'system';
+    /** Main-agent reply to a background result, never a user instruction. */
+    source?: 'native_task_report';
+    reportDeliveryId?: string;
     content: string;
     timestamp: number;
     completedAt?: number;
@@ -64,6 +72,7 @@ export type ClientMessage =
     | { type: 'cancel_queued'; sessionId: string; messageId: string }
     | { type: 'approval_response'; approvalId: string; approved: boolean; reason?: string }
     | { type: 'stop'; sessionId: string }
+    | { type: 'reset_session'; sessionId?: string }
     | { type: 'ping' };
 
 // 服务端下发给客户端的报文
@@ -150,6 +159,11 @@ export type ServerMessage =
           sessionId: string;
           messageId: string;
           reason: 'already_started' | 'not_found';
+      }
+    | {
+          type: 'session_reset_ack';
+          sessionId: string;
+          success: boolean;
       }
     | { type: 'pong' };
 

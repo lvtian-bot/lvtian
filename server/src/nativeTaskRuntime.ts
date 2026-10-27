@@ -77,6 +77,11 @@ export class NativeTaskRuntime {
         finally { this.connecting = undefined; }
     }
 
+    async watchChanges(onChange: () => void, signal: AbortSignal): Promise<void> {
+        const client = await this.getClient();
+        if (!signal.aborted) await client.watchChanges(onChange, signal);
+    }
+
     stop(): Promise<void> {
         if (!this.stopping) this.stopping = this.close();
         return this.stopping;

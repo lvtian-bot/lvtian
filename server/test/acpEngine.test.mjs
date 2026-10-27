@@ -773,3 +773,41 @@ test('extractToolOutput: 独立提取工具输出并在各阶段无条件保留'
     assert.strictEqual(extractToolOutput([]), undefined);
     assert.strictEqual(extractToolOutput('not-an-array'), undefined);
 });
+
+test('后台汇报不推进主人activity，不把后台唤醒当提前归来清掉预生成提要', async t => {
+    const { manager, sessionManager, tmp } = buildManager();
+    t.after(async () => { await manager.stopAll(); fs.rmSync(tmp, { recursive: true, force: true }); });
+    const baseline = Date.now() - 2 * 60 * 60 * 1000;
+    sessionManager.recordActivity('main', baseline);
+    sessionManager.setPendingBackground('main', '已有接力提要');
+    await manager.execute('main', 'background-result', '后台完整结果', collectCallbacks([]), undefined, 'task_report');
+    assert.strictEqual(sessionManager.getLastActiveAt('main'), baseline);
+    assert.strictEqual(sessionManager.getPendingBackground('main'), '已有接力提要');
+    assert.strictEqual(manager.isRunning('main'), false);
+});
+
+test('后台汇报冻结无activity旧会话fallback，连续汇报和冷读不隐式续期', async t => {
+    const { manager, sessionManager, tmp } = buildManager();
+    t.after(async () => { await manager.stopAll(); fs.rmSync(tmp, { recursive: true, force: true }); });
+    const baseline = Date.now() - 123456;
+    sessionManager.addMessage('main', { id: 'old-user', role: 'user', content: '旧指令', status: 'sent', timestamp: baseline });
+    await manager.execute('main', 'bg-1', '第一次结果', collectCallbacks([]), undefined, 'task_report');
+    await manager.execute('main', 'bg-2', '第二次结果', collectCallbacks([]), undefined, 'task_report');
+    assert.strictEqual(sessionManager.getLastActiveAt('main'), baseline);
+    assert.strictEqual(new SessionManager(path.join(tmp, 'data')).getLastActiveAt('main'), baseline);
+});
+
+test('后台activity初始化异常仍释放会话预留，后续主人消息可执行', async t => {
+    const { manager, sessionManager, tmp } = buildManager();
+    t.after(async () => { await manager.stopAll(); fs.rmSync(tmp, { recursive: true, force: true }); });
+    const original = sessionManager.recordActivity.bind(sessionManager);
+    sessionManager.recordActivity = () => { throw new Error('injected baseline persistence failure'); };
+    const failed = [];
+    await manager.execute('main', 'failed-report', '后台结果', collectCallbacks(failed), undefined, 'task_report');
+    assert.strictEqual(lastStatus(failed), 'error');
+    assert.strictEqual(manager.isRunning('main'), false);
+    sessionManager.recordActivity = original;
+    const next = [];
+    await manager.execute('main', 'user-next', '主人新指令', collectCallbacks(next));
+    assert.strictEqual(lastStatus(next), 'done');
+});

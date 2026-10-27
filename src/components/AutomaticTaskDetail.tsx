@@ -134,7 +134,7 @@ export function AutomaticTaskDetail({ task, onClose, onRefreshCatalog, catalogRe
             <View style={styles.headerBalance} />
         </View>
         <FlatList data={records} keyExtractor={row => row.messageId} style={styles.container}
-            contentContainerStyle={styles.content} refreshing={loading || catalogRefreshing} onRefresh={onRefreshCatalog}
+            contentContainerStyle={styles.content} refreshing={catalogRefreshing} onRefresh={onRefreshCatalog}
             ListHeaderComponent={<View>
                 {catalogError && <View style={styles.notice}>
                     <Text accessibilityRole="alert" style={[body, styles.secondary]}>{t(catalogError)}</Text>
@@ -160,7 +160,7 @@ export function AutomaticTaskDetail({ task, onClose, onRefreshCatalog, catalogRe
                         <Text style={[body, styles.link]}>{t('automaticTasks.retryHistory')}</Text>
                     </TouchableOpacity>
                 </View>}
-                {loading && !history && <ActivityIndicator accessibilityLabel={t('automaticTasks.loadingHistory')} color={theme.colors.primaryDark} />}
+                {loading && !history && !catalogRefreshing && <ActivityIndicator accessibilityLabel={t('automaticTasks.loadingHistory')} color={theme.colors.primaryDark} />}
             </View>}
             ListEmptyComponent={!loading && !error ? <Text style={[body, styles.secondary]}>{t('automaticTasks.noHistory')}</Text> : undefined}
             renderItem={({ item, index }) => <ActivityRow key={item.messageId} task={task} receipt={item} latest={index === 0} revision={revision} />}
