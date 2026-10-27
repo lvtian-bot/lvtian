@@ -481,6 +481,8 @@
     "modelSwitchConfirmContent": "切换模型将重启助理会话：当前对话会自动提炼备忘录并无缝接力；有任务运行时需先停止。确认切换到「{{model}}」？",
     "modelSwitchSuccess": "模型已切换，新会话即刻生效",
     "modelSwitchFailed": "切换模型失败，请检查服务连接",
+    "modelSwitchSettled": "切换请求超时，服务端当前实际生效模型为「{{model}}」，已按服务端状态刷新",
+    "modelSwitchUnconfirmed": "切换请求超时，结果未确认；请稍后重新进入本页查看实际生效模型",
     "taskRunningCannotSwitchModel": "当前有正在执行的任务，请先在聊天界面停止任务后再切换模型",
     "serverConfigRequiredForModel": "请先配置并连接服务，再调整助理模型",
     "modelDeepseekFlashName": "DeepSeek V4.1-Flash",

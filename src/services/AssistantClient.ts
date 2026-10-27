@@ -328,7 +328,14 @@ export class AssistantClient {
                 code: data?.code,
                 message: data?.error,
             };
-        } catch {
+        } catch (err: unknown) {
+            // 超时中止不代表切换失败：服务端在触发会话交接前已写入新配置，
+            // 须由调用方重查核对实际生效模型，不得按失败处理让旧选择误导用户
+            const isAbortOrTimeout = (err instanceof Error && err.name === 'AbortError')
+                || /aborted|timeout/i.test(err instanceof Error ? err.message : String(err));
+            if (isAbortOrTimeout) {
+                return { success: false, code: 'MODEL_SWITCH_UNCONFIRMED' };
+            }
             return { success: false, code: 'NETWORK_ERROR' };
         }
     }
