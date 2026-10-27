@@ -3,9 +3,10 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
+import { settingsFont } from './tokens';
 
 interface SettingsStatusCardProps {
-    /** 传入则显示圆底图标，否则显示状态圆点 */
+    /** 传入则显示页面图标，否则显示状态圆点 */
     icon?: ComponentProps<typeof MaterialCommunityIcons>['name'];
     tone: 'success' | 'muted';
     title: string;
@@ -26,13 +27,7 @@ export const SettingsStatusCard: React.FC<SettingsStatusCardProps> = ({
     const body = (
         <>
             {icon ? (
-                <View style={styles.iconWrap}>
-                    <MaterialCommunityIcons
-                        name={icon}
-                        size={20}
-                        color={theme.colors.primaryDark}
-                    />
-                </View>
+                <MaterialCommunityIcons name={icon} size={22} color={theme.colors.primaryDark} />
             ) : (
                 <View style={[styles.dot, tone === 'muted' && styles.dotMuted]} />
             )}
@@ -62,7 +57,7 @@ export const SettingsStatusCard: React.FC<SettingsStatusCardProps> = ({
     return (
         <Pressable
             style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
-            android_ripple={{ color: '#F0F3F7' }}
+            android_ripple={{ color: theme.colors.bgPressed }}
             onPress={onPress}
         >
             {body}
@@ -85,7 +80,7 @@ const styles = StyleSheet.create({
         elevation: 0.5,
     },
     cardPressed: {
-        backgroundColor: '#F7F9FC',
+        backgroundColor: theme.colors.bgPressed,
     },
     dot: {
         width: 9,
@@ -94,15 +89,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.success,
     },
     dotMuted: {
-        backgroundColor: '#C4CBD6',
-    },
-    iconWrap: {
-        width: 38,
-        height: 38,
-        borderRadius: 12,
-        backgroundColor: theme.colors.primaryLight,
-        alignItems: 'center',
-        justifyContent: 'center',
+        backgroundColor: theme.colors.chevron,
     },
     main: {
         flex: 1,
@@ -113,8 +100,8 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
     },
     subtitle: {
-        fontSize: 13,
-        color: '#8A94A6',
+        fontSize: settingsFont.secondary,
+        color: theme.colors.textTertiary,
     },
     badge: {
         paddingHorizontal: 9,
@@ -125,16 +112,16 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.successBg,
     },
     badgeMuted: {
-        backgroundColor: '#F0F1F3',
+        backgroundColor: theme.colors.hairline,
     },
     badgeText: {
-        fontSize: 12,
+        fontSize: settingsFont.caption,
         fontWeight: '600',
     },
     badgeTextOk: {
         color: theme.colors.successText,
     },
     badgeTextMuted: {
-        color: '#8A94A6',
+        color: theme.colors.textTertiary,
     },
 });

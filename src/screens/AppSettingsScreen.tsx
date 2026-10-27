@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { theme } from '../utils/theme';
+import { settingsFont } from '../components/settings';
 import { useSettingsStore, type FontSizePreference } from '../store/useSettingsStore';
 import { markdownThemes, type MarkdownThemeKey } from '../utils/markdownThemes';
 import { getFontSizeMetrics } from '../utils/fontSize';
@@ -135,9 +136,9 @@ const styles = StyleSheet.create({
     preview: {
         marginHorizontal: 20,
         marginBottom: 8,
-        backgroundColor: '#F7F8FA',
+        backgroundColor: theme.colors.inputBg,
         borderWidth: 1,
-        borderColor: '#ECEDEF',
+        borderColor: theme.colors.border,
         borderRadius: 12,
         padding: 12,
     },
@@ -155,11 +156,11 @@ const styles = StyleSheet.create({
         marginBottom: 6,
     },
     previewBody: {
-        color: '#374151',
+        color: theme.colors.text,
     },
     note: {
-        fontSize: 13,
-        color: '#9AA3B2',
+        fontSize: settingsFont.secondary,
+        color: theme.colors.textTertiary,
         lineHeight: 18,
         textAlign: 'center',
         marginTop: 14,

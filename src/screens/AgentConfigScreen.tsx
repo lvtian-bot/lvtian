@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { theme } from '../utils/theme';
+import { settingsFont } from '../components/settings';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import { type AgentModelOption } from '../types/assistantProtocol';
@@ -311,8 +312,8 @@ const styles = StyleSheet.create({
         paddingBottom: 8,
     },
     note: {
-        fontSize: 13,
-        color: '#9AA3B2',
+        fontSize: settingsFont.secondary,
+        color: theme.colors.textTertiary,
         lineHeight: 18,
         textAlign: 'center',
         marginTop: 14,
@@ -326,7 +327,7 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
     },
     loadingText: {
-        fontSize: 12,
+        fontSize: settingsFont.caption,
         color: theme.colors.textSecondary,
         fontStyle: 'italic',
     },
