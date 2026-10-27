@@ -544,6 +544,12 @@
     "toolStatusFailed": "Failed",
     "toolDetailSummary": "Summary",
     "toolDetailInput": "Input",
-    "toolDetailOutput": "Output"
+    "toolDetailOutput": "Output",
+    "commandNewDesc": "Reset session context",
+    "sessionResetToast": "Context has been reset",
+    "sessionResetting": "Resetting context...",
+    "sessionResetFailed": "Failed to reset context, please retry",
+    "slashMenuCommands": "Commands",
+    "slashMenuSkills": "Skills"
   }
 }

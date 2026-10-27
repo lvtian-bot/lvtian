@@ -310,6 +310,7 @@ export const ChatScreen = () => {
         messages,
         taskState,
         pendingApprovals,
+        skills,
         setServerConfig,
     } = useAssistantStore();
 
@@ -331,6 +332,97 @@ export const ChatScreen = () => {
         updatePendingAttachments(attachments);
     }, [t, updatePendingAttachments]);
     const [isAttachMenuVisible, setIsAttachMenuVisible] = useState(false);
+    const [toastMessage, setToastMessage] = useState<string | null>(null);
+    const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const showToast = useCallback((msg: string) => {
+        if (toastTimeoutRef.current) {
+            clearTimeout(toastTimeoutRef.current);
+        }
+        setToastMessage(msg);
+        toastTimeoutRef.current = setTimeout(() => {
+            setToastMessage(null);
+            toastTimeoutRef.current = null;
+        }, 2000);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (toastTimeoutRef.current) {
+                clearTimeout(toastTimeoutRef.current);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        if (connectionState === 'connected') {
+            AssistantClient.getInstance().fetchSkills().catch(() => {});
+        }
+    }, [connectionState]);
+
+    const showSlashMenu = useMemo(() => {
+        return inputContent.startsWith('/') && !inputContent.includes(' ') && !inputContent.includes('\n');
+    }, [inputContent]);
+
+    const filterText = useMemo(() => {
+        return showSlashMenu ? inputContent.slice(1).toLowerCase().trim() : '';
+    }, [showSlashMenu, inputContent]);
+
+    const filteredSlashItems = useMemo(() => {
+        if (!showSlashMenu) return [];
+        const all: Array<{
+            id: string;
+            type: 'command' | 'skill';
+            name: string;
+            label: string;
+            description: string;
+            icon: keyof typeof Icon.glyphMap;
+        }> = [
+            {
+                id: 'cmd-new',
+                type: 'command',
+                name: 'new',
+                label: '/new',
+                description: t('assistant.commandNewDesc', '重置会话上下文'),
+                icon: 'restart-alt',
+            },
+            ...skills.map((s) => ({
+                id: `skill-${s.name}`,
+                type: 'skill' as const,
+                name: s.name,
+                label: `/${s.name}`,
+                description: s.description || s.name,
+                icon: 'extension' as const,
+            })),
+        ];
+        if (!filterText) return all;
+        return all.filter(
+            (item) =>
+                item.name.toLowerCase().includes(filterText) ||
+                item.description.toLowerCase().includes(filterText)
+        );
+    }, [showSlashMenu, filterText, skills, t]);
+
+    const handleSelectSlashItem = useCallback(async (item: { name: string; type: 'command' | 'skill' }) => {
+        if (item.name === 'new') {
+            setInputContent('');
+            try {
+                const ok = await AssistantClient.getInstance().resetSession();
+                if (ok) {
+                    showToast(t('assistant.sessionResetToast', '上下文已重置'));
+                } else {
+                    showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
+                }
+            } catch (err) {
+                console.warn('[ChatScreen] resetSession failed:', err);
+                showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
+            }
+        } else {
+            setInputContent(`/${item.name} `);
+            chatInputRef.current?.focus();
+        }
+    }, [showToast, t]);
+
     const [showScrollBottom, setShowScrollBottom] = useState(false);
     const scrollGestureRef = useRef({ active: false, startDistance: Number.NaN });
     useEffect(() => {
@@ -565,8 +657,28 @@ export const ChatScreen = () => {
     }, [t]);
 
     const handleSend = () => {
+        const trimmed = inputContent.trim();
+        if (trimmed === '/new') {
+            setInputContent('');
+            const doReset = async () => {
+                try {
+                    const ok = await AssistantClient.getInstance().resetSession();
+                    if (ok) {
+                        showToast(t('assistant.sessionResetToast', '上下文已重置'));
+                    } else {
+                        showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
+                    }
+                } catch (err) {
+                    console.warn('[ChatScreen] resetSession failed:', err);
+                    showToast(t('assistant.sessionResetFailed', '重置上下文失败，请稍后重试'));
+                }
+            };
+            doReset();
+            return;
+        }
+
         const attachments = pendingAttachmentsRef.current;
-        const text = inputContent.trim() || (attachments.length > 0
+        const text = trimmed || (attachments.length > 0
             ? (attachments.every((attachment) => attachment.type === 'image')
                 ? t('chat.attachedImage', '发送了图片')
                 : `${t('chat.attachedFile', '发送了文件')}: ${attachments.map((attachment) => attachment.name).join(', ')}`)
@@ -654,6 +766,14 @@ export const ChatScreen = () => {
     // 聊天消息列表与输入区分别使用库提供的聊天滚动视图和键盘粘附视图
     return (
         <View style={styles.chatContainer}>
+            {toastMessage && (
+                <View style={styles.toastContainer} pointerEvents="none">
+                    <View style={styles.toastPill}>
+                        <Icon name="check-circle" size={18} color="#fff" style={styles.toastIcon} />
+                        <Text style={styles.toastText}>{toastMessage}</Text>
+                    </View>
+                </View>
+            )}
             {/* 服务端升级中温和提示横幅；升级期间隐藏普通未连接条，消除断网误解 */}
             {isServerUpgrading ? (
                 <View style={styles.upgradingBanner}>
@@ -1013,6 +1133,52 @@ export const ChatScreen = () => {
                             </View>
                         ))}
                     </ScrollView>
+                )}
+                {showSlashMenu && filteredSlashItems.length > 0 && (
+                    <View style={styles.slashMenuContainer}>
+                        <FlatList
+                            data={filteredSlashItems}
+                            keyExtractor={(item) => item.id}
+                            keyboardShouldPersistTaps="always"
+                            style={styles.slashMenuList}
+                            contentContainerStyle={styles.slashMenuContent}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={styles.slashMenuItem}
+                                    activeOpacity={0.7}
+                                    onPress={() => handleSelectSlashItem(item)}
+                                >
+                                    <View
+                                        style={[
+                                            styles.slashItemIconWrap,
+                                            item.type === 'command'
+                                                ? styles.slashCommandIcon
+                                                : styles.slashSkillIcon,
+                                        ]}
+                                    >
+                                        <Icon
+                                            name={item.icon}
+                                            size={18}
+                                            color={item.type === 'command' ? theme.colors.primary : '#4B5563'}
+                                        />
+                                    </View>
+                                    <View style={styles.slashItemTextWrap}>
+                                        <View style={styles.slashItemTitleRow}>
+                                            <Text style={styles.slashItemLabel}>{item.label}</Text>
+                                            <Text style={styles.slashItemTypeTag}>
+                                                {item.type === 'command'
+                                                    ? t('assistant.slashMenuCommands', '命令')
+                                                    : t('assistant.slashMenuSkills', '技能')}
+                                            </Text>
+                                        </View>
+                                        <Text style={styles.slashItemDesc} numberOfLines={1} ellipsizeMode="tail">
+                                            {item.description}
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
+                            )}
+                        />
+                    </View>
                 )}
                 <View style={styles.inputCapsule}>
                     <TouchableOpacity
@@ -1692,5 +1858,104 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: theme.colors.dangerStrong,
         marginTop: 4,
+    },
+    toastContainer: {
+        position: 'absolute',
+        top: 20,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        zIndex: 9999,
+        elevation: 10,
+    },
+    toastPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(31, 41, 55, 0.92)',
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 20,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        elevation: 6,
+    },
+    toastIcon: {
+        marginRight: 6,
+    },
+    toastText: {
+        color: '#ffffff',
+        fontSize: 14,
+        fontWeight: '500',
+    },
+    slashMenuContainer: {
+        backgroundColor: theme.colors.surface,
+        borderRadius: 12,
+        marginHorizontal: 12,
+        marginBottom: 8,
+        maxHeight: 220,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 4,
+        overflow: 'hidden',
+    },
+    slashMenuList: {
+        maxHeight: 220,
+    },
+    slashMenuContent: {
+        paddingVertical: 4,
+    },
+    slashMenuItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#F3F4F6',
+    },
+    slashItemIconWrap: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 10,
+    },
+    slashCommandIcon: {
+        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+    },
+    slashSkillIcon: {
+        backgroundColor: 'rgba(107, 114, 128, 0.1)',
+    },
+    slashItemTextWrap: {
+        flex: 1,
+    },
+    slashItemTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    slashItemLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: theme.colors.text,
+    },
+    slashItemTypeTag: {
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+        backgroundColor: '#F3F4F6',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
+    slashItemDesc: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        marginTop: 2,
     },
 });

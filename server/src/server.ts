@@ -8,6 +8,7 @@ import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
+import { SkillManager } from './skillManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
 import { handleNativeTaskHttp, isNativeTaskPath } from './nativeTaskHttp.js';
 import type { NativeTaskRuntime } from './nativeTaskRuntime.js';
@@ -40,6 +41,7 @@ export class LvtianServer {
     private memoryManager: MemoryManager;
     private acpEngine: AcpEngineManager;
     private fileManager: FileManager;
+    private skillManager: SkillManager;
     private contextConsolidator: ContextConsolidator;
     private httpServer: http.Server;
     private wss: WebSocketServer;
@@ -54,13 +56,15 @@ export class LvtianServer {
         acpEngine: AcpEngineManager,
         fileManager?: FileManager,
         contextConsolidator?: ContextConsolidator,
-        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'>
+        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'>,
+        skillManager?: SkillManager
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
         this.memoryManager = memoryManager;
         this.acpEngine = acpEngine;
         this.fileManager = fileManager || new FileManager(config.workspace);
+        this.skillManager = skillManager || new SkillManager(config.workspace);
         this.contextConsolidator = contextConsolidator || new ContextConsolidator(sessionManager);
 
         const scanMs = Number.parseInt(process.env.LVTIAN_IDLE_SCAN_INTERVAL_MS ?? '', 10);
@@ -264,6 +268,40 @@ export class LvtianServer {
             return;
         }
 
+        // 获取所有可用技能列表
+        if (pathname === '/api/skills' && req.method === 'GET') {
+            const skills = this.skillManager.listSkills();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ skills }));
+            return;
+        }
+
+        // 手动重置会话上下文（复用统一会话交接流水线）
+        if (pathname === '/api/session/reset' && req.method === 'POST') {
+            try {
+                const body = await this.readJsonBody<{ sessionId?: string }>(req, 1024);
+                const targetSessionId = body?.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(targetSessionId)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: '非法 sessionId', code: 'PARAM_INVALID' }));
+                    return;
+                }
+                await this.acpEngine.triggerHandover(targetSessionId, 'manual_new_session');
+                this.scheduleProcessQueue(targetSessionId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, sessionId: targetSessionId }));
+            } catch (err: unknown) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(
+                    JSON.stringify({
+                        error: `重置会话请求无效: ${err instanceof Error ? err.message : String(err)}`,
+                        code: 'BAD_REQUEST',
+                    })
+                );
+            }
+            return;
+        }
+
         // 获取文件系统与环境信息
         if (pathname === '/api/files/info' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -393,7 +431,9 @@ export class LvtianServer {
             ws.on('message', (raw: Buffer) => {
                 try {
                     const msg = JSON.parse(raw.toString('utf8')) as ClientMessage;
-                    this.handleClientMessage(ws, msg);
+                    this.handleClientMessage(ws, msg).catch((err) => {
+                        console.warn(`[Server] 处理客户端消息异常: ${err}`);
+                    });
                 } catch (err) {
                     console.warn(`[Server] 解析客户端消息失败: ${err}`);
                 }
@@ -417,7 +457,7 @@ export class LvtianServer {
         }, 30000);
     }
 
-    private handleClientMessage(ws: AuthenticatedSocket, msg: ClientMessage): void {
+    private async handleClientMessage(ws: AuthenticatedSocket, msg: ClientMessage): Promise<void> {
         // 收到客户端任何上行报文均标记连接存活，避免被心跳检测误杀
         ws.isAlive = true;
 
@@ -580,6 +620,23 @@ export class LvtianServer {
                         state: 'processing',
                     });
                 }
+                break;
+            }
+
+            case 'reset_session': {
+                const rawSessionId = msg.sessionId || ws.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(rawSessionId)) {
+                    console.warn(`[Server] 拒绝非法 sessionId 重置报文: ${rawSessionId}`);
+                    break;
+                }
+                const sessionId = rawSessionId;
+                await this.acpEngine.triggerHandover(sessionId, 'manual_new_session');
+                this.scheduleProcessQueue(sessionId);
+                this.send(ws, {
+                    type: 'session_reset_ack',
+                    sessionId,
+                    success: true,
+                });
                 break;
             }
         }

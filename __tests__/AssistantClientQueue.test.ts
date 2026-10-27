@@ -778,4 +778,77 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         // 2. 消息绝不复活，保持为 undefined
         expect(afterState.messages.find((m) => m.id === testMsg.id)).toBeUndefined();
     });
+
+    test('fetchSkills 在请求返回前服务器发生变更时丢弃响应，不覆盖新服务器状态', async () => {
+        useAssistantStore.setState({
+            serverUrl: 'https://server-old.example.com',
+            serverToken: 'token-old',
+            skills: [],
+        });
+
+        // 模拟旧服务器响应延迟返回
+        let resolveFetch: (val: unknown) => void;
+        const fetchPromise = new Promise((resolve) => {
+            resolveFetch = resolve;
+        });
+
+        const originalFetch = global.fetch;
+        global.fetch = jest.fn().mockReturnValue(fetchPromise);
+
+        try {
+            const fetchSkillsPromise = client.fetchSkills();
+
+            // 在 fetchPending 期间，用户切换了服务器
+            useAssistantStore.setState({
+                serverUrl: 'https://server-new.example.com',
+                serverToken: 'token-new',
+                skills: [],
+            });
+
+            // 旧请求返回
+            resolveFetch!({
+                ok: true,
+                json: async () => ({ skills: [{ name: 'stale-skill', description: '旧服务器技能' }] }),
+            });
+
+            const result = await fetchSkillsPromise;
+            expect(result).toEqual([]);
+            expect(useAssistantStore.getState().skills).toEqual([]);
+        } finally {
+            global.fetch = originalFetch;
+        }
+    });
+
+    test('resetSession 在 WS 已连接时仅通过 WS 等待回执，超时不发起二次 HTTP 请求', async () => {
+        jest.useFakeTimers();
+        const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: (msg: unknown) => boolean }, 'sendRaw').mockReturnValue(true);
+        const originalFetch = global.fetch;
+        const fetchSpy = jest.fn();
+        global.fetch = fetchSpy;
+
+        // 模拟 ws 为 OPEN
+        (client as unknown as { ws: { readyState: number } }).ws = {
+            readyState: 1, // WebSocket.OPEN
+        };
+
+        try {
+            const resetPromise = client.resetSession();
+            expect(sendRawSpy).toHaveBeenCalledWith({
+                type: 'reset_session',
+                sessionId: 'main',
+            });
+
+            // 快进 60 秒触发超时（与修改权限模式统一放宽至 60 秒）
+            jest.advanceTimersByTime(60000);
+
+            const ok = await resetPromise;
+            expect(ok).toBe(false);
+            // 绝不触发 HTTP 兜底
+            expect(fetchSpy).not.toHaveBeenCalled();
+        } finally {
+            (client as unknown as { ws: null }).ws = null;
+            global.fetch = originalFetch;
+            jest.useRealTimers();
+        }
+    });
 });
