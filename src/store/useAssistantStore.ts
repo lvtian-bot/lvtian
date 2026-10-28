@@ -69,6 +69,21 @@ interface AssistantState {
     removeFromPendingCancelQueue: (messageId: string) => void;
 }
 
+/**
+ * 主持久化记录水合失败（JSON 损坏或读取被拒）时，Zustand 不会给出 state。
+ * 这里仍要用独立备份恢复地址、读取令牌并完成初始化，否则界面会停在未水合状态。
+ */
+export async function recoverConnectionAfterHydrationFailure(): Promise<void> {
+    try {
+        const backup = await loadConnectionUrl();
+        if (backup) useAssistantStore.setState({ serverUrl: backup });
+    } catch {
+        // 备份不可用也要继续完成初始化。
+    }
+    useAssistantStore.setState({ hasHydrated: true });
+    await useAssistantStore.getState().loadSavedCredentials().catch(() => undefined);
+}
+
 export const useAssistantStore = create<AssistantState>()(
     persist(
         (set, get) => ({
@@ -371,7 +386,10 @@ export const useAssistantStore = create<AssistantState>()(
                     // 水合后立即补一份地址备份；主记录没恢复出地址时主动用备份恢复。
                     if (state.serverUrl.trim()) saveConnectionUrl(state.serverUrl).catch(() => undefined);
                     else state.loadSavedCredentials().catch(() => undefined);
+                    return;
                 }
+                // state 为空代表主记录读取失败：走独立恢复，不能让应用停在未水合状态。
+                recoverConnectionAfterHydrationFailure().catch(() => undefined);
             },
         }
     )
