@@ -47,10 +47,7 @@ export const TodoScreen = () => {
     const closeDetail = useCallback(() => { setSelectedId(undefined); }, []);
     const refresh = useCallback(async (mode: RefreshMode = 'normal') => {
         const identity = connectionIdentity();
-        if (request.current?.identity === identity && mode !== 'manual') {
-            if (mode === 'force') request.current.force = true;
-            return;
-        }
+        if (request.current?.identity === identity && mode === 'normal') return;
         request.current?.controller.abort();
         const controller = new AbortController();
         const current = { controller, identity, force: mode !== 'normal' };
@@ -87,7 +84,9 @@ export const TodoScreen = () => {
             setLoaded(true);
             automaticTaskCache.write(serverUrl, serverToken, next);
         } catch (failure: unknown) {
-            if (valid()) {
+            // 只有仍是当前请求、页面聚焦且连接身份未变时才展示错误。
+            // 超时会让 controller 进入 aborted，不能因此吞掉提示，否则页面会停在无反馈状态。
+            if (request.current === current && focused.current && connectionIdentity() === identity) {
                 if (snapshot.current) {
                     snapshot.current = { ...snapshot.current, fetchedAt: 0 };
                     const { serverUrl, serverToken } = useAssistantStore.getState();
@@ -97,7 +96,8 @@ export const TodoScreen = () => {
                     ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed');
             }
         } finally {
-            if (valid() && request.current === current) {
+            // 请求结束（含超时/中止）必须释放占位，否则后续“重试”会被在途请求挡住。
+            if (request.current === current) {
                 request.current = undefined;
                 setLoading(false); setManualRefreshing(false);
             }

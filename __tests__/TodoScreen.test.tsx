@@ -118,6 +118,19 @@ describe('TodoScreen 服务器只读自动任务', () => {
         expect(texts()).toContain('暂无开启的任务');
     });
 
+    it('网络恢复时取消在途请求并重新读取，不被旧请求挡住', async () => {
+        const pending = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(pending.promise);
+        await mount();
+        expect(catalog).toHaveBeenCalledTimes(1);
+        await act(async () => { mockNetwork.listener({ isConnected: false }); });
+        await act(async () => { mockNetwork.listener({ isConnected: true }); });
+        await act(async () => {});
+        // 仍在途的请求必须被取消并重新发起，而不是只给旧请求打标记。
+        expect(catalog).toHaveBeenCalledTimes(2);
+        expect(texts()).toContain('服务器任务');
+    });
+
     it('刷新失败保留上次内容，不将断网当作成功空列表', async () => {
         await mount();
         catalog.mockRejectedValueOnce(new AutomaticTaskError('network'));
