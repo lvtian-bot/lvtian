@@ -11,6 +11,7 @@ import {
     Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { useSettingsFont } from './settings';
 import { theme } from '../utils/theme';
 
 interface CreateFileModalProps {
@@ -25,6 +26,7 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
     onCancel,
 }) => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
     const [filename, setFilename] = useState('');
     const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
@@ -61,11 +63,11 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
             >
                 <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onCancel}>
                     <View style={styles.modalContainer} onStartShouldSetResponder={() => true}>
-                        <Text style={styles.title}>{t('browser.createNewFile') || 'Create New File'}</Text>
+                        <Text style={[styles.title, { fontSize: font.chatHeading2 }]}>{t('browser.createNewFile') || 'Create New File'}</Text>
 
                         <TextInput
                             ref={inputRef}
-                            style={styles.input}
+                            style={[styles.input, { fontSize: font.chatBody }]}
                             placeholder={t('browser.enterFilename') || 'Enter filename (e.g. MyNote)'}
                             value={filename}
                             onChangeText={setFilename}
@@ -75,10 +77,10 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
 
                         <View style={styles.buttonContainer}>
                             <TouchableOpacity style={[styles.button, styles.cancelButton]} onPress={onCancel}>
-                                <Text style={styles.cancelButtonText}>{t('common.cancel')}</Text>
+                                <Text style={[styles.cancelButtonText, { fontSize: font.chatBody }]}>{t('common.cancel')}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity style={[styles.button, styles.confirmButton]} onPress={handleConfirm}>
-                                <Text style={styles.confirmButtonText}>{t('common.create') || 'Create'}</Text>
+                                <Text style={[styles.confirmButtonText, { fontSize: font.chatBody }]}>{t('common.create') || 'Create'}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -110,8 +112,7 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.25,
         shadowRadius: 3.84,
     },
-    title: {
-        fontSize: 18,
+    title: {
         fontWeight: 'bold',
         marginBottom: theme.spacing.m,
         color: theme.colors.text,
@@ -121,8 +122,7 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: theme.colors.border,
         borderRadius: 8,
-        padding: theme.spacing.m,
-        fontSize: 16,
+        padding: theme.spacing.m,
         marginBottom: theme.spacing.l,
         color: theme.colors.text,
     },

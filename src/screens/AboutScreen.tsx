@@ -16,6 +16,8 @@ import Constants from 'expo-constants';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { theme } from '../utils/theme';
+import { useSettingsFont } from '../components/settings';
+import { auxFontSizes } from '../utils/fontSize';
 import { RootStackParamList } from '../types/navigation';
 import {
     HELP_DOC_URL,
@@ -38,6 +40,7 @@ type AboutScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export const AboutScreen = () => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
     const navigation = useNavigation<AboutScreenNavigationProp>();
 
     const appVersion = useMemo(() => {
@@ -103,7 +106,7 @@ export const AboutScreen = () => {
         >
             <View style={styles.rowLeft}>
                 <Icon name={icon} size={22} color={theme.colors.textSecondary} style={styles.rowIcon} />
-                <Text style={styles.rowLabel}>{label}</Text>
+                <Text style={[styles.rowLabel, { fontSize: font.chatBody }]}>{label}</Text>
             </View>
             {right ?? (onPress ? (
                 <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
@@ -203,11 +206,10 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
     rowLabel: {
-        fontSize: 16,
         color: theme.colors.text,
     },
     rowValue: {
-        fontSize: 14,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
         marginRight: 4,
     },

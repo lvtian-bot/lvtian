@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
+import { auxFontSizes } from '../../utils/fontSize';
 
 interface SettingsToastApi {
     toast: string | null;
@@ -67,7 +68,7 @@ const styles = StyleSheet.create({
         elevation: 6,
     },
     text: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.white,
     },
 });

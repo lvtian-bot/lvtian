@@ -11,12 +11,14 @@ import { fsService } from '../services/FileSystemService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
+import { auxFontSizes } from '../utils/fontSize';
 import { RootStackParamList } from '../types/navigation';
-import { SettingsGroup, SettingsRow } from '../components/settings';
+import { SettingsGroup, SettingsRow, useSettingsFont } from '../components/settings';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export const MeScreen = () => {
+    const font = useSettingsFont();
     const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
@@ -132,11 +134,11 @@ export const MeScreen = () => {
                                 styles.userInfoPressable,
                                 pressed && styles.userInfoPressed,
                             ]}
-                            android_ripple={{ color: '#E5E7EB' }}
+                            android_ripple={{ color: theme.colors.border }}
                             onPress={() => navigation.navigate('AssistantConfig')}
                         >
                             <View style={styles.userInfo}>
-                                <Text style={styles.userName}>{t('app.name', '绿天')}</Text>
+                                <Text style={[styles.userName, { fontSize: font.chatHeading2 }]}>{t('app.name', '绿天')}</Text>
                                 <View style={styles.statusRow}>
                                     <View style={[styles.statusDot, isConnected && styles.connectedDot]} />
                                     <Text style={styles.userSyncStatus} numberOfLines={1}>
@@ -146,8 +148,8 @@ export const MeScreen = () => {
                             </View>
                             <MaterialCommunityIcons
                                 name="chevron-right"
-                                size={24}
-                                color={theme.colors.textSecondary}
+                                size={20}
+                                color={theme.colors.chevron}
                             />
                         </Pressable>
                     </View>
@@ -271,14 +273,13 @@ const styles = StyleSheet.create({
         borderRadius: 8,
     },
     userInfoPressed: {
-        backgroundColor: '#F3F4F6',
+        backgroundColor: theme.colors.inputBg,
     },
     userInfo: {
         flex: 1,
         marginRight: theme.spacing.s,
     },
     userName: {
-        fontSize: 18,
         fontWeight: '700',
         color: theme.colors.text,
         marginBottom: 6,
@@ -291,14 +292,14 @@ const styles = StyleSheet.create({
         width: 6,
         height: 6,
         borderRadius: 3,
-        backgroundColor: '#9CA3AF',
+        backgroundColor: theme.colors.textTertiary,
         marginRight: 6,
     },
     connectedDot: {
         backgroundColor: theme.colors.success,
     },
     userSyncStatus: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
         flexShrink: 1,
     },

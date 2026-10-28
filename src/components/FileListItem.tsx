@@ -18,8 +18,8 @@ export const FileListItem: React.FC<FileListItemProps> = ({ item, onPress, onLon
     const iconName = item.isDirectory ? 'folder' : 'description';
     // If not cached, use disabled color. Otherwise use primary for folder, textSecondary for file icon (or keep existing logic)
     const baseIconColor = item.isDirectory ? theme.colors.primary : theme.colors.textSecondary;
-    const iconColor = isCached ? baseIconColor : theme.colors.mutedText || '#ccc';
-    const textColor = isCached ? theme.colors.text : theme.colors.mutedText || '#ccc';
+    const iconColor = isCached ? baseIconColor : theme.colors.mutedText;
+    const textColor = isCached ? theme.colors.text : theme.colors.mutedText;
 
     const handleLongPress = () => {
         // 优先使用新的 onLongPress 回调

@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ViewStyle } from 'react-native';
+import { auxFontSizes } from '../utils/fontSize';
 
 interface StatusBannerProps {
     visible: boolean;
@@ -84,7 +85,7 @@ const styles = StyleSheet.create({
         width: '100%',
     },
     text: {
-        fontSize: 12, // Matching NoteScreen fontSize
+        fontSize: auxFontSizes.caption, // Matching NoteScreen fontSize
         textAlign: 'center',
     },
     actionsContainer: {
@@ -101,7 +102,7 @@ const styles = StyleSheet.create({
         marginBottom: 4,
     },
     actionText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         fontWeight: 'bold',
     }
 });

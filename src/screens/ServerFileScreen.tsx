@@ -18,11 +18,13 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { theme } from '../utils/theme';
+import { auxFontSizes } from '../utils/fontSize';
 import { stableHash } from '../utils/identityHash';
 import { RootStackParamList } from '../types/navigation';
 import { serverFileService } from '../services/ServerFileService';
 import { ServerFileItem, FileSystemInfo } from '../types/assistantProtocol';
 import { useAssistantStore } from '../store/useAssistantStore';
+import { useSettingsFont } from '../components/settings';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -64,6 +66,7 @@ const HeaderCloudButton: React.FC<HeaderCloudButtonProps> = ({ onPress, label })
 export const ServerFileScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
+    const font = useSettingsFont();
 
     const { serverUrl, serverToken } = useAssistantStore();
     const isConfigured = !!serverUrl && serverUrl.trim().length > 0;
@@ -317,7 +320,7 @@ export const ServerFileScreen = () => {
                     )}
                 </View>
                 <View style={styles.contentContainer}>
-                    <Text style={styles.itemName} numberOfLines={1}>
+                    <Text style={[styles.itemName, { fontSize: font.chatBody }]} numberOfLines={1}>
                         {item.name}
                     </Text>
                     <Text style={styles.itemDetails}>
@@ -335,8 +338,8 @@ export const ServerFileScreen = () => {
         return (
             <View style={styles.centerContainer}>
                 <Icon name="dns" size={48} color={theme.colors.textSecondary} />
-                <Text style={styles.messageTitle}>{t('assistant.unconfiguredTitle', { defaultValue: '未连接助手服务' })}</Text>
-                <Text style={styles.messageText}>
+                <Text style={[styles.messageTitle, { fontSize: font.chatHeading2 }]}>{t('assistant.unconfiguredTitle', { defaultValue: '未连接助手服务' })}</Text>
+                <Text style={[styles.messageText, { fontSize: font.chatBody }]}>
                     {t('assistant.unconfiguredDesc', { defaultValue: '请先配置绿天独立服务端连接，即可浏览并获取 VPS 上的工作成果。' })}
                 </Text>
                 <TouchableOpacity
@@ -344,7 +347,7 @@ export const ServerFileScreen = () => {
                     onPress={() => navigation.navigate('AssistantConfig')}
                     activeOpacity={0.7}
                 >
-                    <Text style={styles.primaryButtonText}>{t('assistant.goToConfig', { defaultValue: '前往配置' })}</Text>
+                    <Text style={[styles.primaryButtonText, { fontSize: font.chatBody }]}>{t('assistant.goToConfig', { defaultValue: '前往配置' })}</Text>
                 </TouchableOpacity>
             </View>
         );
@@ -374,7 +377,7 @@ export const ServerFileScreen = () => {
             {/* 错误提示条 */}
             {errorMessage && (
                 <View style={styles.errorBanner}>
-                    <Icon name="error-outline" size={18} color="#d32f2f" />
+                    <Icon name="error-outline" size={18} color={theme.colors.dangerStrong} />
                     <Text style={styles.errorBannerText} numberOfLines={2}>
                         {errorMessage}
                     </Text>
@@ -388,7 +391,7 @@ export const ServerFileScreen = () => {
             {loading && !refreshing ? (
                 <View style={styles.centerContainer}>
                     <ActivityIndicator size="large" color={theme.colors.primary} />
-                    <Text style={styles.loadingText}>{t('common.loading', { defaultValue: '加载中...' })}</Text>
+                    <Text style={[styles.loadingText, { fontSize: font.chatBody }]}>{t('common.loading', { defaultValue: '加载中...' })}</Text>
                 </View>
             ) : (
                 <FlatList
@@ -407,7 +410,7 @@ export const ServerFileScreen = () => {
                         !errorMessage ? (
                             <View style={styles.emptyContainer}>
                                 <Icon name="folder-open" size={48} color={theme.colors.border} />
-                                <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
+                                <Text style={[styles.emptyText, { fontSize: font.chatBody }]}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
                             </View>
                         ) : undefined
                     }
@@ -440,7 +443,7 @@ const styles = StyleSheet.create({
         gap: 4,
     },
     headerRightText: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '600',
         color: theme.colors.primary,
     },
@@ -451,7 +454,7 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         backgroundColor: theme.colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#f0f0f0',
+        borderBottomColor: theme.colors.skeleton,
         gap: 8,
     },
     backParentButton: {
@@ -460,14 +463,14 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 6,
-        backgroundColor: '#f5f5f5',
+        backgroundColor: theme.colors.skeleton,
         gap: 2,
     },
     disabledButton: {
-        backgroundColor: '#fafafa',
+        backgroundColor: theme.colors.skeleton,
     },
     backParentText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.primary,
         fontWeight: '500',
     },
@@ -478,27 +481,27 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     pathText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
         fontFamily: 'monospace',
     },
     errorBanner: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#ffebee',
+        backgroundColor: theme.colors.dangerBg,
         paddingHorizontal: 16,
         paddingVertical: 8,
         gap: 8,
     },
     errorBannerText: {
         flex: 1,
-        fontSize: 12,
-        color: '#d32f2f',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.dangerStrong,
     },
     retryText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         fontWeight: 'bold',
-        color: '#d32f2f',
+        color: theme.colors.dangerStrong,
         paddingHorizontal: 8,
         paddingVertical: 4,
     },
@@ -515,7 +518,7 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
         backgroundColor: theme.colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#f4f4f4',
+        borderBottomColor: theme.colors.skeleton,
     },
     iconContainer: {
         marginRight: 12,
@@ -526,13 +529,12 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     itemName: {
-        fontSize: 15,
         fontWeight: '500',
         color: theme.colors.text,
         marginBottom: 2,
     },
     itemDetails: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
     },
     centerContainer: {
@@ -549,7 +551,6 @@ const styles = StyleSheet.create({
     },
     emptyText: {
         marginTop: 12,
-        fontSize: 14,
         color: theme.colors.textSecondary,
     },
     truncatedFooter: {
@@ -557,23 +558,20 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     truncatedText: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
     },
     loadingText: {
         marginTop: 12,
-        fontSize: 14,
         color: theme.colors.textSecondary,
     },
     messageTitle: {
-        fontSize: 18,
         fontWeight: 'bold',
         color: theme.colors.text,
         marginTop: 16,
         marginBottom: 8,
     },
     messageText: {
-        fontSize: 14,
         color: theme.colors.textSecondary,
         textAlign: 'center',
         lineHeight: 20,
@@ -586,8 +584,7 @@ const styles = StyleSheet.create({
         borderRadius: 8,
     },
     primaryButtonText: {
-        color: '#fff',
-        fontSize: 14,
+        color: theme.colors.white,
         fontWeight: '600',
     },
 });

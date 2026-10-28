@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
+import { auxFontSizes } from '../../utils/fontSize';
 
 interface SettingsChoiceProps {
     title: string;
@@ -92,7 +93,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.primaryLight,
     },
     choiceDangerActive: {
-        backgroundColor: '#FFF8ED',
+        backgroundColor: theme.colors.warnBg,
     },
     choiceDisabled: {
         opacity: 0.45,
@@ -111,14 +112,14 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
     },
     titleActive: {
-        color: '#1D4ED8',
+        color: theme.colors.primaryDark,
     },
     titleDangerActive: {
-        color: '#B45309',
+        color: theme.colors.warnText,
     },
     desc: {
-        fontSize: 13,
-        color: '#8A94A6',
+        fontSize: auxFontSizes.secondary,
+        color: theme.colors.textTertiary,
         lineHeight: 18,
     },
     badgeWrap: {
@@ -131,7 +132,7 @@ const styles = StyleSheet.create({
         borderRadius: 5,
     },
     badgeText: {
-        fontSize: 10,
+        fontSize: auxFontSizes.badge,
         fontWeight: '600',
         color: theme.colors.successText,
     },
@@ -140,7 +141,7 @@ const styles = StyleSheet.create({
         height: 18,
         borderRadius: 9,
         borderWidth: 2,
-        borderColor: '#D3D9E2',
+        borderColor: theme.colors.border,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -148,7 +149,7 @@ const styles = StyleSheet.create({
         borderColor: theme.colors.primary,
     },
     radioDangerActive: {
-        borderColor: '#F59E0B',
+        borderColor: theme.colors.warning,
     },
     radioInner: {
         width: 8,
@@ -157,6 +158,6 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.primary,
     },
     radioInnerDanger: {
-        backgroundColor: '#F59E0B',
+        backgroundColor: theme.colors.warning,
     },
 });

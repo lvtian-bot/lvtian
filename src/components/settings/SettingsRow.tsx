@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-nati
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
+import { auxFontSizes } from '../../utils/fontSize';
 
 export const SettingsGroup: React.FC<PropsWithChildren> = ({ children }) => (
     <View style={styles.group}>{children}</View>
@@ -37,9 +38,7 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
     const font = useSettingsFont();
     const body = (
         <>
-            <View style={styles.rowIcon}>
-                <MaterialCommunityIcons name={icon} size={15} color={theme.colors.primaryDark} />
-            </View>
+            <MaterialCommunityIcons name={icon} size={22} color={theme.colors.textSecondary} />
             <View style={styles.rowMain}>
                 <Text style={[styles.rowTitle, { fontSize: font.chatBody }]}>{title}</Text>
                 {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
@@ -54,7 +53,7 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
                 <MaterialCommunityIcons
                     name="chevron-right"
                     size={16}
-                    color="#C4CBD6"
+                    color={theme.colors.chevron}
                     style={styles.rowChevron}
                 />
             ) : null}
@@ -68,7 +67,7 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
     return (
         <Pressable
             style={({ pressed }) => [styles.row, pressed && styles.rowPressed, last && styles.rowLast]}
-            android_ripple={{ color: '#F0F3F7' }}
+            android_ripple={{ color: theme.colors.bgPressed }}
             onPress={onPress}
         >
             {body}
@@ -88,7 +87,7 @@ const styles = StyleSheet.create({
         elevation: 0.5,
     },
     groupLabel: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '600',
         color: theme.colors.primaryDark,
         letterSpacing: 0.3,
@@ -99,26 +98,18 @@ const styles = StyleSheet.create({
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 11,
+        gap: 14,
         paddingHorizontal: 15,
         paddingVertical: 12,
         borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#F0F1F3',
+        borderBottomColor: theme.colors.hairline,
         minHeight: 54,
     },
     rowLast: {
         borderBottomWidth: 0,
     },
     rowPressed: {
-        backgroundColor: '#F7F9FC',
-    },
-    rowIcon: {
-        width: 30,
-        height: 30,
-        borderRadius: 9,
-        backgroundColor: theme.colors.primaryLight,
-        alignItems: 'center',
-        justifyContent: 'center',
+        backgroundColor: theme.colors.bgPressed,
     },
     rowMain: {
         flex: 1,
@@ -129,12 +120,12 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
     },
     rowSubtitle: {
-        fontSize: 12,
-        color: '#9AA3B2',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.textTertiary,
     },
     rowValue: {
-        fontSize: 13,
-        color: '#8A94A6',
+        fontSize: auxFontSizes.secondary,
+        color: theme.colors.textTertiary,
         maxWidth: '40%',
     },
     rowChevron: {

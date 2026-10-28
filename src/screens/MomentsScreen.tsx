@@ -3,9 +3,11 @@ import { View, Text, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
+import { useSettingsFont } from '../components/settings';
 
 export const MomentsScreen = () => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
 
     return (
         <View style={styles.container}>
@@ -13,8 +15,8 @@ export const MomentsScreen = () => {
                 <View style={styles.iconWrapper}>
                     <Icon name="dynamic-feed" size={44} color={theme.colors.primary} />
                 </View>
-                <Text style={styles.title}>{t('moments.placeholderTitle')}</Text>
-                <Text style={styles.description}>{t('moments.placeholderDesc')}</Text>
+                <Text style={[styles.title, { fontSize: font.chatHeading2 }]}>{t('moments.placeholderTitle')}</Text>
+                <Text style={[styles.description, { fontSize: font.chatBody }]}>{t('moments.placeholderDesc')}</Text>
             </View>
         </View>
     );
@@ -45,20 +47,18 @@ const styles = StyleSheet.create({
         width: 72,
         height: 72,
         borderRadius: 36,
-        backgroundColor: '#e8f5e9',
+        backgroundColor: theme.colors.successBg,
         justifyContent: 'center',
         alignItems: 'center',
         marginBottom: 16,
     },
     title: {
-        fontSize: 18,
         fontWeight: 'bold',
         color: theme.colors.text,
         marginBottom: 12,
         textAlign: 'center',
     },
     description: {
-        fontSize: 14,
         color: theme.colors.textSecondary,
         textAlign: 'center',
         lineHeight: 22,

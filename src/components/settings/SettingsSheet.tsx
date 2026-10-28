@@ -90,7 +90,7 @@ const styles = StyleSheet.create({
         width: 36,
         height: 4,
         borderRadius: 2,
-        backgroundColor: '#E2E5EA',
+        backgroundColor: theme.colors.chevron,
         alignSelf: 'center',
         marginBottom: 2,
     },

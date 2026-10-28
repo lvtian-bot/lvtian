@@ -10,6 +10,7 @@ import {
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 import { useTranslation } from 'react-i18next';
+import { useSettingsFont } from './settings';
 
 export interface FileAction {
     label: string;
@@ -32,6 +33,7 @@ export const FileActionSheet: React.FC<FileActionSheetProps> = ({
     onCancel,
 }) => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
     return (
         <Modal
             animationType="fade"
@@ -44,7 +46,7 @@ export const FileActionSheet: React.FC<FileActionSheetProps> = ({
                     <TouchableWithoutFeedback>
                         <View style={styles.container}>
                             <View style={styles.header}>
-                                <Text style={styles.fileName} numberOfLines={1}>
+                                <Text style={[styles.fileName, { fontSize: font.chatBody }]} numberOfLines={1}>
                                     {fileName}
                                 </Text>
                             </View>
@@ -65,6 +67,7 @@ export const FileActionSheet: React.FC<FileActionSheetProps> = ({
                                             style={[
                                                 styles.actionText,
                                                 action.destructive && styles.destructiveText,
+                                                { fontSize: font.chatBody },
                                             ]}
                                         >
                                             {action.label}
@@ -77,7 +80,7 @@ export const FileActionSheet: React.FC<FileActionSheetProps> = ({
                                 style={styles.cancelButton}
                                 onPress={onCancel}
                             >
-                                <Text style={styles.cancelText}>{t('common.cancel')}</Text>
+                                <Text style={[styles.cancelText, { fontSize: font.chatBody }]}>{t('common.cancel')}</Text>
                             </TouchableOpacity>
                         </View>
                     </TouchableWithoutFeedback>
@@ -105,7 +108,6 @@ const styles = StyleSheet.create({
         borderBottomColor: theme.colors.border,
     },
     fileName: {
-        fontSize: 16,
         fontWeight: '600',
         color: theme.colors.text,
         textAlign: 'center',
@@ -120,7 +122,6 @@ const styles = StyleSheet.create({
         paddingVertical: theme.spacing.m,
     },
     actionText: {
-        fontSize: 16,
         color: theme.colors.text,
         marginLeft: theme.spacing.m,
     },
@@ -136,7 +137,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     cancelText: {
-        fontSize: 16,
         color: theme.colors.textSecondary,
         fontWeight: '600',
     },

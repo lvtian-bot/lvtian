@@ -13,6 +13,7 @@ import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
+import { useSettingsFont } from '../components/settings';
 import { stableHash } from '../utils/identityHash';
 import { useCloudSync } from '../hooks/useCloudSync';
 import { StatusBannerContainer } from '../components/StatusBannerContainer';
@@ -25,6 +26,7 @@ type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export const PreviewScreen = () => {
+    const font = useSettingsFont();
     const route = useRoute<PreviewScreenRouteProp>();
     const navigation = useNavigation<NavigationProp>();
     const { t } = useTranslation();
@@ -404,10 +406,10 @@ export const PreviewScreen = () => {
         <View style={[styles.container, { paddingBottom: insets.bottom }]}>
             <View style={[styles.header, { paddingTop: insets.top + theme.spacing.s }]}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
-                    <Text style={styles.headerButtonText}>{t('common.back')}</Text>
+                    <Text style={[styles.headerButtonText, { fontSize: font.chatBody }]}>{t('common.back')}</Text>
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
-                    <Text style={styles.title} numberOfLines={2}>
+                    <Text style={[styles.title, { fontSize: font.chatBody }]} numberOfLines={2}>
                         {title || filePath.split('/').pop() || filePath}
                     </Text>
                     {isLocalMode && isEffectivelySyncing && <ActivityIndicator size="small" color={theme.colors.primary} />}
@@ -426,7 +428,7 @@ export const PreviewScreen = () => {
                     style={[styles.headerButton, (loading || loadFailed) && styles.headerButtonDisabled]}
                     disabled={loading || loadFailed}
                 >
-                    <Text style={[styles.headerButtonText, (loading || loadFailed) && styles.headerButtonTextDisabled]}>
+                    <Text style={[styles.headerButtonText, (loading || loadFailed) && styles.headerButtonTextDisabled, { fontSize: font.chatBody }]}>
                         {t('common.edit')}
                     </Text>
                 </TouchableOpacity>
@@ -497,7 +499,6 @@ const styles = StyleSheet.create({
     },
     headerButtonText: {
         color: theme.colors.primary,
-        fontSize: 16,
         fontWeight: 'bold',
     },
     headerButtonTextDisabled: {
@@ -511,7 +512,6 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     title: {
-        fontSize: 16,
         fontWeight: '600',
         color: theme.colors.text,
         textAlign: 'center',

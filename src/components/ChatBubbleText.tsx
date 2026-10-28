@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { PixelRatio, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+import { theme } from '../utils/theme';
+import { auxFontSizes } from '../utils/fontSize';
 
 interface ChatBubbleTextProps {
     text: string;
@@ -55,6 +57,6 @@ export function ChatBubbleText({ text, time, textStyle }: ChatBubbleTextProps) {
 
 const styles = StyleSheet.create({
     container: { maxWidth: '100%', minWidth: 0 },
-    clock: { alignSelf: 'flex-end', marginTop: 2, fontSize: 10, color: '#6B7280' },
+    clock: { alignSelf: 'flex-end', marginTop: 2, fontSize: auxFontSizes.badge, color: theme.colors.textSecondary },
     inlineClock: { position: 'absolute', right: 0, marginTop: 0 },
 });

@@ -30,6 +30,11 @@ export const colors = {
     white: '#FFFFFF',
     black: '#000000',
     orange: '#FF9F1C',
+    // 设置界面语义色：弱化文字、箭头与把手、行分隔线、按压反馈
+    textTertiary: '#8A94A6',
+    chevron: '#C4CBD6',
+    hairline: '#F0F1F3',
+    bgPressed: '#F7F9FC',
 };
 
 export const spacing = {

@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { useTranslation } from 'react-i18next';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../utils/theme';
+import { auxFontSizes } from '../utils/fontSize';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { WebDavProvider } from '../services/WebDavProvider';
 import { cloudService } from '../services/CloudService';
@@ -146,7 +147,7 @@ export const CloudRepoConfigScreen = () => {
                 />
 
                 <View style={styles.hint}>
-                    <MaterialCommunityIcons name="information-outline" size={14} color="#2563EB" />
+                    <MaterialCommunityIcons name="information-outline" size={14} color={theme.colors.primaryDark} />
                     <Text style={styles.hintText}>
                         {t('settings.cloudProvider.webdav.recommendNutstore')}
                     </Text>
@@ -238,13 +239,13 @@ const styles = StyleSheet.create({
     },
     hintText: {
         flex: 1,
-        fontSize: 13,
-        color: '#2563EB',
+        fontSize: auxFontSizes.secondary,
+        color: theme.colors.primaryDark,
         lineHeight: 18,
     },
     note: {
-        fontSize: 13,
-        color: '#9AA3B2',
+        fontSize: auxFontSizes.secondary,
+        color: theme.colors.textTertiary,
         lineHeight: 18,
         textAlign: 'center',
         marginTop: 14,
@@ -262,7 +263,7 @@ const styles = StyleSheet.create({
     },
     errorText: {
         flex: 1,
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.dangerText,
     },
 });

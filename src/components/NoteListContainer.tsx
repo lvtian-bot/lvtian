@@ -1,4 +1,5 @@
 import React from 'react';
+import { auxFontSizes } from '../utils/fontSize';
 import { View, StyleSheet, ActivityIndicator } from 'react-native';
 import { theme } from '../utils/theme';
 
@@ -58,6 +59,6 @@ export const styles = StyleSheet.create({
     },
     footerText: {
         color: theme.colors.textSecondary,
-        fontSize: 14,
+        fontSize: auxFontSizes.secondary,
     },
 });

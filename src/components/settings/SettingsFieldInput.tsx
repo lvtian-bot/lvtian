@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TextInput, TouchableOpacity } from 'react-nativ
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
+import { auxFontSizes } from '../../utils/fontSize';
 
 interface SettingsFieldInputProps {
     label: string;
@@ -55,7 +56,7 @@ export const SettingsFieldInput: React.FC<SettingsFieldInputProps> = ({
                         <MaterialCommunityIcons
                             name={revealed ? 'eye-off' : 'eye'}
                             size={17}
-                            color="#9AA3B2"
+                            color={theme.colors.textTertiary}
                         />
                     </TouchableOpacity>
                 ) : null}
@@ -71,15 +72,15 @@ const styles = StyleSheet.create({
         marginTop: 6,
     },
     label: {
-        fontSize: 14,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '500',
-        color: '#374151',
+        color: theme.colors.text,
         marginBottom: 6,
     },
     inputWrap: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F7F8FA',
+        backgroundColor: theme.colors.inputBg,
         borderWidth: 1,
         borderColor: theme.colors.border,
         borderRadius: 10,
@@ -98,8 +99,8 @@ const styles = StyleSheet.create({
         padding: 8,
     },
     hint: {
-        fontSize: 12,
-        color: '#9AA3B2',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.textTertiary,
         marginTop: 5,
     },
 });
