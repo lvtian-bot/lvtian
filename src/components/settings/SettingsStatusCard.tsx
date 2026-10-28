@@ -27,7 +27,7 @@ export const SettingsStatusCard: React.FC<SettingsStatusCardProps> = ({
     const body = (
         <>
             {icon ? (
-                <MaterialCommunityIcons name={icon} size={22} color={theme.colors.primaryDark} />
+                <MaterialCommunityIcons name={icon} size={22} color={theme.colors.textSecondary} />
             ) : (
                 <View style={[styles.dot, tone === 'muted' && styles.dotMuted]} />
             )}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { theme } from '../utils/theme';
@@ -38,8 +38,14 @@ export const FlashNoteConfigScreen = () => {
             : flashNoteConfig.suffix
     );
 
-    const [openSheet, setOpenSheet] = useState<'path' | 'archive' | 'suffix' | null>(null);
+    const [suffixOpen, setSuffixOpen] = useState(false);
     const [saving, setSaving] = useState(false);
+
+    // store 变更（含保存与远端同步）后回填表单
+    useEffect(() => {
+        setFullPath(fullPathValue);
+        setHistoryFolderPath(flashNoteConfig.historyFolderPath || '');
+    }, [fullPathValue, flashNoteConfig.historyFolderPath]);
 
     const suffixDisplay = (() => {
         if (!flashNoteConfig.suffix) return t('settings.suffixPresets.none');
@@ -48,15 +54,13 @@ export const FlashNoteConfigScreen = () => {
         return flashNoteConfig.suffix.replace(/\n/g, '↵');
     })();
 
-    const openEditor = (sheet: 'path' | 'archive' | 'suffix') => {
-        setFullPath(fullPathValue);
-        setHistoryFolderPath(flashNoteConfig.historyFolderPath || '');
+    const openSuffixEditor = () => {
         setCustomSuffix(
             flashNoteConfig.suffix === SUFFIX_REFERENCE || flashNoteConfig.suffix === SUFFIX_EMOJI
                 ? ''
                 : flashNoteConfig.suffix
         );
-        setOpenSheet(sheet);
+        setSuffixOpen(true);
     };
 
     const handleSaveMainConfig = async () => {
@@ -78,7 +82,6 @@ export const FlashNoteConfigScreen = () => {
             });
             await flashNoteService.syncAll();
 
-            setOpenSheet(null);
             showToast(t('flashNoteConfigScreen.mainSavedToast', '已保存，主文件已同步'));
         } catch (error) {
             console.error('Failed to save main config:', error);
@@ -98,7 +101,6 @@ export const FlashNoteConfigScreen = () => {
             });
             await flashNoteService.syncAll();
 
-            setOpenSheet(null);
             showToast(t('flashNoteConfigScreen.historySavedToast', '已保存，历史归档已扫描'));
         } catch (error) {
             console.error('Failed to sync history:', error);
@@ -110,13 +112,11 @@ export const FlashNoteConfigScreen = () => {
 
     const handleSelectPresetSuffix = (suffix: string) => {
         setFlashNoteConfig({ suffix });
-        setOpenSheet(null);
         showToast(t('flashNoteConfigScreen.suffixSavedToast', '结尾后缀已保存'));
     };
 
     const handleApplyCustomSuffix = () => {
         setFlashNoteConfig({ suffix: customSuffix });
-        setOpenSheet(null);
         showToast(t('flashNoteConfigScreen.suffixSavedToast', '结尾后缀已保存'));
     };
 
@@ -125,25 +125,37 @@ export const FlashNoteConfigScreen = () => {
             <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
                 <SettingsGroupLabel>{t('flashNoteConfigScreen.storageGroup', '存储')}</SettingsGroupLabel>
                 <SettingsGroup>
-                    <SettingsRow
-                        icon="file-document-outline"
-                        title={t('settings.flashNoteLocation', '存储位置')}
-                        subtitle={t('settings.flashNoteLocationDesc', '路径 + 文件名')}
-                        value={normalizePath(fullPathValue)}
-                        onPress={() => openEditor('path')}
-                    />
-                    <SettingsRow
-                        icon="archive"
-                        title={t('settings.historyFolderPath')}
-                        subtitle={t('flashNoteConfigScreen.historySubtitle', '按月拆分的历史闪念')}
-                        value={
-                            flashNoteConfig.historyFolderPath
-                                ? normalizePath(flashNoteConfig.historyFolderPath)
-                                : t('flashNoteConfigScreen.sameAsMain', '与主文件相同')
-                        }
-                        onPress={() => openEditor('archive')}
-                        last
-                    />
+                    <View style={styles.formArea}>
+                        <SettingsFieldInput
+                            label={t('settings.flashNoteLocation', '存储位置')}
+                            value={fullPath}
+                            onChangeText={setFullPath}
+                            placeholder="notes/flash_notes.md"
+                            hint={t('flashNoteConfigScreen.mergePathExample')}
+                        />
+                        <SettingsPrimaryButton
+                            label={t('common.save')}
+                            onPress={handleSaveMainConfig}
+                            loading={saving}
+                        />
+                    </View>
+                </SettingsGroup>
+
+                <SettingsGroup>
+                    <View style={styles.formArea}>
+                        <SettingsFieldInput
+                            label={t('settings.historyFolderPath')}
+                            value={historyFolderPath}
+                            onChangeText={setHistoryFolderPath}
+                            placeholder="archive/flash_notes"
+                            hint={t('flashNoteConfigScreen.historySubtitle', '按月拆分的历史闪念')}
+                        />
+                        <SettingsPrimaryButton
+                            label={t('common.save')}
+                            onPress={handleSaveHistoryConfig}
+                            loading={saving}
+                        />
+                    </View>
                 </SettingsGroup>
 
                 <SettingsGroupLabel>{t('flashNoteConfigScreen.formatGroup', '格式')}</SettingsGroupLabel>
@@ -152,7 +164,7 @@ export const FlashNoteConfigScreen = () => {
                         icon="format-quote-close"
                         title={t('settings.flashNoteSuffixRow', '结尾后缀')}
                         value={suffixDisplay}
-                        onPress={() => openEditor('suffix')}
+                        onPress={openSuffixEditor}
                         last
                     />
                 </SettingsGroup>
@@ -163,47 +175,9 @@ export const FlashNoteConfigScreen = () => {
             </ScrollView>
 
             <SettingsSheet
-                visible={openSheet === 'path'}
-                title={t('settings.flashNoteLocation', '存储位置')}
-                onClose={() => setOpenSheet(null)}
-                dismissable={!saving}
-            >
-                <SettingsFieldInput
-                    label={t('flashNoteConfigScreen.mergePathExample')}
-                    value={fullPath}
-                    onChangeText={setFullPath}
-                    placeholder="notes/flash_notes.md"
-                />
-                <SettingsPrimaryButton
-                    label={t('common.save')}
-                    onPress={handleSaveMainConfig}
-                    loading={saving}
-                />
-            </SettingsSheet>
-
-            <SettingsSheet
-                visible={openSheet === 'archive'}
-                title={t('settings.historyFolderPath')}
-                onClose={() => setOpenSheet(null)}
-                dismissable={!saving}
-            >
-                <SettingsFieldInput
-                    label={t('settings.historyFolderPathDesc')}
-                    value={historyFolderPath}
-                    onChangeText={setHistoryFolderPath}
-                    placeholder="archive/flash_notes"
-                />
-                <SettingsPrimaryButton
-                    label={t('common.save')}
-                    onPress={handleSaveHistoryConfig}
-                    loading={saving}
-                />
-            </SettingsSheet>
-
-            <SettingsSheet
-                visible={openSheet === 'suffix'}
+                visible={suffixOpen}
                 title={t('settings.flashNoteSuffixRow', '结尾后缀')}
-                onClose={() => setOpenSheet(null)}
+                onClose={() => setSuffixOpen(false)}
             >
                 <View style={styles.choices}>
                     <SettingsChoice
@@ -249,8 +223,13 @@ const styles = StyleSheet.create({
     content: {
         padding: 16,
     },
+    formArea: {
+        paddingHorizontal: 15,
+        paddingTop: 6,
+        paddingBottom: 15,
+    },
     choices: {
-        paddingHorizontal: 12,
+        paddingHorizontal: 6,
         paddingBottom: 8,
     },
     note: {

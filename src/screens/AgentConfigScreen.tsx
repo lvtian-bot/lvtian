@@ -205,21 +205,6 @@ export const AgentConfigScreen = () => {
                 />
             </SettingsGroup>
 
-            <SettingsGroupLabel>{t('settings.agentHubGroup', '中枢与记忆')}</SettingsGroupLabel>
-            <SettingsGroup>
-                <SettingsRow
-                    icon="hub"
-                    title={t('settings.agentHubEngine', '执行中枢')}
-                    value={t('settings.agentHubEngineDesc', 'DeepSeek Harness (ACP 协议)')}
-                />
-                <SettingsRow
-                    icon="brain"
-                    title={t('settings.agentHubMemory', '长期记忆')}
-                    value={t('settings.agentHubMemoryDesc', 'SOUL.md / MEMORY.md 持续沉淀')}
-                    last
-                />
-            </SettingsGroup>
-
             <Text style={styles.note}>
                 {t('settings.agentSwitchNote', '切换权限或模型会重启助理会话，当前对话将自动提炼备忘录并无缝接力。')}
             </Text>
