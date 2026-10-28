@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import { loadConnectionUrl, saveConnectionUrl } from '../services/connectionBackup';
 import {
     AssistantMessage,
     ConnectionState,
@@ -112,6 +113,9 @@ export const useAssistantStore = create<AssistantState>()(
                     throw new Error('安全凭据存储失败，请检查系统安全存储或权限');
                 }
 
+                // 地址单独备份一份，聊天记录所在的整条持久化记录损坏时仍可恢复。
+                await saveConnectionUrl(cleanUrl);
+
                 // 如果切换了不同的服务器地址或访问令牌（代表新服务实例），重置本地旧服务器的对话与对账序列状态（含清空截断线）
                 const currentToken = get().serverToken;
                 if ((currentUrl && currentUrl !== cleanUrl) || (currentToken && currentToken !== cleanToken)) {
@@ -135,14 +139,24 @@ export const useAssistantStore = create<AssistantState>()(
             },
 
             loadSavedCredentials: async () => {
-                let token = '';
+                // 读取失败必须保留内存里的令牌；用空值覆盖会让一次临时故障变成“配置丢失”，只能重启恢复。
+                let token = get().serverToken;
                 try {
-                    token = (await SecureStore.getItemAsync(ASSISTANT_TOKEN_KEY)) || '';
+                    const stored = await SecureStore.getItemAsync(ASSISTANT_TOKEN_KEY);
+                    token = stored || '';
+                    set({ serverToken: token });
                 } catch (err) {
-                    console.warn('[useAssistantStore] 从 SecureStore 读取 Token 失败:', err);
+                    console.warn('[useAssistantStore] 从 SecureStore 读取 Token 失败，保留内存值:', err);
                 }
-                const url = get().serverUrl;
-                set({ serverToken: token });
+                let url = get().serverUrl;
+                if (!url.trim()) {
+                    // 主持久化记录没恢复出地址时，用独立备份补回，避免要求用户重新输入配置。
+                    const backup = await loadConnectionUrl();
+                    if (backup) {
+                        url = backup;
+                        set({ serverUrl: backup });
+                    }
+                }
                 return { url, token };
             },
 
@@ -354,6 +368,9 @@ export const useAssistantStore = create<AssistantState>()(
             onRehydrateStorage: () => (state) => {
                 if (state) {
                     state.setHasHydrated(true);
+                    // 水合后立即补一份地址备份；主记录没恢复出地址时主动用备份恢复。
+                    if (state.serverUrl.trim()) saveConnectionUrl(state.serverUrl).catch(() => undefined);
+                    else state.loadSavedCredentials().catch(() => undefined);
                 }
             },
         }
