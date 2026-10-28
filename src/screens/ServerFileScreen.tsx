@@ -47,22 +47,6 @@ const TEXT_EXTENSIONS = new Set([
 
 const MAX_PREVIEW_SIZE = 5 * 1024 * 1024; // 5MB
 
-interface HeaderCloudButtonProps {
-    onPress: () => void;
-    label: string;
-}
-
-const HeaderCloudButton: React.FC<HeaderCloudButtonProps> = ({ onPress, label }) => (
-    <TouchableOpacity
-        style={styles.headerRightButton}
-        onPress={onPress}
-        activeOpacity={0.7}
-    >
-        <Icon name="cloud-queue" size={20} color={theme.colors.primary} />
-        <Text style={styles.headerRightText}>{label}</Text>
-    </TouchableOpacity>
-);
-
 export const ServerFileScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<NavigationProp>();
@@ -105,22 +89,6 @@ export const ServerFileScreen = () => {
             setListingTruncated(false);
         }
     }, [serverUrl, serverToken]);
-
-    const handleOpenCloud = useCallback(() => {
-        navigation.navigate('CloudFileList');
-    }, [navigation]);
-
-    const renderHeaderRight = useCallback(
-        () => <HeaderCloudButton onPress={handleOpenCloud} label={t('browser.cloudRepo', { defaultValue: '云盘' })} />,
-        [handleOpenCloud, t]
-    );
-
-    // 设置导航栏右上角按钮：跳转到纯在线云盘文件页面
-    useEffect(() => {
-        navigation.setOptions({
-            headerRight: renderHeaderRight,
-        });
-    }, [navigation, renderHeaderRight]);
 
     /**
      * 加载指定目录或初始化主目录
@@ -431,21 +399,6 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: theme.colors.background,
-    },
-    headerRightButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        marginRight: 8,
-        borderRadius: 16,
-        backgroundColor: '#eef4ff',
-        gap: 4,
-    },
-    headerRightText: {
-        fontSize: auxFontSizes.secondary,
-        fontWeight: '600',
-        color: theme.colors.primary,
     },
     pathBar: {
         flexDirection: 'row',

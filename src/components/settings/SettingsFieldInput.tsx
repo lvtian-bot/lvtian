@@ -68,7 +68,6 @@ export const SettingsFieldInput: React.FC<SettingsFieldInputProps> = ({
 
 const styles = StyleSheet.create({
     wrap: {
-        paddingHorizontal: 20,
         marginTop: 6,
     },
     label: {

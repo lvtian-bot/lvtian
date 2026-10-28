@@ -14,14 +14,12 @@ import {
     SettingsGroup,
     SettingsGroupLabel,
     SettingsPrimaryButton,
-    SettingsRow,
-    SettingsSheet,
     SettingsStatusCard,
     SettingsToast,
     useSettingsToast,
 } from '../components/settings';
 
-interface SheetError {
+interface FormError {
     message: string;
 }
 
@@ -33,9 +31,8 @@ export const CloudRepoConfigScreen = () => {
     const [server, setServer] = useState(webDavConfig.server);
     const [username, setUsername] = useState(webDavConfig.username);
     const [password, setPassword] = useState('');
-    const [sheetOpen, setSheetOpen] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [sheetError, setSheetError] = useState<SheetError | null>(null);
+    const [formError, setFormError] = useState<FormError | null>(null);
 
     const isConfigured = cloudProvider === 'webdav' && Boolean(webDavConfig.server);
 
@@ -53,26 +50,20 @@ export const CloudRepoConfigScreen = () => {
         loadCredentials();
     }, []);
 
-    const openSheet = () => {
-        setSheetError(null);
-        setSheetOpen(true);
-    };
-
     const performSave = async () => {
         await SecureStore.setItemAsync('WEBDAV_PASSWORD', password);
         setWebDavConfig({ server, username });
         setCloudProvider('webdav');
         await cloudService.initProvider();
         showToast(t('settings.cloudSaveSuccess', '已验证连接并保存，云端同步正常'));
-        setSheetOpen(false);
     };
 
     const handleSave = async () => {
         setSaving(true);
-        setSheetError(null);
+        setFormError(null);
         try {
             if (!server || !username || !password) {
-                setSheetError({ message: t('settings.error.notEmpty') });
+                setFormError({ message: t('settings.error.notEmpty') });
                 return;
             }
 
@@ -99,7 +90,7 @@ export const CloudRepoConfigScreen = () => {
                                 await performSave();
                             } catch (e) {
                                 console.error('Failed during destructive save:', e);
-                                setSheetError({ message: t('settings.switchFailed', '切换云服务失败') });
+                                setFormError({ message: t('settings.switchFailed', '切换云服务失败') });
                             } finally {
                                 setSaving(false);
                             }
@@ -118,7 +109,7 @@ export const CloudRepoConfigScreen = () => {
             else if (err?.code === 'NetworkError' || err?.message?.includes('Network request failed')) {
                 errorMessage = t('settings.error.network');
             } else if (err?.message) errorMessage = err.message;
-            setSheetError({ message: errorMessage });
+            setFormError({ message: errorMessage });
         } finally {
             setSaving(false);
         }
@@ -147,7 +138,7 @@ export const CloudRepoConfigScreen = () => {
                 />
 
                 <View style={styles.hint}>
-                    <MaterialCommunityIcons name="information-outline" size={14} color={theme.colors.primaryDark} />
+                    <MaterialCommunityIcons name="information-outline" size={14} color={theme.colors.textSecondary} />
                     <Text style={styles.hintText}>
                         {t('settings.cloudProvider.webdav.recommendNutstore')}
                     </Text>
@@ -155,13 +146,43 @@ export const CloudRepoConfigScreen = () => {
 
                 <SettingsGroupLabel>{t('settings.connectionGroup', '连接信息')}</SettingsGroupLabel>
                 <SettingsGroup>
-                    <SettingsRow
-                        icon="link-variant"
-                        title={t('settings.connectionGroup', '连接信息')}
-                        value={displayServer || t('assistant.valueNotSet', '未设置')}
-                        onPress={openSheet}
-                        last
-                    />
+                    <View style={styles.formArea}>
+                        <SettingsFieldInput
+                            label={t('settings.cloudProvider.webdav.serverAddress')}
+                            value={server}
+                            onChangeText={setServer}
+                            placeholder="https://dav.jianguoyun.com/dav/"
+                        />
+                        <SettingsFieldInput
+                            label={t('settings.cloudProvider.webdav.username')}
+                            value={username}
+                            onChangeText={setUsername}
+                            placeholder="email@example.com"
+                        />
+                        <SettingsFieldInput
+                            label={t('settings.cloudProvider.webdav.password')}
+                            value={password}
+                            onChangeText={setPassword}
+                            placeholder="App Password"
+                            secure
+                        />
+                        {formError ? (
+                            <View style={styles.errorBox}>
+                                <MaterialCommunityIcons
+                                    name="close-circle"
+                                    size={16}
+                                    color={theme.colors.dangerText}
+                                />
+                                <Text style={styles.errorText}>{formError.message}</Text>
+                            </View>
+                        ) : null}
+                        <SettingsPrimaryButton
+                            label={t('settings.saveAndValidate')}
+                            icon="shield-check-outline"
+                            onPress={handleSave}
+                            loading={saving}
+                        />
+                    </View>
                 </SettingsGroup>
 
                 <Text style={styles.note}>
@@ -171,49 +192,6 @@ export const CloudRepoConfigScreen = () => {
                         : ''}
                 </Text>
             </ScrollView>
-
-            <SettingsSheet
-                visible={sheetOpen}
-                title={t('settings.connectionGroup', '连接信息')}
-                onClose={() => setSheetOpen(false)}
-                dismissable={!saving}
-            >
-                <SettingsFieldInput
-                    label={t('settings.cloudProvider.webdav.serverAddress')}
-                    value={server}
-                    onChangeText={setServer}
-                    placeholder="https://dav.jianguoyun.com/dav/"
-                />
-                <SettingsFieldInput
-                    label={t('settings.cloudProvider.webdav.username')}
-                    value={username}
-                    onChangeText={setUsername}
-                    placeholder="email@example.com"
-                />
-                <SettingsFieldInput
-                    label={t('settings.cloudProvider.webdav.password')}
-                    value={password}
-                    onChangeText={setPassword}
-                    placeholder="App Password"
-                    secure
-                />
-                {sheetError ? (
-                    <View style={styles.errorBox}>
-                        <MaterialCommunityIcons
-                            name="close-circle"
-                            size={16}
-                            color={theme.colors.dangerText}
-                        />
-                        <Text style={styles.errorText}>{sheetError.message}</Text>
-                    </View>
-                ) : null}
-                <SettingsPrimaryButton
-                    label={t('settings.saveAndValidate')}
-                    icon="shield-check-outline"
-                    onPress={handleSave}
-                    loading={saving}
-                />
-            </SettingsSheet>
 
             <SettingsToast message={toast} />
         </View>
@@ -228,19 +206,25 @@ const styles = StyleSheet.create({
     content: {
         padding: 16,
     },
+    formArea: {
+        paddingHorizontal: 15,
+        paddingTop: 6,
+        paddingBottom: 15,
+    },
     hint: {
         flexDirection: 'row',
         gap: 8,
         alignItems: 'flex-start',
-        backgroundColor: theme.colors.primaryLight,
+        backgroundColor: theme.colors.inputBg,
         borderRadius: 12,
         padding: 10,
+        marginTop: 12,
         marginBottom: 4,
     },
     hintText: {
         flex: 1,
         fontSize: auxFontSizes.secondary,
-        color: theme.colors.primaryDark,
+        color: theme.colors.textSecondary,
         lineHeight: 18,
     },
     note: {
@@ -255,7 +239,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        marginHorizontal: 20,
         marginTop: 12,
         padding: 10,
         borderRadius: 10,

@@ -12,8 +12,6 @@ import {
     SettingsGroup,
     SettingsGroupLabel,
     SettingsPrimaryButton,
-    SettingsRow,
-    SettingsSheet,
     SettingsStatusCard,
     SettingsToast,
     useSettingsToast,
@@ -34,7 +32,6 @@ export const AssistantConfigScreen = () => {
 
     const [url, setUrl] = useState(serverUrl);
     const [token, setToken] = useState(serverToken);
-    const [sheetOpen, setSheetOpen] = useState(false);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<TestResult | null>(null);
 
@@ -59,16 +56,10 @@ export const AssistantConfigScreen = () => {
                 setToken(parsed.token);
             }
             setTestResult(null);
-            setSheetOpen(true);
             showToast(t('assistant.clipboardExtracted', '已从剪贴板自动提取服务配置'));
         } catch {
             showToast(t('assistant.clipboardFail', '读取剪贴板失败'));
         }
-    };
-
-    const openSheet = () => {
-        setTestResult(null);
-        setSheetOpen(true);
     };
 
     const handleTestAndSave = async () => {
@@ -103,7 +94,6 @@ export const AssistantConfigScreen = () => {
                 message: res.message + (res.version ? ` (v${res.version})` : ''),
             });
             showToast(t('assistant.testAndSaveSuccess', '连接测试成功，配置已保存'));
-            setSheetOpen(false);
         } catch (err: unknown) {
             setTesting(false);
             const msg = err instanceof Error ? err.message : String(err);
@@ -131,93 +121,79 @@ export const AssistantConfigScreen = () => {
                     badge={statusBadge}
                 />
 
-                <TouchableOpacity
-                    style={styles.pasteBar}
-                    onPress={handlePasteFromClipboard}
-                    activeOpacity={0.7}
-                >
-                    <MaterialCommunityIcons
-                        name="content-paste"
-                        size={16}
-                        color={theme.colors.successText}
-                    />
-                    <Text style={styles.pasteBarText}>
-                        {t('assistant.pasteConfigBar', '一键粘贴服务端配置链接')}
-                    </Text>
-                </TouchableOpacity>
-
                 <SettingsGroupLabel>{t('assistant.serverGroup', '服务端')}</SettingsGroupLabel>
                 <SettingsGroup>
-                    <SettingsRow
-                        icon="dns"
-                        title={t('settings.serverConfigRow', '服务端配置')}
-                        value={displayHost || t('assistant.valueNotSet', '未设置')}
-                        onPress={openSheet}
-                        last
-                    />
+                    <View style={styles.formArea}>
+                        <TouchableOpacity
+                            style={styles.pasteBar}
+                            onPress={handlePasteFromClipboard}
+                            activeOpacity={0.7}
+                        >
+                            <MaterialCommunityIcons
+                                name="content-paste"
+                                size={16}
+                                color={theme.colors.textSecondary}
+                            />
+                            <Text style={styles.pasteBarText}>
+                                {t('assistant.pasteConfigBar', '一键粘贴服务端配置链接')}
+                            </Text>
+                        </TouchableOpacity>
+                        <SettingsFieldInput
+                            label={t('assistant.serverUrl', '服务地址 (URL)')}
+                            value={url}
+                            onChangeText={(val) => {
+                                setUrl(val);
+                                setTestResult(null);
+                            }}
+                            placeholder={t('assistant.serverUrlPlaceholder', '例如 https://agent.example.com 或内网地址')}
+                            hint={t('assistant.serverUrlHint', '支持局域网 IP、Tailscale 虚拟内网或公网反代域名')}
+                        />
+                        <SettingsFieldInput
+                            label={t('assistant.token', '访问令牌 (Token)')}
+                            value={token}
+                            onChangeText={(val) => {
+                                setToken(val);
+                                setTestResult(null);
+                            }}
+                            placeholder={t('assistant.tokenPlaceholder', '服务端生成的 32 位访问令牌')}
+                            secure
+                            hint={t('assistant.tokenHint', '令牌将加密保存在手机安全存储（SecureStore）中')}
+                        />
+                        {testResult ? (
+                            <View
+                                style={[
+                                    styles.resultBox,
+                                    testResult.success ? styles.resultSuccess : styles.resultFail,
+                                ]}
+                            >
+                                <MaterialCommunityIcons
+                                    name={testResult.success ? 'check-circle' : 'close-circle'}
+                                    size={16}
+                                    color={testResult.success ? theme.colors.successText : theme.colors.dangerText}
+                                />
+                                <Text
+                                    style={[
+                                        styles.resultText,
+                                        testResult.success ? styles.resultTextSuccess : styles.resultTextFail,
+                                    ]}
+                                >
+                                    {testResult.message}
+                                </Text>
+                            </View>
+                        ) : null}
+                        <SettingsPrimaryButton
+                            label={t('assistant.testAndSave', '测试并保存')}
+                            icon="shield-check-outline"
+                            onPress={handleTestAndSave}
+                            loading={testing}
+                        />
+                    </View>
                 </SettingsGroup>
 
                 <Text style={styles.note}>
                     {t('assistant.serverFooterNote', '令牌加密保存在手机安全存储（SecureStore）中，支持局域网 IP、Tailscale 虚拟内网或公网反代域名。')}
                 </Text>
             </ScrollView>
-
-            <SettingsSheet
-                visible={sheetOpen}
-                title={t('settings.serverConfig', '服务端连接')}
-                onClose={() => setSheetOpen(false)}
-                dismissable={!testing}
-            >
-                <SettingsFieldInput
-                    label={t('assistant.serverUrl', '服务地址 (URL)')}
-                    value={url}
-                    onChangeText={(val) => {
-                        setUrl(val);
-                        setTestResult(null);
-                    }}
-                    placeholder={t('assistant.serverUrlPlaceholder', '例如 https://agent.example.com 或内网地址')}
-                    hint={t('assistant.serverUrlHint', '支持局域网 IP、Tailscale 虚拟内网或公网反代域名')}
-                />
-                <SettingsFieldInput
-                    label={t('assistant.token', '访问令牌 (Token)')}
-                    value={token}
-                    onChangeText={(val) => {
-                        setToken(val);
-                        setTestResult(null);
-                    }}
-                    placeholder={t('assistant.tokenPlaceholder', '服务端生成的 32 位访问令牌')}
-                    secure
-                    hint={t('assistant.tokenHint', '令牌将加密保存在手机安全存储（SecureStore）中')}
-                />
-                {testResult ? (
-                    <View
-                        style={[
-                            styles.resultBox,
-                            testResult.success ? styles.resultSuccess : styles.resultFail,
-                        ]}
-                    >
-                        <MaterialCommunityIcons
-                            name={testResult.success ? 'check-circle' : 'close-circle'}
-                            size={16}
-                            color={testResult.success ? theme.colors.successText : theme.colors.dangerText}
-                        />
-                        <Text
-                            style={[
-                                styles.resultText,
-                                testResult.success ? styles.resultTextSuccess : styles.resultTextFail,
-                            ]}
-                        >
-                            {testResult.message}
-                        </Text>
-                    </View>
-                ) : null}
-                <SettingsPrimaryButton
-                    label={t('assistant.testAndSave', '测试并保存')}
-                    icon="shield-check-outline"
-                    onPress={handleTestAndSave}
-                    loading={testing}
-                />
-            </SettingsSheet>
 
             <SettingsToast message={toast} />
         </View>
@@ -232,22 +208,27 @@ const styles = StyleSheet.create({
     content: {
         padding: 16,
     },
+    formArea: {
+        paddingHorizontal: 15,
+        paddingTop: 6,
+        paddingBottom: 15,
+    },
     pasteBar: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        backgroundColor: theme.colors.successBg,
+        backgroundColor: theme.colors.inputBg,
         borderWidth: 1,
-        borderColor: theme.colors.successBorder,
+        borderColor: theme.colors.border,
         borderRadius: 12,
-        paddingVertical: 11,
+        paddingVertical: 10,
         marginBottom: 4,
     },
     pasteBarText: {
         fontSize: auxFontSizes.secondary,
         fontWeight: '600',
-        color: theme.colors.successText,
+        color: theme.colors.textSecondary,
     },
     note: {
         fontSize: auxFontSizes.secondary,
@@ -261,7 +242,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        marginHorizontal: 20,
         marginTop: 12,
         padding: 10,
         borderRadius: 10,
