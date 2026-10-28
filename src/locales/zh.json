@@ -599,5 +599,18 @@
     "remoteUnconfirmed": "切换请求超时，结果未确认；请稍后重新查看实际生效值",
     "remoteSettledDifferent": "切换请求超时，服务端当前实际生效为「{{label}}」，已按服务端状态刷新",
     "remoteValuePending": "读取中…"
+  },
+  "workRecords": {
+    "title": "工作记录",
+    "empty": "还没有工作记录",
+    "steps": "工作过程",
+    "noTools": "这一轮没有工具调用",
+    "untitled": "未命名任务",
+    "toolCount": "{{count}} 次工具调用",
+    "running": "进行中",
+    "failed": "未完成",
+    "conclusion": "结论",
+    "noAnswer": "这一轮没有文字结论",
+    "inProgressHint": "正在进行，完成后显示结论"
   }
 }

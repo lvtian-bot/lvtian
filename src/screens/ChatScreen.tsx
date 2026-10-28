@@ -30,7 +30,6 @@ import {
     type KeyboardChatScrollViewProps,
 } from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
@@ -48,8 +47,9 @@ import {
     shouldShowChatScrollBottom,
 } from '../utils/chatScrollMetrics';
 import { useAssistantStore } from '../store/useAssistantStore';
+import { TypingIndicator } from '../components/TypingIndicator';
 import { AssistantClient } from '../services/AssistantClient';
-import { AssistantMessage, ChatAttachment, ToolCallState } from '../types/assistantProtocol';
+import { AssistantMessage, ChatAttachment } from '../types/assistantProtocol';
 import { getAssistantDisplayParts } from '../utils/assistantMessageParts';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import { ChatBubbleText } from '../components/ChatBubbleText';
@@ -95,146 +95,6 @@ const ChatScrollView = forwardRef<
     );
 });
 ChatScrollView.displayName = 'ChatScrollView';
-
-interface ToolCallsCardProps {
-    toolCalls: ToolCallState[];
-    isProcessing?: boolean;
-}
-
-export function formatToolSummaryLocalized(
-    tool: { summary?: string; name?: string; input?: Record<string, unknown> },
-    t: TFunction
-): string {
-    const name = tool.name?.split('.').pop()?.toLowerCase();
-    const inputText = (key: string) => {
-        const value = tool.input?.[key];
-        return typeof value === 'string' ? value.trim() : '';
-    };
-    if (name && ['bash', 'pwsh', 'sh', 'shell', 'terminal', 'exec', 'execute', 'cmd', 'run_code'].includes(name)) {
-        const description = inputText('description');
-        if (description) return description;
-        const command = inputText('command') || inputText('cmd') || inputText('script');
-        if (command) return command.startsWith('$') ? command : `$ ${command}`;
-    }
-    const fileActions: Record<string, string> = {
-        read: 'assistant.toolActionRead',
-        read_image: 'assistant.toolActionRead',
-        read_file: 'assistant.toolActionRead',
-        write: 'assistant.toolActionWrite',
-        write_file: 'assistant.toolActionWrite',
-        edit: 'assistant.toolActionEdit',
-        edit_file: 'assistant.toolActionEdit',
-    };
-    const filePath = inputText('file_path') || inputText('path') || inputText('filePath') || inputText('target') || inputText('file');
-    if (name && fileActions[name] && filePath) {
-        return `${t(fileActions[name])} ${filePath}`;
-    }
-    if (name && ['grep', 'glob'].includes(name) && inputText('pattern')) {
-        return `${t('assistant.toolActionSearch')} ${inputText('pattern')}${filePath ? ` · ${filePath}` : ''}`;
-    }
-    if (name === 'web_fetch' && inputText('url')) {
-        return `${t('assistant.toolActionFetch')} ${inputText('url')}`;
-    }
-    if (name === 'web_search' && Array.isArray(tool.input?.queries)) {
-        const queries = tool.input.queries.filter((query): query is string => typeof query === 'string').join(', ');
-        if (queries) return `${t('assistant.toolActionSearch')} ${queries}`;
-    }
-    const summary = tool.summary;
-    if (!summary) return tool.name || '';
-    if (summary.startsWith('$')) {
-        return summary;
-    }
-    const match = summary.match(/^([a-zA-Z_]+):\s*(.*)$/);
-    if (match) {
-        const [, action, rest] = match;
-        const lowerAction = action.toLowerCase();
-        let localizedAction: string | null = null;
-        if (lowerAction === 'read') {
-            localizedAction = t('assistant.toolActionRead', { defaultValue: '读取' });
-        } else if (lowerAction === 'write') {
-            localizedAction = t('assistant.toolActionWrite', { defaultValue: '写入' });
-        } else if (lowerAction === 'edit') {
-            localizedAction = t('assistant.toolActionEdit', { defaultValue: '编辑' });
-        } else if (lowerAction === 'search' || lowerAction === 'find') {
-            localizedAction = t('assistant.toolActionSearch', { defaultValue: '搜索' });
-        } else if (lowerAction === 'fetch') {
-            localizedAction = t('assistant.toolActionFetch', { defaultValue: '访问' });
-        } else if (lowerAction === 'file') {
-            localizedAction = t('assistant.toolActionFile', { defaultValue: '文件' });
-        }
-        if (localizedAction) {
-            return rest ? `${localizedAction} ${rest}` : localizedAction;
-        }
-    }
-    return summary;
-}
-
-function ToolCallCard({ tool }: { tool: ToolCallState }) {
-    const { t } = useTranslation();
-    const [expanded, setExpanded] = useState(false);
-    const statusLabel = tool.status === 'running'
-        ? t('assistant.runningAction')
-        : tool.status === 'failed'
-            ? t('assistant.toolStatusFailed')
-            : t('assistant.completedActions');
-    const statusColor = tool.status === 'running' ? theme.colors.primaryDark
-        : tool.status === 'failed' ? theme.colors.dangerText : theme.colors.successText;
-    return (
-        <View style={styles.toolCardContainer} testID={`tool-card-${tool.id}`}>
-            <TouchableOpacity
-                style={styles.toolCardHeader}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityState={{ expanded }}
-                accessibilityLabel={`${formatToolSummaryLocalized(tool, t)} · ${statusLabel}`}
-                onPress={() => setExpanded((value) => !value)}
-            >
-                <View style={styles.toolCardHeaderLeft}>
-                    <Text style={styles.toolCardHeaderTitle} numberOfLines={2} ellipsizeMode="tail">{formatToolSummaryLocalized(tool, t)}</Text>
-                    <View style={styles.toolItemStatusRow}>
-                        {tool.status === 'running' ? (
-                            <ActivityIndicator size="small" color={statusColor} style={styles.toolStatusIcon} />
-                        ) : (
-                            <Icon name={tool.status === 'failed' ? 'error' : 'check-circle'} size={14} color={statusColor} style={styles.toolStatusIcon} />
-                        )}
-                        <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
-                    </View>
-                </View>
-                <Icon name={expanded ? 'expand-less' : 'expand-more'} size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-            {expanded && (
-                <View style={styles.toolCardBody}>
-                    <Text style={styles.toolItemName} selectable>{tool.name}</Text>
-                    {tool.summary !== undefined && (
-                        <View style={styles.toolCommandBox}>
-                            <Text style={styles.toolItemName}>{t('assistant.toolDetailSummary')}</Text>
-                            <Text style={styles.toolCommandText} selectable>{tool.summary}</Text>
-                        </View>
-                    )}
-                    {tool.input !== undefined && (
-                        <View style={styles.toolCommandBox}>
-                            <Text style={styles.toolItemName}>{t('assistant.toolDetailInput')}</Text>
-                            <Text style={styles.toolCommandText} selectable>{JSON.stringify(tool.input, null, 2)}</Text>
-                        </View>
-                    )}
-                    {tool.output !== undefined && (
-                        <View style={styles.toolOutputBox}>
-                            <Text style={styles.toolItemName}>{t('assistant.toolDetailOutput')}</Text>
-                            <Text style={styles.toolOutputText} selectable>{tool.output}</Text>
-                        </View>
-                    )}
-                </View>
-            )}
-        </View>
-    );
-}
-
-// Keep the public wrapper compatible; each keyed tool owns its disclosure state.
-export const ToolCallsCard: React.FC<ToolCallsCardProps> = ({ toolCalls }) => (
-    <View style={styles.toolCallsList} testID="tool-call-group">
-        {toolCalls.map((tool) => <ToolCallCard key={tool.id} tool={tool} />)}
-    </View>
-);
 
 export const ChatScreen = () => {
     const { t, i18n: chatI18n } = useTranslation();
@@ -840,7 +700,11 @@ export const ChatScreen = () => {
                 </View>
             ) : null}
 
-            {/* 消息流列表：倒序模型 (inverted)，最新消息处于视口物理原点 0，冷启动无需滚动即在最新 */}
+            {/*
+              消息流列表：倒序模型 (inverted)，最新消息处于视口物理原点 0，冷启动无需滚动即在最新。
+              倒序列表的 ListHeaderComponent 落在视觉最底部，正好承载“正在工作”指示：
+              它随列表滚动、不进消息数据、不参与排序，直到整轮工作结束才消失。
+            */}
             <FlatList
                 ref={flatListRef}
                 data={displayMessages}
@@ -864,20 +728,25 @@ export const ChatScreen = () => {
                 windowSize={11}
                 renderScrollComponent={renderChatScrollComponent}
                 ListFooterComponent={renderListFooter}
+                ListHeaderComponent={taskState === 'processing' || taskState === 'awaiting_approval'
+                    ? <TypingIndicator /> : undefined}
                 extraData={`${dateNow}-${chatI18n.language}`}
                 renderItem={({ item, index }) => {
                     const isUser = item.role === 'user';
-                    const hasTools = !isUser && Boolean(item.toolCalls?.length);
                     const time = formatChatTime(item.timestamp, chatI18n.language);
-                    const assistantParts = !isUser ? getAssistantDisplayParts(item) : [];
+                    // 工具调用已移出聊天：正文仍按锚点切段，但只渲染文字，不生成工具卡片。
+                    const assistantParts = !isUser
+                        ? getAssistantDisplayParts(item).filter((part) => part.type === 'text')
+                        : [];
                     const lastTextPartKey = [...assistantParts].reverse().find((part) => part.type === 'text')?.key;
                     const inlineUserTime = isUser && Boolean(item.content) &&
                         !item.errorMessage && !['sending', 'queued', 'error'].includes(item.status);
                     // Data is newest-first, while each cell remains top-to-bottom.
                     const showDate = startsChatDay(item.timestamp, displayMessages[index + 1]?.timestamp);
                     const hasProseBubble = isUser || Boolean(item.attachments?.length ||
-                        item.errorMessage || (item.stopReason && item.stopReason !== 'end_turn') ||
-                        (item.status === 'processing' && !hasTools && !item.content));
+                        item.errorMessage || (item.stopReason && item.stopReason !== 'end_turn'));
+                    // 纯工具消息已移出聊天：不保留空行，只在跨天时保留日期分隔。
+                    const hasVisibleRow = isUser || assistantParts.length > 0 || hasProseBubble;
                     return (
                         <View>
                         {showDate && <View style={styles.dateSeparator} testID={`chat-date-${item.id}`}>
@@ -885,7 +754,7 @@ export const ChatScreen = () => {
                                 {formatChatDate(item.timestamp, dateNow, chatI18n.language, t)}
                             </Text>
                         </View>}
-                        <View
+                        {hasVisibleRow ? <View
                             style={[
                                 styles.messageRow,
                                 isUser ? styles.userRow : styles.assistantRow,
@@ -896,9 +765,7 @@ export const ChatScreen = () => {
                                 const partTime = part.type === 'text' && part.key === lastTextPartKey && item.completedAt
                                     ? formatChatTime(item.completedAt, chatI18n.language)
                                     : time;
-                                return part.type === 'tools' ? (
-                                    <ToolCallsCard key={part.key} toolCalls={part.tools} />
-                                ) : isPlainChatText(part.text) ? (
+                                return isPlainChatText(part.text) ? (
                                     <View
                                         key={part.key}
                                         testID={`assistant-prose-${item.id}-${part.key}`}
@@ -984,19 +851,6 @@ export const ChatScreen = () => {
                                     </View>
                                 ) : (
                                     <View style={styles.assistantContentContainer}>
-                                        {/* 思考中打字机动画 */}
-                                        {item.status === 'processing' && !item.content && !hasTools && (
-                                            <View style={styles.thinkingRow}>
-                                                <ActivityIndicator
-                                                    size="small"
-                                                    color={theme.colors.primary}
-                                                />
-                                                <Text style={styles.thinkingText}>
-                                                    {t('assistant.thinkingText', '绿天正在思考中...')}
-                                                </Text>
-                                            </View>
-                                        )}
-
                                         {/* 错误提示：稳定错误码按码本地化，未知码按原文兜底 */}
                                         {item.status === 'error' && item.errorMessage && (
                                             <Text style={styles.errorText}>
@@ -1053,7 +907,7 @@ export const ChatScreen = () => {
                                 </View>}
                             </View>}
                             </View>
-                        </View>
+                        </View> : null}
                         </View>
                     );
                 }}
@@ -1500,122 +1354,6 @@ const styles = StyleSheet.create({
     userText: {
         color: theme.colors.text,
         lineHeight: 23,
-    },
-    toolCallsList: {
-        width: '100%',
-        alignSelf: 'stretch',
-        backgroundColor: theme.colors.border,
-        borderRadius: 10,
-        overflow: 'hidden',
-    },
-    toolCardContainer: {
-        width: '100%',
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: theme.colors.border,
-        backgroundColor: theme.colors.border,
-        overflow: 'hidden',
-    },
-    toolCardHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-    },
-    toolCardHeaderLeft: {
-        flexDirection: 'column',
-        alignItems: 'stretch',
-        flex: 1,
-        minWidth: 0,
-        gap: 6,
-        marginRight: 6,
-    },
-    toolStatusText: {
-        fontSize: auxFontSizes.caption,
-        flexShrink: 1,
-    },
-    toolStatusIcon: {
-        marginRight: 8,
-    },
-    toolCardHeaderTitle: {
-        fontSize: auxFontSizes.secondary,
-        fontWeight: '600',
-        color: theme.colors.text,
-        flexShrink: 1,
-        minWidth: 0,
-        lineHeight: 19,
-    },
-    toolCardBody: {
-        paddingHorizontal: 8,
-        paddingVertical: 8,
-        gap: 6,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: theme.colors.border,
-    },
-    toolItemRow: {
-        marginTop: 6,
-    },
-    toolItemHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 3,
-    },
-    toolItemStatusRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    toolMiniIcon: {
-        marginRight: 4,
-    },
-    toolItemName: {
-        fontSize: auxFontSizes.caption,
-        color: theme.colors.textSecondary,
-        fontWeight: '600',
-        textTransform: 'uppercase',
-    },
-    toolCommandBox: {
-        backgroundColor: theme.colors.inputBg,
-        borderRadius: 6,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-    },
-    terminalBox: {
-        backgroundColor: '#1E293B',
-        borderColor: '#0F172A',
-    },
-    toolCommandText: {
-        fontSize: auxFontSizes.caption,
-        color: theme.colors.text,
-        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        lineHeight: 18,
-    },
-    terminalText: {
-        color: '#34D399',
-    },
-    toolOutputBox: {
-        backgroundColor: 'rgba(0, 0, 0, 0.04)',
-        borderRadius: 4,
-        padding: 6,
-        marginTop: 4,
-    },
-    toolOutputText: {
-        fontSize: auxFontSizes.caption,
-        color: theme.colors.textSecondary,
-        fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        lineHeight: 16,
-    },
-    thinkingRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 6,
-    },
-    thinkingText: {
-        fontSize: auxFontSizes.secondary,
-        color: theme.colors.textSecondary,
-        marginLeft: 8,
     },
     errorText: {
         fontSize: auxFontSizes.caption,

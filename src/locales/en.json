@@ -599,5 +599,18 @@
     "remoteUnconfirmed": "The switch request timed out and is unconfirmed. Check the effective value later",
     "remoteSettledDifferent": "The request timed out; the server currently uses \"{{label}}\". Refreshed to match the server",
     "remoteValuePending": "Loading…"
+  },
+  "workRecords": {
+    "title": "Work log",
+    "empty": "No work records yet",
+    "steps": "Steps",
+    "noTools": "No tool calls in this turn",
+    "untitled": "Untitled task",
+    "toolCount": "{{count}} tool calls",
+    "running": "In progress",
+    "failed": "Incomplete",
+    "conclusion": "Conclusion",
+    "noAnswer": "No written conclusion for this turn",
+    "inProgressHint": "In progress. The conclusion will appear when done."
   }
 }

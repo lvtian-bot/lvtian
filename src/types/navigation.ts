@@ -8,6 +8,11 @@ export type MainTabParamList = {
     Me: undefined;
 };
 
+export type ChatStackParamList = {
+    ChatScreen: undefined;
+    WorkRecords: undefined;
+};
+
 export type RootStackParamList = {
     MainTabs: NavigatorScreenParams<MainTabParamList>;
     Preview: { filePath: string; source?: 'server' | 'webdav' | 'local'; title?: string };

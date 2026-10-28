@@ -6,9 +6,12 @@ import { theme } from '../utils/theme';
 
 interface ChatMarkdownBubbleProps {
     text: string;
-    time: string;
+    /** 聊天气泡底部的时钟；不传时不渲染时间行（如工作记录详情）。 */
+    time?: string;
     metrics: FontSizeMetrics;
     testID?: string;
+    /** 去掉气泡底色和圆角，用于非聊天的正文阅读区。 */
+    plain?: boolean;
 }
 
 type RuleStyles = Record<string, TextStyle & ViewStyle>;
@@ -39,12 +42,12 @@ function renderCodeBlock(node: ASTNode, _children: ReactNode[], _parent: ASTNode
 /** Rich text needs a definite width before Yoga measures paragraphs and list rows.
  * Do not nest this inside the shrink-to-content plain-text bubble.
  */
-export function ChatMarkdownBubble({ text, time, metrics, testID }: ChatMarkdownBubbleProps) {
+export function ChatMarkdownBubble({ text, time, metrics, testID, plain = false }: ChatMarkdownBubbleProps) {
     const markdownStyles = useMemo(() => getMarkdownStyles(metrics), [metrics]);
     return (
-        <View testID={testID} style={layoutStyles.bubble}>
+        <View testID={testID} style={plain ? layoutStyles.plain : layoutStyles.bubble}>
             <Markdown style={markdownStyles} rules={markdownRules}>{text}</Markdown>
-            <Text testID="markdown-bubble-time" style={layoutStyles.time} selectable={false}>{time}</Text>
+            {time ? <Text testID="markdown-bubble-time" style={layoutStyles.time} selectable={false}>{time}</Text> : null}
         </View>
     );
 }
@@ -84,6 +87,12 @@ const getMarkdownStyles = (metrics: FontSizeMetrics) => StyleSheet.create({
 });
 
 const layoutStyles = StyleSheet.create({
+    plain: {
+        width: '100%',
+        maxWidth: '100%',
+        alignSelf: 'flex-start',
+        flexShrink: 0,
+    },
     bubble: {
         width: '100%',
         maxWidth: '100%',

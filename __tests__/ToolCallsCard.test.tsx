@@ -1,16 +1,10 @@
 import React from 'react';
-import { FlatList, Text, TouchableOpacity, View } from 'react-native';
+import { Text, TouchableOpacity } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 import type { TFunction } from 'i18next';
-import { ChatScreen, ToolCallsCard, formatToolSummaryLocalized } from '../src/screens/ChatScreen';
+import '../src/i18n';
+import { ToolCallsCard, formatToolSummaryLocalized } from '../src/components/ToolCallsCard';
 import { ToolCallState } from '../src/types/assistantProtocol';
-import { useAssistantStore } from '../src/store/useAssistantStore';
-import { AssistantClient } from '../src/services/AssistantClient';
-
-jest.mock('@react-navigation/native', () => ({
-    ...jest.requireActual('@react-navigation/native'),
-    useNavigation: () => ({ navigate: jest.fn() }),
-}));
 
 const translations: Record<string, string> = {
     'assistant.toolActionRead': 'Read',
@@ -100,53 +94,4 @@ describe('ToolCallsCard', () => {
         expect(buttons()).toHaveLength(0);
     });
 
-    it('renders tools beside, never inside, the prose bubble, without empty tool-only prose', async () => {
-        jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
-        await ReactTestRenderer.act(async () => {
-            useAssistantStore.setState({ serverUrl: 'http://localhost:8080', connectionState: 'connected', messages: [], pendingApprovals: [] });
-            renderer = ReactTestRenderer.create(<ChatScreen />);
-        });
-        const renderItem = renderer!.root.findByType(FlatList).props.renderItem;
-        const item = { id: 'message', role: 'assistant', content: 'Assistant prose', status: 'processing', timestamp: 0, toolCalls: [command] };
-        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item })));
-        const prose = renderer!.root.findByProps({ testID: 'assistant-prose-message-text-0' });
-        expect(prose.findAllByType(ToolCallsCard)).toHaveLength(0);
-        const group = prose.parent!;
-        expect(group.findAllByType(ToolCallsCard)).toHaveLength(1);
-        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: { ...item, content: '' } })));
-        expect(renderer!.root.findAllByProps({ testID: 'assistant-prose-message-text-0' })).toHaveLength(0);
-        expect(renderer!.root.findAllByType(ToolCallsCard)).toHaveLength(1);
-    });
-
-    it('renders text-tool-text-tool-text bubbles in order and preserves an open tool on updates', async () => {
-        jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
-        await ReactTestRenderer.act(async () => {
-            useAssistantStore.setState({ serverUrl: 'http://localhost:8080', connectionState: 'connected', messages: [], pendingApprovals: [] });
-            renderer = ReactTestRenderer.create(<ChatScreen />);
-        });
-        const renderItem = renderer!.root.findByType(FlatList).props.renderItem;
-        const item = {
-            id: 'timeline', role: 'assistant', content: 'beforemiddletail', status: 'processing', timestamp: 0,
-            toolCalls: [command, read],
-            toolCallPositions: [{ toolCallId: command.id, textOffset: 6 }, { toolCallId: read.id, textOffset: 12 }],
-        };
-        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item })));
-        const order = () => renderer!.root.findAll((node) =>
-            node.type === ToolCallsCard ||
-            (typeof node.props.testID === 'string' && node.props.testID.startsWith('assistant-prose-timeline-'))
-        ).filter((node) => node.type === ToolCallsCard || node.type === View)
-            .map((node) => node.type === ToolCallsCard ? `tool:${node.props.toolCalls[0].id}` : node.props.testID);
-        expect(order()).toEqual([
-            'assistant-prose-timeline-text-0', 'tool:command',
-            'assistant-prose-timeline-text-6', 'tool:read', 'assistant-prose-timeline-text-12',
-        ]);
-        await ReactTestRenderer.act(async () => buttons()[0].props.onPress());
-        expect(texts()).toContain(command.output);
-        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: {
-            ...item, content: item.content + ' more', toolCalls: [{ ...command, status: 'done' }, read],
-        } })));
-        expect(buttons()[0].props.accessibilityState.expanded).toBe(true);
-        expect(texts()).toContain(command.output);
-        expect(order()).toHaveLength(5);
-    });
 });

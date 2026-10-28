@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, type LayoutChangeEvent } from 'react-native';
+import { Pressable, View, type LayoutChangeEvent } from 'react-native';
 import { createMaterialTopTabNavigator, MaterialTopTabBar, type MaterialTopTabBarProps } from '@react-navigation/material-top-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -7,20 +7,34 @@ import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatScreen } from '../screens/ChatScreen';
+import { WorkRecordsScreen } from '../screens/WorkRecordsScreen';
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
 import { MomentsScreen } from '../screens/MomentsScreen';
 import { MeScreen } from '../screens/MeScreen';
-import { MainTabParamList } from '../types/navigation';
+import { ChatStackParamList, MainTabParamList } from '../types/navigation';
 
 import { theme } from '../utils/theme';
 import { TabBarHeightContext } from './TabBarHeightContext';
 
-const ChatStack = createNativeStackNavigator();
+const ChatStack = createNativeStackNavigator<ChatStackParamList>();
 const FlashStack = createNativeStackNavigator();
 const TodoStack = createNativeStackNavigator();
 const MomentsStack = createNativeStackNavigator();
 const MeStack = createNativeStackNavigator();
+
+const WorkRecordsHeaderButton: React.FC<{ label: string; onPress: () => void }> = ({ label, onPress }) => (
+    <Pressable
+        onPress={onPress}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        testID="chat-work-records-entry"
+        style={({ pressed }) => [{ paddingHorizontal: 4 }, pressed && { opacity: 0.6 }]}
+    >
+        <Icon name="history" size={22} color={theme.colors.text} />
+    </Pressable>
+);
 
 const baseStackScreenOptions = {
     headerTitleAlign: 'center' as const,
@@ -35,7 +49,21 @@ const ChatStackScreen = () => {
             <ChatStack.Screen
                 name="ChatScreen"
                 component={ChatScreen}
-                options={{ title: t('tabs.chat') }}
+                options={({ navigation }) => ({
+                    title: t('tabs.chat'),
+                    // eslint-disable-next-line react/no-unstable-nested-components -- headerRight 是导航渲染回调，不是组件定义
+                    headerRight: () => (
+                        <WorkRecordsHeaderButton
+                            label={t('workRecords.title', '工作记录')}
+                            onPress={() => navigation.navigate('WorkRecords')}
+                        />
+                    ),
+                })}
+            />
+            <ChatStack.Screen
+                name="WorkRecords"
+                component={WorkRecordsScreen}
+                options={{ title: t('workRecords.title', '工作记录') }}
             />
         </ChatStack.Navigator>
     );
