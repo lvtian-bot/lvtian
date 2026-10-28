@@ -972,10 +972,16 @@ export class AssistantClient {
                     }
                 }
 
-                const merged = Array.from(msgMap.values()).sort(
-                    (a, b) => a.timestamp - b.timestamp
-                );
-                store.setMessages(merged);
+                // 位置按服务端时间排序：已受理消息采用服务端受理/创建时刻，同一毫秒保持到达顺序。
+                // 尚未受理的本地消息仍用设备时间，但不参与整段排序，按原顺序置于末尾，避免设备时钟污染历史。
+                const merged = Array.from(msgMap.values());
+                const sequenced = merged
+                    .map((message, index) => ({ message, index }))
+                    .filter(({ message }) => typeof message.seq === 'number' && message.seq > 0)
+                    .sort((a, b) => (a.message.timestamp - b.message.timestamp) || (a.index - b.index))
+                    .map(({ message }) => message);
+                const unsequenced = merged.filter((m) => !(typeof m.seq === 'number' && m.seq > 0));
+                store.setMessages([...sequenced, ...unsequenced]);
 
                 // 对账完成后，自动静默补发待撤销队列与待发队列
                 this.flushPendingCancelQueue();
@@ -1032,12 +1038,16 @@ export class AssistantClient {
                 }
 
                 const isQueued = msg.status === 'queued';
+                // 受理后以服务端时刻为准：显示不再依赖设备时钟，跨端显示一致
+                const acceptedAt = typeof msg.timestamp === 'number' && msg.timestamp > 0
+                    ? msg.timestamp
+                    : existing ? existing.timestamp : Date.now();
                 store.addOrUpdateMessage({
                     id: msg.messageId,
                     seq: msg.seq,
                     role: 'user',
                     content: existing ? existing.content : (msg.content || ''),
-                    timestamp: existing ? existing.timestamp : Date.now(),
+                    timestamp: acceptedAt,
                     status: isError ? 'error' : isQueued ? 'queued' : 'sent',
                     errorMessage: isError ? (msg.error || '发送失败') : undefined,
                     attachments: existing?.attachments || msg.attachments,
@@ -1055,15 +1065,18 @@ export class AssistantClient {
             case 'event_chunk': {
                 store.setCurrentSeq(msg.seq);
 
-                // 支持全量文本校准（如终态 final 事件）与增量流式追加
+                // 支持全量文本校准（如终态 final 事件）与增量流式追加。
+                // 创建时间优先用服务端随事件下发的时间：设备时钟落后时，若这里用 Date.now()，
+                // 重连后回答会排到提问之前，工作记录会丢掉结论并退回“进行中”。
                 const existing = store.messages.find((m) => m.id === msg.messageId);
+                const createdAt = existing ? existing.timestamp : (msg.timestamp ?? Date.now());
                 if (msg.content !== undefined) {
                     store.addOrUpdateMessage({
                         id: msg.messageId,
                         seq: msg.seq,
                         role: 'assistant',
                         content: msg.content,
-                        timestamp: existing ? existing.timestamp : Date.now(),
+                        timestamp: createdAt,
                         status: 'processing',
                     });
                 } else if (!existing) {
@@ -1072,7 +1085,7 @@ export class AssistantClient {
                         seq: msg.seq,
                         role: 'assistant',
                         content: msg.delta || '',
-                        timestamp: Date.now(),
+                        timestamp: createdAt,
                         status: 'processing',
                     });
                 } else if (msg.delta) {
@@ -1111,10 +1124,12 @@ export class AssistantClient {
                         (m) => m.role === 'assistant' && m.status === 'processing'
                     );
                     if (asstMsg) {
+                        // 停止与审批超时和报错一样属于中断终态：服务端同一条消息存的是 error，
+                        // 这里若记成 done，工作记录会先显示完成、重连对账后又变未完成。
                         store.addOrUpdateMessage({
                             ...asstMsg,
-                            status: msg.state === 'completed' ? 'done' : msg.state === 'error' ? 'error' : 'done',
-                            errorMessage: msg.error,
+                            status: msg.state === 'completed' ? 'done' : 'error',
+                            errorMessage: msg.state === 'stopped' ? (msg.error || 'task_stopped') : msg.error,
                             stopReason: msg.stopReason,
                             completedAt: msg.completedAt ?? (msg.state === 'completed' ? Date.now() : asstMsg.completedAt),
                         });

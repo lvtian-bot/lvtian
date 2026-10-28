@@ -264,6 +264,65 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue[0].messageId).toBe('m-busy-1');
     });
 
+    test('任务被停止或审批超时时，助手消息落为失败终态而非完成', () => {
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'asst-stop-1',
+                    seq: 3,
+                    role: 'assistant',
+                    content: '已经查了一半',
+                    timestamp: 3000,
+                    status: 'processing',
+                },
+            ],
+            taskState: 'processing',
+        });
+
+        handleServerMessage({
+            type: 'task_status',
+            seq: 4,
+            sessionId: 'main',
+            state: 'stopped',
+            error: 'task_stopped',
+        });
+
+        // 服务端同一条消息存的是 error，客户端必须一致，否则工作记录先显示完成、重连后又变未完成
+        let asst = useAssistantStore.getState().messages.find((m) => m.id === 'asst-stop-1');
+        expect(asst?.status).toBe('error');
+        expect(asst?.errorMessage).toBe('task_stopped');
+
+        useAssistantStore.setState({
+            messages: [
+                {
+                    id: 'asst-timeout-1',
+                    seq: 5,
+                    role: 'assistant',
+                    content: '',
+                    timestamp: 4000,
+                    status: 'processing',
+                },
+            ],
+            taskState: 'processing',
+        });
+
+        handleServerMessage({
+            type: 'task_status',
+            seq: 6,
+            sessionId: 'main',
+            state: 'stopped',
+            error: 'approval_timeout',
+        });
+
+        asst = useAssistantStore.getState().messages.find((m) => m.id === 'asst-timeout-1');
+        expect(asst?.status).toBe('error');
+        expect(asst?.errorMessage).toBe('approval_timeout');
+    });
+
     test('收到不可恢复的终态失败回执时，移出队列并自动推进下一条排队消息', () => {
         const handleServerMessage = (client as unknown as {
             handleServerMessage: (msg: ServerMessage) => void;

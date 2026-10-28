@@ -50,6 +50,8 @@ export interface AssistantMessage {
     /** Main-agent reply to a background result, never a user instruction. */
     source?: 'native_task_report';
     reportDeliveryId?: string;
+    /** 本条助手回复所回答的用户消息 id；排队时据此把回答归回对应请求 */
+    replyTo?: string;
     content: string;
     timestamp: number;
     completedAt?: number;
@@ -124,6 +126,8 @@ export type ServerMessage =
           status?: 'sent' | 'queued' | 'error';
           role?: 'user';
           content?: string;
+          /** 服务端受理时刻，仅用于显示，不参与排序 */
+          timestamp?: number;
           error?: string;
           attachments?: ChatAttachment[];
       }
@@ -136,6 +140,8 @@ export type ServerMessage =
           content?: string;
           toolCall?: ToolCallState;
           status?: 'thinking' | 'running_tool' | 'done' | 'error';
+          /** 服务端创建该条助手消息的时刻，客户端据此建消息，不依赖设备时钟 */
+          timestamp?: number;
       }
     | {
           type: 'approval_request';

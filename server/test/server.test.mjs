@@ -842,9 +842,14 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
     assert.equal(ack.messageId, 'u1');
     assert.equal(ack.role, 'user');
     assert.equal(ack.content, '你好');
+    assert.equal(typeof ack.timestamp, 'number', '受理回执必须携带服务端时间戳');
+    const accepted = sessionManager.getOrCreateSession('main').messages.find((m) => m.id === 'u1');
+    assert.equal(ack.timestamp, accepted.timestamp, '回执时间应与服务端落库时间一致');
 
     const placeholderIdx = received.findIndex((m) => m.type === 'event_chunk' && m.delta === '');
     assert.ok(placeholderIdx >= 0, '应广播助理占位 event_chunk');
+    const placeholder = received[placeholderIdx];
+    assert.equal(typeof placeholder.timestamp, 'number', '助理占位事件必须携带服务端创建时间');
     const firstDelta = await waitForMsg(received, (m) => m.type === 'event_chunk' && m.delta === 'chunk-1', '首个增量');
     assert.ok(received.indexOf(firstDelta) > placeholderIdx, '流式增量应在占位之后');
 
@@ -860,6 +865,7 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
     const asstMsg = session.messages.find((m) => m.id.startsWith('asst-'));
     assert.equal(asstMsg.status, 'done');
     assert.equal(asstMsg.content, 'chunk-1chunk-2');
+    assert.equal(placeholder.timestamp, asstMsg.timestamp, '占位事件时间应与服务端落库时间一致');
     assert.ok(typeof asstMsg.completedAt === 'number' && asstMsg.completedAt > 0, '助理消息应持久化 completedAt 时间戳');
     assert.equal(asstMsg.completedAt, done.completedAt, '持久化 completedAt 应与终态广播一致');
     assert.ok(sessionManager.getDshSessionId('main'), '引擎侧会话绑定应持久化');
@@ -1134,6 +1140,11 @@ test('并发发送消息自动排队，前序任务完成后按序流水推进',
     const session = sessionManager.getOrCreateSession('main');
     // 验证所有排队消息均已顺利完成，无残留排队
     assert.equal(session.messages.filter((m) => m.status === 'queued').length, 0);
+    // 每条助手回复都绑定它实际回答的请求，排队场景下不能靠“最近一条用户消息”猜
+    const replyTo = session.messages
+        .filter((m) => m.role === 'assistant' && !m.source)
+        .map((m) => m.replyTo);
+    assert.deepEqual(replyTo, ['u1', 'u2', 'u3']);
 
     ws.close();
     await server.stop();
