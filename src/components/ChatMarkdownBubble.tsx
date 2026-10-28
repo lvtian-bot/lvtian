@@ -1,7 +1,8 @@
 import React, { useMemo, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, View, type TextStyle, type ViewStyle } from 'react-native';
 import Markdown, { type ASTNode } from 'react-native-markdown-display';
-import type { FontSizeMetrics } from '../utils/fontSize';
+import { auxFontSizes, type FontSizeMetrics } from '../utils/fontSize';
+import { theme } from '../utils/theme';
 
 interface ChatMarkdownBubbleProps {
     text: string;
@@ -52,34 +53,34 @@ const getMarkdownStyles = (metrics: FontSizeMetrics) => StyleSheet.create({
     body: {
         width: '100%',
         flexShrink: 0,
-        color: '#111827',
+        color: theme.colors.text,
         fontSize: metrics.chatBody,
         lineHeight: metrics.chatLineHeight,
     },
-    heading1: { color: '#111827', fontSize: metrics.chatHeading1, fontWeight: '700', marginTop: 10, marginBottom: 6 },
-    heading2: { color: '#111827', fontSize: metrics.chatHeading2, fontWeight: '700', marginTop: 8, marginBottom: 4 },
-    heading3: { color: '#111827', fontSize: metrics.chatHeading3, fontWeight: '700', marginTop: 6, marginBottom: 4 },
+    heading1: { color: theme.colors.text, fontSize: metrics.chatHeading1, fontWeight: '700', marginTop: 10, marginBottom: 6 },
+    heading2: { color: theme.colors.text, fontSize: metrics.chatHeading2, fontWeight: '700', marginTop: 8, marginBottom: 4 },
+    heading3: { color: theme.colors.text, fontSize: metrics.chatHeading3, fontWeight: '700', marginTop: 6, marginBottom: 4 },
     paragraph: { marginTop: 2, marginBottom: 4 },
     list_item: { marginVertical: 2 },
     bullet_list: { marginVertical: 4 },
     ordered_list: { marginVertical: 4 },
     code_inline: {
-        color: '#111827', backgroundColor: '#E5E7EB', borderRadius: 4,
+        color: theme.colors.text, backgroundColor: theme.colors.border, borderRadius: 4,
         paddingHorizontal: 5, paddingVertical: 2, fontSize: metrics.chatCode,
         fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
     },
     fence: {
-        backgroundColor: '#E5E7EB', borderRadius: 8, padding: 10,
+        backgroundColor: theme.colors.border, borderRadius: 8, padding: 10,
         fontSize: metrics.chatCode, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        color: '#111827', marginVertical: 6, borderWidth: 0,
+        color: theme.colors.text, marginVertical: 6, borderWidth: 0,
     },
     code_block: {
-        backgroundColor: '#E5E7EB', borderRadius: 8, padding: 10,
+        backgroundColor: theme.colors.border, borderRadius: 8, padding: 10,
         fontSize: metrics.chatCode, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        color: '#111827', marginVertical: 6, borderWidth: 0,
+        color: theme.colors.text, marginVertical: 6, borderWidth: 0,
     },
-    hr: { backgroundColor: '#E5E7EB', height: 1, marginVertical: 8 },
-    strong: { fontWeight: '700', color: '#111827' },
+    hr: { backgroundColor: theme.colors.border, height: 1, marginVertical: 8 },
+    strong: { fontWeight: '700', color: theme.colors.text },
 });
 
 const layoutStyles = StyleSheet.create({
@@ -91,7 +92,7 @@ const layoutStyles = StyleSheet.create({
         borderRadius: 20,
         paddingHorizontal: 16,
         paddingVertical: 12,
-        backgroundColor: '#F0F2F5',
+        backgroundColor: theme.colors.background,
     },
-    time: { alignSelf: 'flex-end', flexShrink: 0, fontSize: 10, color: '#6B7280', marginTop: 2 },
+    time: { alignSelf: 'flex-end', flexShrink: 0, fontSize: auxFontSizes.badge, color: theme.colors.textSecondary, marginTop: 2 },
 });

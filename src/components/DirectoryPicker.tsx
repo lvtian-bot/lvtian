@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSettingsFont } from './settings';
+import { auxFontSizes } from '../utils/fontSize';
 import {
     Modal,
     View,
@@ -28,6 +30,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
     onCancel,
 }) => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
     const [currentDir, setCurrentDir] = useState('');
     const [directories, setDirectories] = useState<FileItem[]>([]);
     const [loading, setLoading] = useState(false);
@@ -110,11 +113,11 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
             <View style={styles.container}>
                 <View style={styles.header}>
                     <TouchableOpacity onPress={onCancel} style={styles.headerButton}>
-                        <Text style={styles.headerButtonText}>{t('common.cancel')}</Text>
+                        <Text style={[styles.headerButtonText, { fontSize: font.chatBody }]}>{t('common.cancel')}</Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>{t('browser.selectTargetDir')}</Text>
+                    <Text style={[styles.headerTitle, { fontSize: font.chatHeading2 }]}>{t('browser.selectTargetDir')}</Text>
                     <TouchableOpacity onPress={handleConfirm} style={styles.headerButton}>
-                        <Text style={[styles.headerButtonText, styles.confirmText]}>{t('common.confirm')}</Text>
+                        <Text style={[styles.headerButtonText, styles.confirmText, { fontSize: font.chatBody }]}>{t('common.confirm')}</Text>
                     </TouchableOpacity>
                 </View>
 
@@ -142,14 +145,14 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                                 onPress={() => handleDirPress(item)}
                             >
                                 <Icon name="folder" size={24} color={theme.colors.primary} />
-                                <Text style={styles.dirName}>{item.name}</Text>
+                                <Text style={[styles.dirName, { fontSize: font.chatBody }]}>{item.name}</Text>
                                 <Icon name="chevron-right" size={24} color={theme.colors.textSecondary} />
                             </TouchableOpacity>
                         )}
                         keyExtractor={(item) => item.path}
                         ListEmptyComponent={
                             <View style={styles.emptyContainer}>
-                                <Text style={styles.emptyText}>{t('browser.emptyDir')}</Text>
+                                <Text style={[styles.emptyText, { fontSize: font.chatBody }]}>{t('browser.emptyDir')}</Text>
                             </View>
                         }
                     />
@@ -178,7 +181,6 @@ const styles = StyleSheet.create({
         minWidth: 60,
     },
     headerButtonText: {
-        fontSize: 16,
         color: theme.colors.textSecondary,
     },
     confirmText: {
@@ -187,7 +189,6 @@ const styles = StyleSheet.create({
         textAlign: 'right',
     },
     headerTitle: {
-        fontSize: 18,
         fontWeight: '600',
         color: theme.colors.text,
     },
@@ -204,18 +205,18 @@ const styles = StyleSheet.create({
     },
     breadcrumb: {
         flex: 1,
-        fontSize: 14,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
     },
     currentDirInfo: {
         padding: theme.spacing.m,
-        backgroundColor: '#E8F5E9',
+        backgroundColor: theme.colors.successBg,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border,
     },
     infoText: {
-        fontSize: 14,
-        color: '#2E7D32',
+        fontSize: auxFontSizes.secondary,
+        color: theme.colors.successText,
         textAlign: 'center',
     },
     loader: {
@@ -233,7 +234,6 @@ const styles = StyleSheet.create({
     },
     dirName: {
         flex: 1,
-        fontSize: 16,
         color: theme.colors.text,
         marginLeft: theme.spacing.m,
     },
@@ -242,7 +242,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     emptyText: {
-        fontSize: 14,
         color: theme.colors.textSecondary,
     },
 });

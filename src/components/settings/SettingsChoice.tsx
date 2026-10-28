@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
-import { settingsFont } from './tokens';
+import { auxFontSizes } from '../../utils/fontSize';
 
 interface SettingsChoiceProps {
     title: string;
@@ -118,7 +118,7 @@ const styles = StyleSheet.create({
         color: theme.colors.warnText,
     },
     desc: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textTertiary,
         lineHeight: 18,
     },
@@ -132,7 +132,7 @@ const styles = StyleSheet.create({
         borderRadius: 5,
     },
     badgeText: {
-        fontSize: settingsFont.badge,
+        fontSize: auxFontSizes.badge,
         fontWeight: '600',
         color: theme.colors.successText,
     },

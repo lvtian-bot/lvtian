@@ -1,4 +1,5 @@
 import React from 'react';
+import { auxFontSizes } from '../utils/fontSize';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { theme } from '../utils/theme';
@@ -70,7 +71,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     pathText: {
-        fontSize: 14,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.primary,
     },
     currentPathText: {

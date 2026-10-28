@@ -11,6 +11,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { theme } from '../utils/theme';
 import { useTranslation } from 'react-i18next';
+import { useSettingsFont } from './settings';
+import { auxFontSizes } from '../utils/fontSize';
 
 export interface ActionItem {
     label: string;
@@ -34,6 +36,7 @@ export const ActionSheetModal: React.FC<ActionSheetModalProps> = ({
     onCancel,
 }) => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
     const isAndroid = Platform.OS === 'android';
 
     if (!visible) return null;
@@ -79,6 +82,7 @@ export const ActionSheetModal: React.FC<ActionSheetModalProps> = ({
                                 style={[
                                     styles.actionText,
                                     {
+                                        fontSize: font.chatBody,
                                         color:
                                             action.color ||
                                             (action.destructive
@@ -94,7 +98,7 @@ export const ActionSheetModal: React.FC<ActionSheetModalProps> = ({
                 </View>
             </View>
             <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-                <Text style={styles.cancelText}>{t('common.cancel')}</Text>
+                <Text style={[styles.cancelText, { fontSize: font.chatBody }]}>{t('common.cancel')}</Text>
             </TouchableOpacity>
         </SafeAreaView>
     );
@@ -139,6 +143,7 @@ export const ActionSheetModal: React.FC<ActionSheetModalProps> = ({
                             style={[
                                 styles.androidActionText,
                                 {
+                                    fontSize: font.chatBody,
                                     color:
                                         action.color ||
                                         (action.destructive
@@ -199,7 +204,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     title: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.mutedText,
         fontWeight: '600',
         textAlign: 'center',
@@ -222,7 +227,6 @@ const styles = StyleSheet.create({
         marginRight: theme.spacing.m,
     },
     actionText: {
-        fontSize: 16,
         fontWeight: '500',
     },
     cancelButton: {
@@ -234,7 +238,6 @@ const styles = StyleSheet.create({
         minHeight: 56,
     },
     cancelText: {
-        fontSize: 16,
         fontWeight: '600',
         color: theme.colors.primary,
     },
@@ -266,7 +269,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     androidTitle: {
-        fontSize: 14,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
         textAlign: 'center',
     },
@@ -281,7 +284,6 @@ const styles = StyleSheet.create({
         minHeight: 48,
     },
     androidActionText: {
-        fontSize: 14, // Reduced from 16 (Text smaller)
         fontWeight: '400',
         color: theme.colors.text,
     },

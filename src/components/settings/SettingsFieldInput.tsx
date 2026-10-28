@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TextInput, TouchableOpacity } from 'react-nativ
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
-import { settingsFont } from './tokens';
+import { auxFontSizes } from '../../utils/fontSize';
 
 interface SettingsFieldInputProps {
     label: string;
@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
         marginTop: 6,
     },
     label: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '500',
         color: theme.colors.text,
         marginBottom: 6,
@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
         padding: 8,
     },
     hint: {
-        fontSize: settingsFont.caption,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textTertiary,
         marginTop: 5,
     },

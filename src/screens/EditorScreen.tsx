@@ -12,6 +12,7 @@ import { RootStackParamList } from '../types/navigation';
 import { fsService } from '../services/FileSystemService';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { theme } from '../utils/theme';
+import { useSettingsFont } from '../components/settings';
 import { normalizePath } from '../utils/pathUtils';
 import { stableHash } from '../utils/identityHash';
 import { syncService } from '../services/SyncService';
@@ -46,13 +47,17 @@ const parseDraft = (raw: string | null): { content: string; baselineMtime: numbe
 };
 
 // Helper Component for Header Button
-const HeaderBackButton = ({ onPress, text }: { onPress: () => void, text: string }) => (
+const HeaderBackButton = ({ onPress, text }: { onPress: () => void, text: string }) => {
+    const font = useSettingsFont();
+    return (
     <TouchableOpacity onPress={onPress} style={styles.headerButton}>
-        <Text style={styles.headerButtonText}>{text}</Text>
+        <Text style={[styles.headerButtonText, { fontSize: font.chatBody }]}>{text}</Text>
     </TouchableOpacity>
-);
+    );
+};
 
 export const EditorScreen = () => {
+    const font = useSettingsFont();
     const route = useRoute<EditorScreenRouteProp>();
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
@@ -478,10 +483,10 @@ export const EditorScreen = () => {
                         navigation.goBack();
                     }
                 }} style={styles.headerButton}>
-                    <Text style={styles.headerButtonText}>{t('common.back')}</Text>
+                    <Text style={[styles.headerButtonText, { fontSize: font.chatBody }]}>{t('common.back')}</Text>
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
-                    <Text style={styles.title} numberOfLines={2}>
+                    <Text style={[styles.title, { fontSize: font.chatBody }]} numberOfLines={2}>
                         {isFlashMode ? (t('timeline.editTitle') || 'Edit Note') : (title || filePath.split('/').pop() || filePath)}
                     </Text>
                 </View>
@@ -492,7 +497,8 @@ export const EditorScreen = () => {
                 >
                     <Text style={[
                         styles.headerButtonText,
-                        (!isDirty || isSaving) && styles.headerButtonTextDisabled
+                        (!isDirty || isSaving) && styles.headerButtonTextDisabled,
+                        { fontSize: font.chatBody },
                     ]}>{t('common.save')}</Text>
                 </TouchableOpacity>
             </View>
@@ -533,7 +539,6 @@ const styles = StyleSheet.create({
     },
     headerButtonText: {
         color: theme.colors.primary,
-        fontSize: 16,
         fontWeight: 'bold',
     },
     headerButtonTextDisabled: {
@@ -547,7 +552,6 @@ const styles = StyleSheet.create({
         marginHorizontal: 10,
     },
     title: {
-        fontSize: 16,
         marginHorizontal: theme.spacing.s,
         flexShrink: 1,
         textAlign: 'center',

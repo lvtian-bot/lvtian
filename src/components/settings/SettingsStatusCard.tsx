@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
-import { settingsFont } from './tokens';
+import { auxFontSizes } from '../../utils/fontSize';
 
 interface SettingsStatusCardProps {
     /** 传入则显示页面图标，否则显示状态圆点 */
@@ -100,7 +100,7 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
     },
     subtitle: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textTertiary,
     },
     badge: {
@@ -115,7 +115,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.hairline,
     },
     badgeText: {
-        fontSize: settingsFont.caption,
+        fontSize: auxFontSizes.caption,
         fontWeight: '600',
     },
     badgeTextOk: {

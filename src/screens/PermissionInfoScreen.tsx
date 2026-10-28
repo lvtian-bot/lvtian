@@ -4,20 +4,24 @@ import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { theme } from '../utils/theme';
+import { useSettingsFont } from '../components/settings';
 
 const PermissionItem: React.FC<{
     icon: ComponentProps<typeof Icon>['name'];
     title: string;
     description: string;
-}> = ({ icon, title, description }) => (
+}> = ({ icon, title, description }) => {
+    const font = useSettingsFont();
+    return (
     <View style={styles.item}>
         <Icon name={icon} size={22} color={theme.colors.textSecondary} style={styles.icon} />
         <View style={styles.textContainer}>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.description}>{description}</Text>
+            <Text style={[styles.title, { fontSize: font.chatBody }]}>{title}</Text>
+            <Text style={[styles.description, { fontSize: font.chatBody }]}>{description}</Text>
         </View>
     </View>
-);
+    );
+};
 
 export const PermissionInfoScreen = () => {
     const { t } = useTranslation();
@@ -72,13 +76,11 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     title: {
-        fontSize: 16,
         fontWeight: '500',
         color: theme.colors.text,
         marginBottom: 4,
     },
     description: {
-        fontSize: 14,
         color: theme.colors.textSecondary,
         lineHeight: 20,
     },

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { theme } from '../utils/theme';
-import { settingsFont } from '../components/settings';
+import { auxFontSizes } from '../utils/fontSize';
 import { normalizePath } from '../utils/pathUtils';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { flashNoteService } from '../services/FlashNoteService';
@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
         paddingBottom: 8,
     },
     note: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textTertiary,
         lineHeight: 18,
         textAlign: 'center',

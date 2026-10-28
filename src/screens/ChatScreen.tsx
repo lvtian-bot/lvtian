@@ -56,7 +56,7 @@ import { ChatBubbleText } from '../components/ChatBubbleText';
 import { formatChatDate, formatChatTime, isPlainChatText, startsChatDay } from '../utils/chatDate';
 import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { getFontSizeMetrics } from '../utils/fontSize';
+import { getFontSizeMetrics, auxFontSizes } from '../utils/fontSize';
 import i18n from '../i18n';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -200,7 +200,7 @@ function ToolCallCard({ tool }: { tool: ToolCallState }) {
                         <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
                     </View>
                 </View>
-                <Icon name={expanded ? 'expand-less' : 'expand-more'} size={20} color="#6B7280" />
+                <Icon name={expanded ? 'expand-less' : 'expand-more'} size={20} color={theme.colors.textSecondary} />
             </TouchableOpacity>
             {expanded && (
                 <View style={styles.toolCardBody}>
@@ -535,7 +535,7 @@ export const ChatScreen = () => {
         if (renderedCount < reversedMessages.length) {
             return (
                 <View style={styles.loadMoreContainer}>
-                    <ActivityIndicator size="small" color="#9CA3AF" />
+                    <ActivityIndicator size="small" color={theme.colors.textTertiary} />
                     <Text style={styles.loadMoreText}>
                         {t('assistant.loadingEarlierMessages', '正在加载更早历史...')}
                     </Text>
@@ -769,8 +769,8 @@ export const ChatScreen = () => {
                     <View style={styles.iconWrapper}>
                         <Icon name="smart-toy" size={44} color={theme.colors.primary} />
                     </View>
-                    <Text style={styles.guideTitle}>{t('assistant.notConnectedTitle', '尚未连接绿天助理服务')}</Text>
-                    <Text style={styles.guideDesc}>
+                    <Text style={[styles.guideTitle, { fontSize: metrics.chatHeading2 }]}>{t('assistant.notConnectedTitle', '尚未连接绿天助理服务')}</Text>
+                    <Text style={[styles.guideDesc, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]}>
                         {t('assistant.notConnectedDesc', '助理服务运行在您的电脑或 VPS 上，提供常驻后台任务、记忆系统与长连接对话。')}
                     </Text>
 
@@ -779,8 +779,8 @@ export const ChatScreen = () => {
                         onPress={() => navigation.navigate('AssistantConfig')}
                         activeOpacity={0.8}
                     >
-                        <Icon name="settings" size={20} color="#fff" />
-                        <Text style={styles.primaryBtnText}>{t('assistant.goToConfig', '前往配置服务')}</Text>
+                        <Icon name="settings" size={20} color={theme.colors.white} />
+                        <Text style={[styles.primaryBtnText, { fontSize: metrics.chatBody }]}>{t('assistant.goToConfig', '前往配置服务')}</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -789,7 +789,7 @@ export const ChatScreen = () => {
                         activeOpacity={0.8}
                     >
                         <Icon name="content-paste" size={18} color={theme.colors.primary} />
-                        <Text style={styles.secondaryBtnText}>{t('assistant.pasteConfig', '一键粘贴完整配置链接')}</Text>
+                        <Text style={[styles.secondaryBtnText, { fontSize: metrics.chatBody }]}>{t('assistant.pasteConfig', '一键粘贴完整配置链接')}</Text>
                     </TouchableOpacity>
                 </View>
             </View>
@@ -803,7 +803,7 @@ export const ChatScreen = () => {
             {toastMessage && (
                 <View style={styles.toastContainer} pointerEvents="none">
                     <View style={styles.toastPill}>
-                        <Icon name="check-circle" size={18} color="#fff" style={styles.toastIcon} />
+                        <Icon name="check-circle" size={18} color={theme.colors.white} style={styles.toastIcon} />
                         <Text style={styles.toastText}>{toastMessage}</Text>
                     </View>
                 </View>
@@ -945,7 +945,7 @@ export const ChatScreen = () => {
                                             <Icon
                                                 name={att.type === 'image' ? 'image' : 'insert-drive-file'}
                                                 size={18}
-                                                color={isUser ? '#fff' : theme.colors.primary}
+                                                color={isUser ? theme.colors.white : theme.colors.primary}
                                                 style={styles.attachmentFileIcon}
                                             />
                                             <Text
@@ -1021,7 +1021,7 @@ export const ChatScreen = () => {
                                             onPress={() => handleCancelQueued(item)}
                                             activeOpacity={0.7}
                                         >
-                                            <Icon name="schedule" size={12} color="#4B5563" style={styles.queuedIcon} />
+                                            <Icon name="schedule" size={12} color={theme.colors.textSecondary} style={styles.queuedIcon} />
                                             <Text style={styles.queuedText}>{t('assistant.statusQueued', '排队中')}</Text>
                                         </TouchableOpacity>
                                     )}
@@ -1070,7 +1070,7 @@ export const ChatScreen = () => {
                         onPress={scrollToBottom}
                         activeOpacity={0.85}
                     >
-                        <Icon name="arrow-downward" size={18} color="#2563EB" />
+                        <Icon name="arrow-downward" size={18} color={theme.colors.primaryDark} />
                     </TouchableOpacity>
                 </Animated.View>
             )}
@@ -1085,7 +1085,7 @@ export const ChatScreen = () => {
                 <View key={approval.approvalId} style={styles.approvalCard}>
                     <View style={styles.approvalHeader}>
                         <Icon name="warning" size={20} color={theme.colors.warnText} />
-                        <Text style={styles.approvalTitle}>{t('assistant.approvalRequired', '需要人工审批')}</Text>
+                        <Text style={[styles.approvalTitle, { fontSize: metrics.chatBody }]}>{t('assistant.approvalRequired', '需要人工审批')}</Text>
                     </View>
                     <Text style={styles.approvalPrompt}>{approval.prompt}</Text>
                     {approval.toolName && (
@@ -1126,9 +1126,9 @@ export const ChatScreen = () => {
                             accessibilityLabel={t('chat.pickImage', '图片')}
                         >
                             <View style={[styles.attachMenuIconBg, styles.attachMenuPhotoBg]}>
-                                <Icon name="photo" size={18} color="#2563EB" />
+                                <Icon name="photo" size={18} color={theme.colors.primaryDark} />
                             </View>
-                            <Text style={styles.attachMenuText}>{t('chat.pickImage', '图片')}</Text>
+                            <Text style={[styles.attachMenuText, { fontSize: metrics.chatBody }]}>{t('chat.pickImage', '图片')}</Text>
                         </TouchableOpacity>
 
                         <View style={styles.attachMenuDivider} />
@@ -1146,7 +1146,7 @@ export const ChatScreen = () => {
                             <View style={[styles.attachMenuIconBg, styles.attachMenuDocBg]}>
                                 <Icon name="insert-drive-file" size={18} color="#D97706" />
                             </View>
-                            <Text style={styles.attachMenuText}>{t('chat.pickDocument', '文件')}</Text>
+                            <Text style={[styles.attachMenuText, { fontSize: metrics.chatBody }]}>{t('chat.pickDocument', '文件')}</Text>
                         </TouchableOpacity>
                     </View>
                 )}
@@ -1176,12 +1176,12 @@ export const ChatScreen = () => {
                                         <Icon
                                             name={item.icon}
                                             size={18}
-                                            color={item.type === 'command' ? theme.colors.primary : '#4B5563'}
+                                            color={item.type === 'command' ? theme.colors.primary : theme.colors.textSecondary}
                                         />
                                     </View>
                                     <View style={styles.slashItemTextWrap}>
                                         <View style={styles.slashItemTitleRow}>
-                                            <Text style={styles.slashItemLabel}>{item.label}</Text>
+                                            <Text style={[styles.slashItemLabel, { fontSize: metrics.chatBody }]}>{item.label}</Text>
                                             <Text style={styles.slashItemTypeTag}>
                                                 {item.type === 'command'
                                                     ? t('assistant.slashMenuCommands', '命令')
@@ -1238,7 +1238,7 @@ export const ChatScreen = () => {
                                             style={styles.draftDeleteBadge}
                                             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                                         >
-                                            <Icon name="close" size={12} color="#FFFFFF" />
+                                            <Icon name="close" size={12} color={theme.colors.white} />
                                         </TouchableOpacity>
                                     </View>
                                 );
@@ -1256,7 +1256,7 @@ export const ChatScreen = () => {
                             <Icon
                                 name={isAttachMenuVisible ? 'close' : 'add'}
                                 size={24}
-                                color={isAttachMenuVisible ? theme.colors.primary : '#4B5563'}
+                                color={isAttachMenuVisible ? theme.colors.primary : theme.colors.textSecondary}
                             />
                         </TouchableOpacity>
                         <TextInput
@@ -1267,7 +1267,7 @@ export const ChatScreen = () => {
                                 { fontSize: metrics.chatInput },
                             ]}
                             placeholder={t('assistant.inputPlaceholder', '消息')}
-                            placeholderTextColor="#9CA3AF"
+                            placeholderTextColor={theme.colors.textTertiary}
                             value={inputContent}
                             onFocus={() => {
                                 if (isAttachMenuVisible) setIsAttachMenuVisible(false);
@@ -1288,7 +1288,7 @@ export const ChatScreen = () => {
                                 accessibilityRole="button"
                                 accessibilityLabel={t('common.send', '发送')}
                             >
-                                <Icon name="arrow-upward" size={18} color="#fff" />
+                                <Icon name="arrow-upward" size={18} color={theme.colors.white} />
                             </TouchableOpacity>
                         ) : (taskState === 'processing' || taskState === 'awaiting_approval') ? (
                             <TouchableOpacity
@@ -1341,17 +1341,14 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     guideTitle: {
-        fontSize: 18,
         fontWeight: 'bold',
         color: theme.colors.text,
         marginBottom: 8,
         textAlign: 'center',
     },
     guideDesc: {
-        fontSize: 14,
         color: theme.colors.textSecondary,
         textAlign: 'center',
-        lineHeight: 22,
         marginBottom: 20,
     },
     primaryBtn: {
@@ -1365,8 +1362,7 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     primaryBtnText: {
-        color: '#fff',
-        fontSize: 15,
+        color: theme.colors.white,
         fontWeight: '600',
         marginLeft: 8,
     },
@@ -1383,7 +1379,6 @@ const styles = StyleSheet.create({
     },
     secondaryBtnText: {
         color: theme.colors.primary,
-        fontSize: 14,
         fontWeight: '600',
         marginLeft: 6,
     },
@@ -1406,7 +1401,7 @@ const styles = StyleSheet.create({
         borderBottomColor: theme.colors.warnBorder,
     },
     upgradingBannerText: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.warnText,
         fontWeight: '500',
     },
@@ -1432,7 +1427,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.textSecondary,
     },
     statusText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
         flex: 1,
     },
@@ -1445,7 +1440,7 @@ const styles = StyleSheet.create({
         borderColor: theme.colors.border,
     },
     reconnectBtnText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.text,
     },
     messageList: {
@@ -1460,11 +1455,11 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     loadMoreText: {
-        fontSize: 12,
-        color: '#9CA3AF',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.textTertiary,
     },
     dateSeparator: { alignItems: 'center', marginTop: 4, marginBottom: 12 },
-    dateSeparatorText: { fontSize: 11, color: '#6B7280', backgroundColor: '#F0F2F5', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+    dateSeparatorText: { fontSize: auxFontSizes.caption, color: theme.colors.textSecondary, backgroundColor: theme.colors.background, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
     messageRow: {
         flexDirection: 'row',
         marginBottom: 12,
@@ -1495,7 +1490,7 @@ const styles = StyleSheet.create({
     },
     assistantBubble: {
         alignSelf: 'flex-start',
-        backgroundColor: '#F0F2F5',
+        backgroundColor: theme.colors.background,
         maxWidth: '100%',
         minWidth: 48,
     },
@@ -1503,22 +1498,21 @@ const styles = StyleSheet.create({
         width: '100%',
     },
     userText: {
-        color: '#111827',
-        fontSize: 15,
+        color: theme.colors.text,
         lineHeight: 23,
     },
     toolCallsList: {
         width: '100%',
         alignSelf: 'stretch',
-        backgroundColor: '#E5E7EB',
+        backgroundColor: theme.colors.border,
         borderRadius: 10,
         overflow: 'hidden',
     },
     toolCardContainer: {
         width: '100%',
         borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#D1D5DB',
-        backgroundColor: '#E5E7EB',
+        borderBottomColor: theme.colors.border,
+        backgroundColor: theme.colors.border,
         overflow: 'hidden',
     },
     toolCardHeader: {
@@ -1537,16 +1531,16 @@ const styles = StyleSheet.create({
         marginRight: 6,
     },
     toolStatusText: {
-        fontSize: 11,
+        fontSize: auxFontSizes.caption,
         flexShrink: 1,
     },
     toolStatusIcon: {
         marginRight: 8,
     },
     toolCardHeaderTitle: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '600',
-        color: '#374151',
+        color: theme.colors.text,
         flexShrink: 1,
         minWidth: 0,
         lineHeight: 19,
@@ -1556,7 +1550,7 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         gap: 6,
         borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: '#D1D5DB',
+        borderTopColor: theme.colors.border,
     },
     toolItemRow: {
         marginTop: 6,
@@ -1575,26 +1569,26 @@ const styles = StyleSheet.create({
         marginRight: 4,
     },
     toolItemName: {
-        fontSize: 11,
-        color: '#6B7280',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.textSecondary,
         fontWeight: '600',
         textTransform: 'uppercase',
     },
     toolCommandBox: {
-        backgroundColor: '#F3F4F6',
+        backgroundColor: theme.colors.inputBg,
         borderRadius: 6,
         paddingHorizontal: 8,
         paddingVertical: 6,
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: theme.colors.border,
     },
     terminalBox: {
         backgroundColor: '#1E293B',
         borderColor: '#0F172A',
     },
     toolCommandText: {
-        fontSize: 12,
-        color: '#1F2937',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.text,
         fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
         lineHeight: 18,
     },
@@ -1608,8 +1602,8 @@ const styles = StyleSheet.create({
         marginTop: 4,
     },
     toolOutputText: {
-        fontSize: 11,
-        color: '#4B5563',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.textSecondary,
         fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
         lineHeight: 16,
     },
@@ -1619,17 +1613,17 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
     },
     thinkingText: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
         marginLeft: 8,
     },
     errorText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.dangerText,
         marginTop: 6,
     },
     truncatedText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.warnText,
         marginTop: 6,
     },
@@ -1640,7 +1634,7 @@ const styles = StyleSheet.create({
         marginTop: 4,
     },
     timeText: {
-        fontSize: 11,
+        fontSize: auxFontSizes.caption,
     },
     statusMargin: {
         marginLeft: 4,
@@ -1649,7 +1643,7 @@ const styles = StyleSheet.create({
         color: 'rgba(17, 24, 39, 0.5)',
     },
     assistantTime: {
-        color: '#9CA3AF',
+        color: theme.colors.textTertiary,
     },
     approvalCard: {
         backgroundColor: theme.colors.warnBgStrong,
@@ -1666,19 +1660,18 @@ const styles = StyleSheet.create({
         marginBottom: 6,
     },
     approvalTitle: {
-        fontSize: 14,
         fontWeight: 'bold',
         color: theme.colors.warnText,
         marginLeft: 6,
     },
     approvalPrompt: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.text,
         lineHeight: 18,
         marginBottom: 4,
     },
     approvalSub: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
         marginBottom: 10,
     },
@@ -1698,15 +1691,15 @@ const styles = StyleSheet.create({
         borderColor: theme.colors.border,
     },
     rejectBtnText: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
     },
     approveBtn: {
         backgroundColor: theme.colors.successText,
     },
     approveBtnText: {
-        fontSize: 13,
-        color: '#fff',
+        fontSize: auxFontSizes.secondary,
+        color: theme.colors.white,
         fontWeight: 'bold',
     },
     inputArea: {
@@ -1714,7 +1707,7 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         backgroundColor: theme.colors.surface,
         borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: '#E5E7EB',
+        borderTopColor: theme.colors.border,
         position: 'relative',
         zIndex: 25,
     },
@@ -1723,7 +1716,7 @@ const styles = StyleSheet.create({
         bottom: '100%',
         left: 14,
         marginBottom: 8,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: theme.colors.white,
         borderRadius: 14,
         paddingVertical: 4,
         paddingHorizontal: 4,
@@ -1734,7 +1727,7 @@ const styles = StyleSheet.create({
         shadowRadius: 10,
         elevation: 8,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: '#E5E7EB',
+        borderColor: theme.colors.border,
         zIndex: 100,
     },
     attachMenuItem: {
@@ -1759,13 +1752,12 @@ const styles = StyleSheet.create({
         backgroundColor: '#FEF3C7',
     },
     attachMenuText: {
-        fontSize: 14,
         fontWeight: '500',
-        color: '#1F2937',
+        color: theme.colors.text,
     },
     attachMenuDivider: {
         height: StyleSheet.hairlineWidth,
-        backgroundColor: '#F3F4F6',
+        backgroundColor: theme.colors.inputBg,
         marginHorizontal: 8,
         marginVertical: 1,
     },
@@ -1786,20 +1778,20 @@ const styles = StyleSheet.create({
         width: 58,
         height: 58,
         borderRadius: 8,
-        backgroundColor: '#E5E7EB',
+        backgroundColor: theme.colors.border,
     },
     draftFileBox: {
         flexDirection: 'row',
         alignItems: 'center',
         height: 58,
         paddingHorizontal: 10,
-        backgroundColor: '#E5E7EB',
+        backgroundColor: theme.colors.border,
         borderRadius: 8,
         maxWidth: 160,
     },
     draftFileName: {
-        fontSize: 12,
-        color: '#374151',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.text,
         marginLeft: 4,
         flexShrink: 1,
     },
@@ -1822,7 +1814,7 @@ const styles = StyleSheet.create({
     draftAttachment: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F0F2F5',
+        backgroundColor: theme.colors.background,
         borderRadius: 12,
         padding: 6,
         marginRight: 8,
@@ -1837,14 +1829,14 @@ const styles = StyleSheet.create({
         flexShrink: 1,
         maxWidth: 120,
         marginHorizontal: 6,
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.text,
     },
     draftAttachmentRemove: {
         padding: 8,
     },
     inputCapsule: {
-        backgroundColor: '#F0F2F5',
+        backgroundColor: theme.colors.background,
         borderRadius: 22,
         paddingHorizontal: 8,
         paddingTop: 6,
@@ -1871,7 +1863,7 @@ const styles = StyleSheet.create({
         height: 140,
         borderRadius: 10,
         marginBottom: 6,
-        backgroundColor: '#E5E7EB',
+        backgroundColor: theme.colors.border,
     },
     attachmentFileBox: {
         flexDirection: 'row',
@@ -1886,21 +1878,21 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255, 255, 255, 0.2)',
     },
     attachmentFileBoxAssistant: {
-        backgroundColor: '#E5E7EB',
+        backgroundColor: theme.colors.border,
     },
     attachmentFileIcon: {
         marginRight: 6,
     },
     attachmentFileName: {
-        fontSize: 13,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '500',
         flexShrink: 1,
     },
     attachmentFileNameUser: {
-        color: '#fff',
+        color: theme.colors.white,
     },
     attachmentFileNameAssistant: {
-        color: '#111827',
+        color: theme.colors.text,
     },
     chatInput: {
         flex: 1,
@@ -1908,8 +1900,7 @@ const styles = StyleSheet.create({
         minHeight: 36,
         paddingHorizontal: 4,
         paddingVertical: 6,
-        fontSize: 15,
-        color: '#111827',
+        color: theme.colors.text,
         lineHeight: 20,
     },
     sendBtnActive: {
@@ -1933,7 +1924,7 @@ const styles = StyleSheet.create({
     stopSquare: {
         width: 12,
         height: 12,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: theme.colors.white,
         borderRadius: 2,
     },
     scrollBottomContainer: {
@@ -1960,7 +1951,7 @@ const styles = StyleSheet.create({
     queuedBadge: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#E5E7EB',
+        backgroundColor: theme.colors.border,
         borderRadius: 10,
         paddingHorizontal: 6,
         paddingVertical: 1,
@@ -1970,12 +1961,12 @@ const styles = StyleSheet.create({
         marginRight: 3,
     },
     queuedText: {
-        fontSize: 11,
-        color: '#4B5563',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.textSecondary,
         fontWeight: '500',
     },
     userErrorText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.dangerStrong,
         marginTop: 4,
     },
@@ -2005,8 +1996,8 @@ const styles = StyleSheet.create({
         marginRight: 6,
     },
     toastText: {
-        color: '#ffffff',
-        fontSize: 14,
+        color: theme.colors.white,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '500',
     },
     slashMenuContainer: {
@@ -2036,7 +2027,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 12,
         paddingVertical: 10,
         borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#F3F4F6',
+        borderBottomColor: theme.colors.inputBg,
     },
     slashItemIconWrap: {
         width: 32,
@@ -2061,20 +2052,19 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
     },
     slashItemLabel: {
-        fontSize: 14,
         fontWeight: '600',
         color: theme.colors.text,
     },
     slashItemTypeTag: {
-        fontSize: 11,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
-        backgroundColor: '#F3F4F6',
+        backgroundColor: theme.colors.inputBg,
         paddingHorizontal: 6,
         paddingVertical: 2,
         borderRadius: 4,
     },
     slashItemDesc: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
         marginTop: 2,
     },

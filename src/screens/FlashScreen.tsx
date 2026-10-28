@@ -308,8 +308,6 @@ const styles = StyleSheet.create({
         marginBottom: theme.spacing.xs,
     },
     content: {
-        fontSize: 16,
         color: theme.colors.text,
-        lineHeight: 24,
     },
 });

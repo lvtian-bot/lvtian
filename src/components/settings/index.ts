@@ -6,4 +6,3 @@ export { SettingsFieldInput } from './SettingsFieldInput';
 export { SettingsPrimaryButton } from './SettingsPrimaryButton';
 export { SettingsToast, useSettingsToast } from './SettingsToast';
 export { useSettingsFont } from './useSettingsFont';
-export { settingsFont } from './tokens';

@@ -4,7 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { useTranslation } from 'react-i18next';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../utils/theme';
-import { settingsFont } from '../components/settings';
+import { auxFontSizes } from '../utils/fontSize';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { WebDavProvider } from '../services/WebDavProvider';
 import { cloudService } from '../services/CloudService';
@@ -239,12 +239,12 @@ const styles = StyleSheet.create({
     },
     hintText: {
         flex: 1,
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.primaryDark,
         lineHeight: 18,
     },
     note: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textTertiary,
         lineHeight: 18,
         textAlign: 'center',
@@ -263,7 +263,7 @@ const styles = StyleSheet.create({
     },
     errorText: {
         flex: 1,
-        fontSize: settingsFont.caption,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.dangerText,
     },
 });

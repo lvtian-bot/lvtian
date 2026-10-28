@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-nati
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
-import { settingsFont } from './tokens';
+import { auxFontSizes } from '../../utils/fontSize';
 
 export const SettingsGroup: React.FC<PropsWithChildren> = ({ children }) => (
     <View style={styles.group}>{children}</View>
@@ -87,7 +87,7 @@ const styles = StyleSheet.create({
         elevation: 0.5,
     },
     groupLabel: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '600',
         color: theme.colors.primaryDark,
         letterSpacing: 0.3,
@@ -120,11 +120,11 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
     },
     rowSubtitle: {
-        fontSize: settingsFont.caption,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textTertiary,
     },
     rowValue: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textTertiary,
         maxWidth: '40%',
     },

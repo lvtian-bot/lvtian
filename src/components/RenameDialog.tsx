@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { theme } from '../utils/theme';
 import { useTranslation } from 'react-i18next';
+import { useSettingsFont } from './settings';
 
 interface RenameDialogProps {
     visible: boolean;
@@ -26,6 +27,7 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
     onCancel,
 }) => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
     const [newName, setNewName] = useState(currentName);
     const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
 
@@ -59,11 +61,11 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
                 style={styles.overlay}
             >
                 <View style={styles.container}>
-                    <Text style={styles.title}>{t('common.rename')}</Text>
+                    <Text style={[styles.title, { fontSize: font.chatHeading2 }]}>{t('common.rename')}</Text>
 
                     <TextInput
                         ref={inputRef}
-                        style={styles.input}
+                        style={[styles.input, { fontSize: font.chatBody }]}
                         value={newName}
                         onChangeText={setNewName}
                         placeholder={t('common.enterNewName')}
@@ -77,14 +79,14 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
                             style={[styles.button, styles.cancelButton]}
                             onPress={onCancel}
                         >
-                            <Text style={styles.cancelButtonText}>{t('common.cancel')}</Text>
+                            <Text style={[styles.cancelButtonText, { fontSize: font.chatBody }]}>{t('common.cancel')}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             style={[styles.button, styles.confirmButton]}
                             onPress={handleConfirm}
                         >
-                            <Text style={styles.confirmButtonText}>{t('common.confirm')}</Text>
+                            <Text style={[styles.confirmButtonText, { fontSize: font.chatBody }]}>{t('common.confirm')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -107,7 +109,6 @@ const styles = StyleSheet.create({
         padding: theme.spacing.l,
     },
     title: {
-        fontSize: 18,
         fontWeight: '600',
         color: theme.colors.text,
         marginBottom: theme.spacing.m,
@@ -118,7 +119,6 @@ const styles = StyleSheet.create({
         borderColor: theme.colors.border,
         borderRadius: 8,
         padding: theme.spacing.m,
-        fontSize: 16,
         color: theme.colors.text,
         marginBottom: theme.spacing.l,
     },
@@ -138,7 +138,6 @@ const styles = StyleSheet.create({
     },
     cancelButtonText: {
         color: theme.colors.textSecondary,
-        fontSize: 16,
         fontWeight: '600',
     },
     confirmButton: {
@@ -147,7 +146,6 @@ const styles = StyleSheet.create({
     },
     confirmButtonText: {
         color: theme.colors.white,
-        fontSize: 16,
         fontWeight: '600',
     },
 });

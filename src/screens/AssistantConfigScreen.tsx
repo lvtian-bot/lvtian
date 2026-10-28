@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import * as Clipboard from 'expo-clipboard';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../utils/theme';
-import { settingsFont } from '../components/settings';
+import { auxFontSizes } from '../utils/fontSize';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
 import {
@@ -245,12 +245,12 @@ const styles = StyleSheet.create({
         marginBottom: 4,
     },
     pasteBarText: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         fontWeight: '600',
         color: theme.colors.successText,
     },
     note: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textTertiary,
         lineHeight: 18,
         textAlign: 'center',
@@ -274,7 +274,7 @@ const styles = StyleSheet.create({
     },
     resultText: {
         flex: 1,
-        fontSize: settingsFont.caption,
+        fontSize: auxFontSizes.caption,
     },
     resultTextSuccess: {
         color: theme.colors.successText,

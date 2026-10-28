@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
+import { theme } from '../utils/theme';
 
 interface ImageViewerModalProps {
     visible: boolean;
@@ -247,7 +248,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
 
                 {loading && (
                     <View style={styles.loadingContainer} pointerEvents="none">
-                        <ActivityIndicator size="large" color="#FFFFFF" />
+                        <ActivityIndicator size="large" color={theme.colors.white} />
                     </View>
                 )}
 
@@ -261,7 +262,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
                     accessibilityLabel={t('common.close', '关闭')}
                     activeOpacity={0.7}
                 >
-                    <Icon name="close" size={22} color="#FFFFFF" />
+                    <Icon name="close" size={22} color={theme.colors.white} />
                 </TouchableOpacity>
             </View>
         </Modal>

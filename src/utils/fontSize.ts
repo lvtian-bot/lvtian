@@ -70,3 +70,10 @@ export const FONT_SIZE_METRICS: Record<FontSizePreference, FontSizeMetrics> = {
 export const getFontSizeMetrics = (preference?: FontSizePreference): FontSizeMetrics => {
     return FONT_SIZE_METRICS[preference || 'standard'] || FONT_SIZE_METRICS.standard;
 };
+
+/** 全 App 辅助字号；正文与标题字号由 FontSizeMetrics 按字体档位动态提供 */
+export const auxFontSizes = {
+    badge: 10,
+    caption: 12,
+    secondary: 13,
+} as const;

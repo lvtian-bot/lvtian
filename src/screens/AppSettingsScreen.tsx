@@ -2,10 +2,9 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { theme } from '../utils/theme';
-import { settingsFont } from '../components/settings';
 import { useSettingsStore, type FontSizePreference } from '../store/useSettingsStore';
 import { markdownThemes, type MarkdownThemeKey } from '../utils/markdownThemes';
-import { getFontSizeMetrics } from '../utils/fontSize';
+import { getFontSizeMetrics, auxFontSizes } from '../utils/fontSize';
 import {
     SettingsChoice,
     SettingsGroup,
@@ -159,7 +158,7 @@ const styles = StyleSheet.create({
         color: theme.colors.text,
     },
     note: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textTertiary,
         lineHeight: 18,
         textAlign: 'center',

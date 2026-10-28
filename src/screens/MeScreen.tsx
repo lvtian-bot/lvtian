@@ -11,12 +11,14 @@ import { fsService } from '../services/FileSystemService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { theme } from '../utils/theme';
+import { auxFontSizes } from '../utils/fontSize';
 import { RootStackParamList } from '../types/navigation';
-import { SettingsGroup, SettingsRow, settingsFont } from '../components/settings';
+import { SettingsGroup, SettingsRow, useSettingsFont } from '../components/settings';
 
 type SettingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export const MeScreen = () => {
+    const font = useSettingsFont();
     const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
@@ -136,7 +138,7 @@ export const MeScreen = () => {
                             onPress={() => navigation.navigate('AssistantConfig')}
                         >
                             <View style={styles.userInfo}>
-                                <Text style={styles.userName}>{t('app.name', '绿天')}</Text>
+                                <Text style={[styles.userName, { fontSize: font.chatHeading2 }]}>{t('app.name', '绿天')}</Text>
                                 <View style={styles.statusRow}>
                                     <View style={[styles.statusDot, isConnected && styles.connectedDot]} />
                                     <Text style={styles.userSyncStatus} numberOfLines={1}>
@@ -278,7 +280,6 @@ const styles = StyleSheet.create({
         marginRight: theme.spacing.s,
     },
     userName: {
-        fontSize: 18,
         fontWeight: '700',
         color: theme.colors.text,
         marginBottom: 6,
@@ -298,7 +299,7 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.success,
     },
     userSyncStatus: {
-        fontSize: settingsFont.secondary,
+        fontSize: auxFontSizes.secondary,
         color: theme.colors.textSecondary,
         flexShrink: 1,
     },

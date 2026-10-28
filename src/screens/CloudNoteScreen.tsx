@@ -17,6 +17,8 @@ import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
 
 import { theme } from '../utils/theme';
+import { auxFontSizes } from '../utils/fontSize';
+import { useSettingsFont } from '../components/settings';
 import { RootStackParamList } from '../types/navigation';
 import { cloudService, CLOUD_INIT_COMPLETED_EVENT } from '../services/CloudService';
 
@@ -52,6 +54,7 @@ interface DisplayItem {
 
 export const CloudNoteScreen = () => {
     const { t } = useTranslation();
+    const font = useSettingsFont();
     const navigation = useNavigation<NavigationProp>();
     const route = useRoute<RoutePropType>();
 
@@ -301,7 +304,7 @@ export const CloudNoteScreen = () => {
                     <Icon name={iconName} size={28} color={iconColor} />
                 </View>
                 <View style={styles.contentContainer}>
-                    <Text style={styles.itemName} numberOfLines={1}>
+                    <Text style={[styles.itemName, { fontSize: font.chatBody }]} numberOfLines={1}>
                         {item.name}
                     </Text>
                     <Text style={styles.itemDetails}>
@@ -319,8 +322,8 @@ export const CloudNoteScreen = () => {
         return (
             <View style={styles.centerContainer}>
                 <Icon name="cloud-off" size={48} color={theme.colors.textSecondary} />
-                <Text style={styles.messageTitle}>{t('browser.unconfiguredTitle', { defaultValue: '未配置网盘服务' })}</Text>
-                <Text style={styles.messageText}>
+                <Text style={[styles.messageTitle, { fontSize: font.chatHeading2 }]}>{t('browser.unconfiguredTitle', { defaultValue: '未配置网盘服务' })}</Text>
+                <Text style={[styles.messageText, { fontSize: font.chatBody }]}>
                     {t('browser.unconfiguredDesc', { defaultValue: '当前尚未配置 WebDAV 网盘信息，配置后即可在线查看网盘中的历史笔记。' })}
                 </Text>
                 <TouchableOpacity
@@ -328,7 +331,7 @@ export const CloudNoteScreen = () => {
                     onPress={() => navigation.navigate('CloudRepoConfig')}
                     activeOpacity={0.7}
                 >
-                    <Text style={styles.primaryButtonText}>{t('browser.goToConfig', { defaultValue: '前往配置网盘' })}</Text>
+                    <Text style={[styles.primaryButtonText, { fontSize: font.chatBody }]}>{t('browser.goToConfig', { defaultValue: '前往配置网盘' })}</Text>
                 </TouchableOpacity>
             </View>
         );
@@ -358,7 +361,7 @@ export const CloudNoteScreen = () => {
             {/* 错误提示条 */}
             {errorMessage && (
                 <View style={styles.errorBanner}>
-                    <Icon name="error-outline" size={18} color="#d32f2f" />
+                    <Icon name="error-outline" size={18} color={theme.colors.dangerStrong} />
                     <Text style={styles.errorBannerText} numberOfLines={2}>
                         {errorMessage}
                     </Text>
@@ -372,7 +375,7 @@ export const CloudNoteScreen = () => {
             {loading && !refreshing ? (
                 <View style={styles.centerContainer}>
                     <ActivityIndicator size="large" color={theme.colors.primary} />
-                    <Text style={styles.loadingText}>{t('common.loading', { defaultValue: '加载中...' })}</Text>
+                    <Text style={[styles.loadingText, { fontSize: font.chatBody }]}>{t('common.loading', { defaultValue: '加载中...' })}</Text>
                 </View>
             ) : (
                 <FlatList
@@ -391,7 +394,7 @@ export const CloudNoteScreen = () => {
                         !errorMessage ? (
                             <View style={styles.emptyContainer}>
                                 <Icon name="folder-open" size={48} color={theme.colors.border} />
-                                <Text style={styles.emptyText}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
+                                <Text style={[styles.emptyText, { fontSize: font.chatBody }]}>{t('browser.emptyDirectory', { defaultValue: '此目录下暂无文件' })}</Text>
                             </View>
                         ) : undefined
                     }
@@ -413,7 +416,7 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         backgroundColor: theme.colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#f0f0f0',
+        borderBottomColor: theme.colors.skeleton,
         gap: 8,
     },
     backParentButton: {
@@ -422,14 +425,14 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 6,
-        backgroundColor: '#f5f5f5',
+        backgroundColor: theme.colors.skeleton,
         gap: 2,
     },
     disabledButton: {
-        backgroundColor: '#fafafa',
+        backgroundColor: theme.colors.skeleton,
     },
     backParentText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.primary,
         fontWeight: '500',
     },
@@ -440,27 +443,27 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     pathText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
         fontFamily: 'monospace',
     },
     errorBanner: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#ffebee',
+        backgroundColor: theme.colors.dangerBg,
         paddingHorizontal: 16,
         paddingVertical: 8,
         gap: 8,
     },
     errorBannerText: {
         flex: 1,
-        fontSize: 12,
-        color: '#d32f2f',
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.dangerStrong,
     },
     retryText: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         fontWeight: 'bold',
-        color: '#d32f2f',
+        color: theme.colors.dangerStrong,
         paddingHorizontal: 8,
         paddingVertical: 4,
     },
@@ -477,7 +480,7 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
         backgroundColor: theme.colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#f4f4f4',
+        borderBottomColor: theme.colors.skeleton,
     },
     iconContainer: {
         marginRight: 12,
@@ -488,13 +491,12 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     itemName: {
-        fontSize: 15,
         fontWeight: '500',
         color: theme.colors.text,
         marginBottom: 2,
     },
     itemDetails: {
-        fontSize: 12,
+        fontSize: auxFontSizes.caption,
         color: theme.colors.textSecondary,
     },
     centerContainer: {
@@ -511,23 +513,19 @@ const styles = StyleSheet.create({
     },
     emptyText: {
         marginTop: 12,
-        fontSize: 14,
         color: theme.colors.textSecondary,
     },
     loadingText: {
         marginTop: 12,
-        fontSize: 14,
         color: theme.colors.textSecondary,
     },
     messageTitle: {
-        fontSize: 18,
         fontWeight: 'bold',
         color: theme.colors.text,
         marginTop: 16,
         marginBottom: 8,
     },
     messageText: {
-        fontSize: 14,
         color: theme.colors.textSecondary,
         textAlign: 'center',
         lineHeight: 20,
@@ -540,8 +538,7 @@ const styles = StyleSheet.create({
         borderRadius: 8,
     },
     primaryButtonText: {
-        color: '#fff',
-        fontSize: 14,
+        color: theme.colors.white,
         fontWeight: '600',
     },
 });
