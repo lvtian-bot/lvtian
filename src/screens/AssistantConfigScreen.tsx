@@ -7,6 +7,8 @@ import { theme } from '../utils/theme';
 import { auxFontSizes } from '../utils/fontSize';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from '../services/AssistantClient';
+import { ConnectionConfigError } from '../services/connectionConfig';
+import { connectionErrorKey } from '../utils/connectionErrorPresentation';
 import {
     SettingsFieldInput,
     SettingsGroup,
@@ -24,7 +26,8 @@ interface TestResult {
 
 export const AssistantConfigScreen = () => {
     const { t } = useTranslation();
-    const { serverUrl, serverToken, connectionState, setServerConfig } = useAssistantStore();
+    const { serverUrl, serverToken, connectionState, setServerConfig, credentialsStatus,
+        credentialsError, loadSavedCredentials } = useAssistantStore();
     const { toast, showToast } = useSettingsToast();
 
     const isConnected = connectionState === 'connected';
@@ -96,8 +99,8 @@ export const AssistantConfigScreen = () => {
             showToast(t('assistant.testAndSaveSuccess', '连接测试成功，配置已保存'));
         } catch (err: unknown) {
             setTesting(false);
-            const msg = err instanceof Error ? err.message : String(err);
-            setTestResult({ success: false, message: `${t('assistant.saveFailed', '保存配置失败')}: ${msg}` });
+            setTestResult({ success: false, message: t(err instanceof ConnectionConfigError
+                ? connectionErrorKey(err.code) : 'assistant.saveFailed') });
         }
     };
 
@@ -117,9 +120,18 @@ export const AssistantConfigScreen = () => {
                 <SettingsStatusCard
                     tone={isConnected ? 'success' : 'muted'}
                     title={statusTitle}
-                    subtitle={displayHost || t('assistant.serverNotSet', '未配置服务地址')}
+                    subtitle={displayHost || (credentialsStatus === 'ready' ? t('assistant.serverNotSet', '未配置服务地址') : undefined)}
                     badge={statusBadge}
                 />
+
+                {credentialsStatus === 'error' && <View style={[styles.resultBox, styles.resultFail]}>
+                    <Text accessibilityRole="alert" style={[styles.resultText, styles.resultTextFail]}>
+                        {t(connectionErrorKey(credentialsError))}
+                    </Text>
+                    <TouchableOpacity accessibilityRole="button" onPress={() => { loadSavedCredentials().catch(() => undefined); }}>
+                        <Text style={[styles.resultTextFail, { fontSize: auxFontSizes.caption }]}>{t('browser.retry')}</Text>
+                    </TouchableOpacity>
+                </View>}
 
                 <SettingsGroupLabel>{t('assistant.serverGroup', '服务端')}</SettingsGroupLabel>
                 <SettingsGroup>

@@ -58,6 +58,8 @@ import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics, auxFontSizes } from '../utils/fontSize';
 import i18n from '../i18n';
+import { connectionErrorKey } from '../utils/connectionErrorPresentation';
+import { ConnectionConfigError } from '../services/connectionConfig';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -166,6 +168,13 @@ export const ChatScreen = () => {
 
     const {
         serverUrl,
+        serverToken,
+        hasHydrated,
+        credentialsStatus,
+        credentialsError,
+        chatHydrationError,
+        chatCacheError,
+        loadSavedCredentials,
         connectionState,
         connectionError,
         isServerUpgrading,
@@ -177,6 +186,7 @@ export const ChatScreen = () => {
     } = useAssistantStore();
 
     const [inputContent, setInputContent] = useState('');
+    const [retryingStorage, setRetryingStorage] = useState(false);
     const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
     const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
     const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
@@ -407,10 +417,10 @@ export const ChatScreen = () => {
 
     useEffect(() => {
         // 自动连接
-        if (serverUrl) {
+        if (serverUrl && hasHydrated && !chatHydrationError && credentialsStatus === 'ready') {
             AssistantClient.getInstance().connect();
         }
-    }, [serverUrl]);
+    }, [serverUrl, serverToken, hasHydrated, chatHydrationError, credentialsStatus]);
 
     const pickImage = useCallback(async () => {
         try {
@@ -608,7 +618,13 @@ export const ChatScreen = () => {
             }
             const parsed = AssistantClient.parseConnectionUrl(text);
             if (parsed.url && parsed.token) {
-                await setServerConfig(parsed.url, parsed.token);
+                try {
+                    await setServerConfig(parsed.url, parsed.token);
+                } catch (failure) {
+                    Alert.alert(t('common.error'), t(failure instanceof ConnectionConfigError
+                        ? connectionErrorKey(failure.code) : 'assistant.saveFailed'));
+                    return;
+                }
                 AssistantClient.getInstance().connect();
                 Alert.alert(t('common.success', '成功'), t('assistant.configApplied', '已成功解析并应用配置'));
             } else if (parsed.url && !parsed.token) {
@@ -621,8 +637,48 @@ export const ChatScreen = () => {
         }
     };
 
+    // Loading is not an unconfigured connection. Never offer replacement input
+    // before the saved credentials have been read successfully.
+    if (credentialsStatus === 'loading' || (credentialsStatus !== 'error' && !hasHydrated)) {
+        return <View style={styles.centerContainer}><ActivityIndicator color={theme.colors.primary} /></View>;
+    }
+
+    if (credentialsStatus === 'error' || chatHydrationError) {
+        const failureKey = credentialsStatus === 'error'
+            ? connectionErrorKey(credentialsError) : 'assistant.chatReadFailed';
+        const retry = async () => {
+            if (retryingStorage) return;
+            setRetryingStorage(true);
+            try {
+                if (credentialsStatus === 'error') await loadSavedCredentials();
+                if (useAssistantStore.getState().chatHydrationError) {
+                    AssistantClient.getInstance().disconnect();
+                    await useAssistantStore.persist.rehydrate();
+                    // The storage callback settles state in a microtask.
+                    await Promise.resolve();
+                }
+                if (!useAssistantStore.getState().chatHydrationError) await AssistantClient.getInstance().connect(true);
+            } catch {
+                // The store retains a localized, retryable failure; never report success.
+            } finally { setRetryingStorage(false); }
+        };
+        return <View style={styles.centerContainer}>
+            <View style={styles.guideCard}>
+                <Text accessibilityRole="alert" style={[styles.guideDesc, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]}>
+                    {t(failureKey)}
+                </Text>
+                <TouchableOpacity accessibilityRole="button" disabled={retryingStorage} style={styles.primaryBtn} onPress={retry}>
+                    <Text style={[styles.primaryBtnText, { fontSize: metrics.chatBody }]}>{t('browser.retry')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity accessibilityRole="button" style={styles.secondaryBtn} onPress={() => navigation.navigate('AssistantConfig')}>
+                    <Text style={[styles.secondaryBtnText, { fontSize: metrics.chatBody }]}>{t('assistant.goToConfig')}</Text>
+                </TouchableOpacity>
+            </View>
+        </View>;
+    }
+
     // 1. 未配置连接时的引导界面
-    if (!serverUrl) {
+    if (!serverUrl && credentialsStatus === 'ready') {
         return (
             <View style={styles.centerContainer}>
                 <View style={styles.guideCard}>
@@ -668,6 +724,13 @@ export const ChatScreen = () => {
                     </View>
                 </View>
             )}
+            {chatCacheError && <View style={styles.statusBar}>
+                <Text accessibilityRole="alert" style={styles.statusText}>{t('settings.failure')}</Text>
+                <TouchableOpacity accessibilityRole="button" style={styles.reconnectBtn}
+                    onPress={() => useAssistantStore.setState({ chatCacheError: null })}>
+                    <Text style={styles.reconnectBtnText}>{t('browser.retry')}</Text>
+                </TouchableOpacity>
+            </View>}
             {/* 服务端升级中温和提示横幅；升级期间隐藏普通未连接条，消除断网误解 */}
             {isServerUpgrading ? (
                 <View style={styles.upgradingBanner}>

@@ -131,6 +131,7 @@
 ### 2.2 技术骨架
 
 - **分层协作**：`App.tsx` 为应用主入口（Provider 初始化与状态挂载）；`navigation/` 与 `screens/` 构成 UI 层；核心业务逻辑下沉 `services/`（业务中枢）；全局状态由 `store/`（Zustand）管理。
+- **连接配置与聊天缓存**：`connectionConfig.ts` 独立管理唯一地址记录与 SecureStore 令牌，禁止随聊天缓存序列化或增加地址副本兜底。`credentialsStatus` 只管连接初始化；聊天读取失败必须显式报告且保护原缓存，任务 HTTP 不依赖聊天水合，聊天发送与 WebSocket 对账须等缓存成功读取。详见 `docs/服务端/服务端架构与协议.md`。
 - **云同步链路**：`CloudService` 作为云策略入口调度 `WebDavProvider`（原腾讯云 COS 已退出）；`SyncService` 实现三阶段同步引擎（ETag 乐观锁、diff-match-patch 三路合并、`ShadowFileService` 维护的 `.shadows/` 影子基准）；`useFileMetadataStore` 保存 ETag/LastModified 作为冲突检测核心依据；`useSyncStore` 以 Write-Through 机制（写入即入队）管理上传队列。
 - **云优先数据流**：“列表即菜单，点击即下单”——本地缓存仅作首屏加速，云端为唯一真相来源；`useFileListStore` 保存云端列表快照。
 - **闪念与待办**：`FlashNoteService` 向 `flash_notes.md` 时间线流式追加写入；待办系统后续由服务端驱动，原 Markdown `TodoParser` 已清理；`FlashNoteInputModal` 为全局快速录入模态框。

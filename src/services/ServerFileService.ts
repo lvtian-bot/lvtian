@@ -35,11 +35,12 @@ export class ServerFileService {
         let url = store.serverUrl;
         let token = store.serverToken;
 
-        // 如果 store 里暂无 token，尝试异步从 SecureStore 读取
-        if (!token) {
+        // Do not treat a failed credentials read as an absent configuration or
+        // reuse stale memory values after a failed save/read.
+        if (store.credentialsStatus !== 'ready') {
             const creds = await store.loadSavedCredentials();
-            url = creds.url || url;
-            token = creds.token || token;
+            url = creds.url;
+            token = creds.token;
         }
 
         const cleanUrl = (url || '').trim().replace(/\/+$/, '');
