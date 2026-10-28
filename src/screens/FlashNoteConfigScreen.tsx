@@ -41,11 +41,14 @@ export const FlashNoteConfigScreen = () => {
     const [suffixOpen, setSuffixOpen] = useState(false);
     const [saving, setSaving] = useState(false);
 
-    // store 变更（含保存与远端同步）后回填表单
+    // store 变更后回填各自表单项；分开跟随，避免保存一项时重置另一项未保存的草稿
     useEffect(() => {
         setFullPath(fullPathValue);
+    }, [fullPathValue]);
+
+    useEffect(() => {
         setHistoryFolderPath(flashNoteConfig.historyFolderPath || '');
-    }, [fullPathValue, flashNoteConfig.historyFolderPath]);
+    }, [flashNoteConfig.historyFolderPath]);
 
     const suffixDisplay = (() => {
         if (!flashNoteConfig.suffix) return t('settings.suffixPresets.none');
