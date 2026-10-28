@@ -55,7 +55,6 @@ const styles = StyleSheet.create({
         backgroundColor: theme.colors.primaryDark,
         borderRadius: 13,
         paddingVertical: 13,
-        marginHorizontal: 20,
         marginTop: 16,
         shadowColor: theme.colors.primaryDark,
         shadowOffset: { width: 0, height: 6 },

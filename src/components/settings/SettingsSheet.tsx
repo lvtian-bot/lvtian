@@ -10,7 +10,6 @@ import {
     KeyboardAvoidingView,
     Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
 
@@ -23,6 +22,7 @@ interface SettingsSheetProps {
     children: React.ReactNode;
 }
 
+/** 设置区居中弹窗：选项类设置的统一容器 */
 export const SettingsSheet: React.FC<SettingsSheetProps> = ({
     visible,
     title,
@@ -44,20 +44,17 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                 <TouchableWithoutFeedback>
                     <KeyboardAvoidingView
                         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                        style={styles.sheetSafe}
+                        style={styles.centerWrap}
                     >
-                        <SafeAreaView edges={['bottom']} style={styles.sheetSafe}>
-                            <View style={styles.sheet}>
-                                <View style={styles.handle} />
-                                <Text style={[styles.sheetTitle, { fontSize: font.chatBody }]}>{title}</Text>
-                                <ScrollView
-                                    keyboardShouldPersistTaps="handled"
-                                    contentContainerStyle={styles.sheetContent}
-                                >
-                                    {children}
-                                </ScrollView>
-                            </View>
-                        </SafeAreaView>
+                        <View style={styles.dialog}>
+                            <Text style={[styles.dialogTitle, { fontSize: font.chatBody }]}>{title}</Text>
+                            <ScrollView
+                                keyboardShouldPersistTaps="handled"
+                                contentContainerStyle={styles.dialogContent}
+                            >
+                                {children}
+                            </ScrollView>
+                        </View>
                     </KeyboardAvoidingView>
                 </TouchableWithoutFeedback>
             </TouchableOpacity>
@@ -69,40 +66,33 @@ const styles = StyleSheet.create({
     overlay: {
         flex: 1,
         backgroundColor: 'rgba(15, 23, 42, 0.42)',
-        justifyContent: 'flex-end',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
-    sheetSafe: {
-        width: '100%',
+    centerWrap: {
+        width: '86%',
+        maxWidth: 400,
     },
-    sheet: {
+    dialog: {
         backgroundColor: theme.colors.surface,
-        borderTopLeftRadius: 22,
-        borderTopRightRadius: 22,
-        paddingTop: 6,
-        paddingBottom: 8,
+        borderRadius: 16,
+        paddingTop: 14,
+        paddingBottom: 10,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: -6 },
-        shadowOpacity: 0.12,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.18,
         shadowRadius: 16,
         elevation: 12,
     },
-    handle: {
-        width: 36,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: theme.colors.chevron,
-        alignSelf: 'center',
-        marginBottom: 2,
-    },
-    sheetTitle: {
+    dialogTitle: {
         fontWeight: '600',
         color: theme.colors.text,
         textAlign: 'center',
-        paddingHorizontal: 20,
-        paddingTop: 8,
-        paddingBottom: 6,
+        paddingHorizontal: 18,
+        paddingBottom: 10,
     },
-    sheetContent: {
-        paddingBottom: 8,
+    dialogContent: {
+        paddingHorizontal: 14,
+        paddingBottom: 4,
     },
 });
