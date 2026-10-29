@@ -12,11 +12,12 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics } from '../utils/fontSize';
 import { taskDateTime, taskFrequency, taskTimeZone, taskZoneLabel } from '../utils/automaticTaskPresentation';
 import { theme } from '../utils/theme';
+import { connectionErrorKey } from '../utils/connectionErrorPresentation';
 
 const TaskSeparator = () => <View style={styles.separator} />;
 const connectionIdentity = () => {
     const state = useAssistantStore.getState();
-    return JSON.stringify([state.serverUrl, state.serverToken, state.hasHydrated]);
+    return JSON.stringify([state.serverUrl, state.serverToken, state.credentialsStatus]);
 };
 type RefreshMode = 'normal' | 'force' | 'manual';
 
@@ -25,7 +26,7 @@ export const TodoScreen = () => {
     const navigation = useNavigation();
     const metrics = getFontSizeMetrics(useSettingsStore(state => state.fontSize));
     const body = { fontSize: metrics.flashBody, lineHeight: metrics.flashLineHeight };
-    const renderIdentity = useAssistantStore(state => JSON.stringify([state.serverUrl, state.serverToken, state.hasHydrated]));
+    const renderIdentity = useAssistantStore(state => JSON.stringify([state.serverUrl, state.serverToken, state.credentialsStatus]));
     const [tasks, setTasks] = useState<AutomaticTask[]>([]);
     const [viewIdentity, setViewIdentity] = useState(renderIdentity);
     const [loading, setLoading] = useState(true);
@@ -63,7 +64,13 @@ export const TodoScreen = () => {
         setLoading(true); setManualRefreshing(mode === 'manual'); setError(undefined);
         try {
             const state = useAssistantStore.getState();
-            if (!state.hasHydrated) throw new AutomaticTaskError('connection_not_ready');
+            if (state.credentialsStatus === 'error' && mode !== 'normal') {
+                await state.loadSavedCredentials();
+                // A successful retry changes identity and the subscription starts a
+                // new request. Never apply data fetched under the failed identity.
+                return;
+            }
+            if (state.credentialsStatus !== 'ready') throw new AutomaticTaskError('connection_not_ready');
             const { serverUrl, serverToken } = useAssistantStore.getState();
             if (!snapshot.current) {
                 const cached = await automaticTaskCache.read(serverUrl, serverToken);
@@ -93,13 +100,17 @@ export const TodoScreen = () => {
                     const { serverUrl, serverToken } = useAssistantStore.getState();
                     automaticTaskCache.write(serverUrl, serverToken, snapshot.current);
                 }
-                setError(failure instanceof AutomaticTaskError && failure.code === 'native_tasks_unavailable'
-                    ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed');
+                const state = useAssistantStore.getState();
+                if (state.credentialsStatus === 'error') setError(connectionErrorKey(state.credentialsError));
+                else if (state.credentialsStatus !== 'loading') {
+                    setError(failure instanceof AutomaticTaskError && failure.code === 'native_tasks_unavailable'
+                        ? 'automaticTasks.disabled' : 'automaticTasks.connectionFailed');
+                }
             }
         } finally {
             if (valid() && request.current === current) {
                 request.current = undefined;
-                setLoading(false); setManualRefreshing(false);
+                setLoading(useAssistantStore.getState().credentialsStatus === 'loading'); setManualRefreshing(false);
             }
         }
     }, []);
@@ -109,7 +120,7 @@ export const TodoScreen = () => {
         refresh();
         const stop = useAssistantStore.subscribe((next, previous) => {
             const changed = next.serverUrl !== previous.serverUrl || next.serverToken !== previous.serverToken
-                || next.hasHydrated !== previous.hasHydrated;
+                || next.credentialsStatus !== previous.credentialsStatus;
             if (changed) refresh();
             else if (next.connectionState === 'connected' && previous.connectionState !== 'connected') refresh('force');
         });

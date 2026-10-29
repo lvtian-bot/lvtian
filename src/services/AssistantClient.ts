@@ -347,18 +347,27 @@ export class AssistantClient {
      */
     public async connect(forceReconnect = false): Promise<void> {
         this.isExplicitlyClosed = false;
-        const store = useAssistantStore.getState();
+        let store = useAssistantStore.getState();
 
-        // 优先从 Zustand 内存读取 URL 与 Token，消除每次重连访问 SecureStore 的跨桥解密耗时
-        let url = store.serverUrl;
-        let token = store.serverToken;
-
-        // 仅在内存无 Token 时降级读取 SecureStore（冷启动初次水合场景）
-        if (!token || !url) {
-            const creds = await store.loadSavedCredentials();
-            url = creds.url;
-            token = creds.token;
+        // 已成功加载的配置（包括确实为空）直接使用内存值；未完成或失败时重读。
+        if (store.credentialsStatus !== 'ready') {
+            try {
+                await store.loadSavedCredentials();
+            } catch {
+                // Storage errors are distinct from an absent configuration. The store
+                // retains the safe error code and existing credentials for an explicit retry.
+                store.setConnectionState('disconnected', useAssistantStore.getState().credentialsError);
+                return;
+            }
         }
+
+        // Wait for the chat cursor before opening WebSocket, but do not make HTTP
+        // task access depend on chat cache hydration.
+        store = useAssistantStore.getState();
+        if (!store.hasHydrated || store.chatHydrationError || this.isExplicitlyClosed) return;
+        // Use the settled store snapshot if a save followed the pending read.
+        const url = store.serverUrl;
+        const token = store.serverToken;
 
         if (!url) {
             store.setConnectionState('disconnected', null);

@@ -1,5 +1,8 @@
 import { AutomaticTaskError, AutomaticTaskService, type AutomaticTaskFetch } from '../src/services/AutomaticTaskService';
 import { useAssistantStore } from '../src/store/useAssistantStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import { CONNECTION_CONFIG_KEY } from '../src/services/connectionConfig';
 import type { AutomaticTaskConnection, AutomaticTaskRecord } from '../src/types/automaticTasks';
 
 jest.mock('expo/fetch', () => ({ fetch: jest.fn() }));
@@ -23,7 +26,14 @@ function setup(data: unknown = { tasks: [] }, status = 200) {
     return { service, fetcher, connection };
 }
 
+const loadSavedCredentials = useAssistantStore.getState().loadSavedCredentials;
+
 describe('AutomaticTaskService read-only contract and isolation', () => {
+    beforeEach(() => {
+        useAssistantStore.setState({ credentialsStatus: 'ready', credentialsError: null,
+            chatHydrationError: null, loadSavedCredentials });
+    });
+    afterEach(() => { jest.restoreAllMocks(); });
     it('exposes only catalog/history/result data APIs, all GET with no request body', async () => {
         const { service, fetcher } = setup({ tasks: [{ ...task, sessionId: 'session', status: 'inactive' }] });
         expect((await service.catalog()).tasks).toHaveLength(1);
@@ -150,7 +160,7 @@ describe('AutomaticTaskService read-only contract and isolation', () => {
     it('does not send when identity switches during secure loading', async () => {
         const saved = deferred<{ url: string; token: string }>();
         const started = deferred<void>();
-        useAssistantStore.setState({ hasHydrated: true, serverUrl: 'https://old.test', serverToken: '',
+        useAssistantStore.setState({ hasHydrated: true, credentialsStatus: 'loading', serverUrl: 'https://old.test', serverToken: '',
             loadSavedCredentials: async () => { started.resolve(); return saved.promise; } });
         const fetcher = jest.fn<ReturnType<AutomaticTaskFetch>, Parameters<AutomaticTaskFetch>>();
         const service = new AutomaticTaskService({ fetch: fetcher });
@@ -177,24 +187,97 @@ describe('AutomaticTaskService read-only contract and isolation', () => {
         await expect(promise).rejects.toMatchObject({ code: 'connection_changed' });
         service.dispose();
     });
-    it('requires hydration then uses existing saved credentials; keeps generation stable until identity changes', async () => {
+    it('loads credentials independently of unsettled chat hydration and keeps identity stable', async () => {
         const load = jest.fn(async () => {
-            useAssistantStore.setState({ serverToken: 'saved' });
+            useAssistantStore.setState({ serverToken: 'saved', credentialsStatus: 'ready' });
             return { url: 'ws://saved.test', token: 'saved' };
         });
-        useAssistantStore.setState({ hasHydrated: false, serverUrl: 'ws://saved.test', serverToken: '', loadSavedCredentials: load });
+        useAssistantStore.setState({ hasHydrated: false, credentialsStatus: 'loading', serverUrl: 'ws://saved.test', serverToken: 'stale', loadSavedCredentials: load });
         const fetcher = jest.fn<ReturnType<AutomaticTaskFetch>, Parameters<AutomaticTaskFetch>>().mockResolvedValue(response({ tasks: [] }));
         const service = new AutomaticTaskService({ fetch: fetcher });
-        await expect(service.catalog()).rejects.toMatchObject({ code: 'connection_not_ready' });
-        expect(fetcher).not.toHaveBeenCalled();
-        useAssistantStore.setState({ hasHydrated: true });
-        const first = await service.catalog();
-        expect(first.generation).toBe(service.generation);
-        expect(load).toHaveBeenCalledTimes(1);
-        expect(fetcher.mock.calls[0][0]).toBe('http://saved.test/api/tasks');
-        expect((await service.catalog()).generation).toBe(first.generation);
-        useAssistantStore.setState({ serverToken: 'new' });
-        expect(service.generation).not.toBe(first.generation);
-        service.dispose();
+        try {
+            const first = await service.catalog();
+            expect(first.generation).toBe(service.generation);
+            expect(load).toHaveBeenCalledTimes(1);
+            expect(fetcher.mock.calls[0][0]).toBe('http://saved.test/api/tasks');
+            expect(fetcher.mock.calls[0][1].headers.Authorization).toBe('Bearer saved');
+            expect((await service.catalog()).generation).toBe(first.generation);
+            expect(load).toHaveBeenCalledTimes(1);
+            expect(useAssistantStore.getState().hasHydrated).toBe(false);
+            useAssistantStore.setState({ serverToken: 'new' });
+            expect(service.generation).not.toBe(first.generation);
+        } finally { service.dispose(); }
+    });
+    it('uses ready HTTP credentials even when chat hydration failed', async () => {
+        const load = jest.fn(loadSavedCredentials);
+        useAssistantStore.setState({ hasHydrated: false, chatHydrationError: 'chat_hydration_failed',
+            serverUrl: 'https://saved.test', serverToken: 'saved', loadSavedCredentials: load });
+        const fetcher = jest.fn<ReturnType<AutomaticTaskFetch>, Parameters<AutomaticTaskFetch>>().mockResolvedValue(response({ tasks: [] }));
+        const service = new AutomaticTaskService({ fetch: fetcher });
+        try {
+            await expect(service.catalog()).resolves.toMatchObject({ tasks: [] });
+            expect(fetcher).toHaveBeenCalledTimes(1);
+            expect(load).not.toHaveBeenCalled();
+        } finally { service.dispose(); }
+    });
+    it.each(['url', 'token'] as const)('does not fetch or misreport invalid_token after %s storage failure; explicit retry recovers', async failure => {
+        await AsyncStorage.setItem(CONNECTION_CONFIG_KEY, JSON.stringify({ url: 'https://saved.test' }));
+        jest.mocked(SecureStore.getItemAsync).mockResolvedValue('saved');
+        if (failure === 'url') jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('private stored URL'));
+        else jest.mocked(SecureStore.getItemAsync).mockRejectedValueOnce(new Error('private token'));
+        useAssistantStore.setState({ hasHydrated: false, credentialsStatus: 'loading', serverUrl: 'https://memory.test', serverToken: 'memory' });
+        const fetcher = jest.fn<ReturnType<AutomaticTaskFetch>, Parameters<AutomaticTaskFetch>>().mockResolvedValue(response({ tasks: [] }));
+        const service = new AutomaticTaskService({ fetch: fetcher });
+        try {
+            const code = failure === 'url' ? 'connection_config_read_failed' : 'credentials_read_failed';
+            await expect(service.catalog()).rejects.toMatchObject({ code, message: code });
+            expect(fetcher).not.toHaveBeenCalled();
+            expect(useAssistantStore.getState()).toMatchObject({ credentialsStatus: 'error',
+                credentialsError: failure === 'url' ? 'connection_config_read_failed' : 'credentials_read_failed',
+                serverUrl: 'https://memory.test', serverToken: 'memory' });
+            await expect(service.catalog()).resolves.toMatchObject({ tasks: [] });
+            expect(fetcher).toHaveBeenCalledTimes(1);
+            expect(fetcher.mock.calls[0][0]).toBe('https://saved.test/api/tasks');
+            expect(fetcher.mock.calls[0][1].headers.Authorization).toBe('Bearer saved');
+        } finally { service.dispose(); }
+    });
+    it('does not reload genuinely missing credentials after ready initialization', async () => {
+        const load = jest.fn(loadSavedCredentials);
+        useAssistantStore.setState({ serverUrl: 'https://saved.test', serverToken: '', loadSavedCredentials: load });
+        const fetcher = jest.fn<ReturnType<AutomaticTaskFetch>, Parameters<AutomaticTaskFetch>>();
+        const service = new AutomaticTaskService({ fetch: fetcher });
+        try {
+            await expect(service.catalog()).rejects.toMatchObject({ code: 'invalid_token' });
+            await expect(service.catalog()).rejects.toMatchObject({ code: 'invalid_token' });
+            expect(load).not.toHaveBeenCalled();
+            expect(fetcher).not.toHaveBeenCalled();
+            expect(useAssistantStore.getState().credentialsStatus).toBe('ready');
+        } finally { service.dispose(); }
+    });
+    it('does not trust credentials returned without ready status', async () => {
+        const load = jest.fn(async () => ({ url: 'https://saved.test', token: 'saved' }));
+        useAssistantStore.setState({ credentialsStatus: 'loading', serverToken: 'stale', loadSavedCredentials: load });
+        const fetcher = jest.fn<ReturnType<AutomaticTaskFetch>, Parameters<AutomaticTaskFetch>>();
+        const service = new AutomaticTaskService({ fetch: fetcher });
+        try {
+            await expect(service.catalog()).rejects.toMatchObject({ code: 'connection_not_ready' });
+            expect(fetcher).not.toHaveBeenCalled();
+        } finally { service.dispose(); }
+    });
+    it('invalidates an in-flight response when credentials leave ready and recover unchanged', async () => {
+        useAssistantStore.setState({ serverUrl: 'https://saved.test', serverToken: 'saved' });
+        const pending = deferred<Response>();
+        const started = deferred<void>();
+        const fetcher = jest.fn<ReturnType<AutomaticTaskFetch>, Parameters<AutomaticTaskFetch>>()
+            .mockImplementation(async () => { started.resolve(); return pending.promise; });
+        const service = new AutomaticTaskService({ fetch: fetcher });
+        try {
+            const request = service.catalog();
+            await started.promise;
+            useAssistantStore.setState({ credentialsStatus: 'loading' });
+            useAssistantStore.setState({ credentialsStatus: 'ready' });
+            pending.resolve(response({ tasks: [] }));
+            await expect(request).rejects.toMatchObject({ code: 'connection_changed' });
+        } finally { service.dispose(); }
     });
 });

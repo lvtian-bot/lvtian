@@ -61,7 +61,9 @@ describe('TodoScreen 服务器只读自动任务', () => {
         mockFocus.current = undefined; mockFocus.cleanup = undefined;
         jest.clearAllMocks();
         Object.defineProperty(service, 'generation', { configurable: true, value: 0 });
-        useAssistantStore.setState({ serverUrl: 'http://server-a', serverToken: 'a', hasHydrated: true, connectionState: 'connected' });
+        useAssistantStore.setState({ serverUrl: 'http://server-a', serverToken: 'a', hasHydrated: true,
+            credentialsStatus: 'ready', credentialsError: null, chatHydrationError: null,
+            loadSavedCredentials: jest.fn(), connectionState: 'connected' });
         catalog.mockReset().mockResolvedValue({ tasks: [task], generation: 0 });
         history.mockReset().mockResolvedValue({ history: { id: task.id, records: [], retention: { days: 30, records: 100 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false }, generation: 0 });
         result.mockReset().mockResolvedValue({ result: { taskId: task.id, status: 'unknown', assistantText: [], truncated: false, delivery }, generation: 0 });
@@ -103,6 +105,82 @@ describe('TodoScreen 服务器只读自动任务', () => {
         expect(texts()).not.toContain('暂无开启的任务');
         await act(async () => { pending.resolve({ tasks: [], generation: 0 }); });
         expect(texts()).toContain('暂无开启的任务');
+    });
+
+    it.each([null, 'chat_hydration_failed'] as const)('聊天恢复未完成或失败不阻止已就绪凭据读取任务：%s', async chatHydrationError => {
+        useAssistantStore.setState({ hasHydrated: false, chatHydrationError });
+        await mount();
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(texts()).toContain(task.title);
+        expect(useAssistantStore.getState().loadSavedCredentials).not.toHaveBeenCalled();
+    });
+
+    it('聊天已恢复也必须等待独立凭据就绪', async () => {
+        useAssistantStore.setState({ hasHydrated: true, credentialsStatus: 'loading' });
+        await mount();
+        expect(catalog).not.toHaveBeenCalled();
+        expect(texts()).not.toContain('暂无开启的任务');
+        await act(async () => { useAssistantStore.setState({ credentialsStatus: 'ready' }); });
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(texts()).toContain(task.title);
+    });
+
+    it.each(['retry', 'pull'] as const)('凭据读取失败不循环重试，%s 显式重试失败后仍可再次恢复', async retry => {
+        const load = jest.fn<Promise<{ url: string; token: string }>, []>(async () => {
+            useAssistantStore.setState({ credentialsStatus: 'loading', credentialsError: null });
+            useAssistantStore.setState({ credentialsStatus: 'error', credentialsError: 'credentials_read_failed' });
+            throw new Error('credentials_read_failed');
+        });
+        useAssistantStore.setState({ credentialsStatus: 'error', credentialsError: 'credentials_read_failed', loadSavedCredentials: load });
+        const manualRetry = async () => {
+            if (retry === 'retry') await press('重试');
+            else await act(async () => { renderer.root.findByType(FlatList).props.onRefresh(); });
+        };
+        await mount();
+        expect(catalog).not.toHaveBeenCalled();
+        expect(load).not.toHaveBeenCalled();
+        expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
+        expect(texts()).toContain('读取访问令牌失败，请重试；已保存的令牌未被清除。');
+        expect(texts().some(text => text.includes('无法读取服务器任务'))).toBe(false);
+        await act(async () => { mockFocus.cleanup!(); mockFocus.cleanup = mockFocus.current!(); });
+        expect(load).not.toHaveBeenCalled();
+        await manualRetry();
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(catalog).not.toHaveBeenCalled();
+        expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(0);
+        expect(renderer.root.findByType(FlatList).props.refreshing).toBe(false);
+        expect(texts()).not.toContain('暂无开启的任务');
+        load.mockImplementationOnce(async () => {
+            useAssistantStore.setState({ credentialsStatus: 'loading', credentialsError: null });
+            useAssistantStore.setState({ credentialsStatus: 'ready' });
+            return { url: 'http://server-a', token: 'a' };
+        });
+        await manualRetry();
+        expect(load).toHaveBeenCalledTimes(2);
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(texts()).toContain(task.title);
+    });
+
+    it('连接配置读取失败使用专属提示而非网络错误或空列表', async () => {
+        useAssistantStore.setState({ credentialsStatus: 'error', credentialsError: 'connection_config_read_failed' });
+        await mount();
+        expect(texts()).toContain('读取连接配置失败，请重试；已保存的配置未被清除。');
+        expect(texts().some(text => text.includes('无法读取服务器任务'))).toBe(false);
+        expect(texts()).not.toContain('暂无开启的任务');
+        expect(catalog).not.toHaveBeenCalled();
+    });
+
+    it('凭据状态变化取消旧请求，即使URL和token不变也不接受旧响应', async () => {
+        const pending = deferred<AutomaticTaskResponse<{ tasks: AutomaticTask[] }>>();
+        catalog.mockReturnValueOnce(pending.promise);
+        await mount();
+        const signal = catalog.mock.calls[0][0]!.signal!;
+        await act(async () => { useAssistantStore.setState({ credentialsStatus: 'error', credentialsError: 'credentials_read_failed' }); });
+        expect(signal.aborted).toBe(true);
+        await act(async () => { pending.resolve({ tasks: [task], generation: 0 }); });
+        expect(texts()).not.toContain(task.title);
+        expect(catalog).toHaveBeenCalledTimes(1);
+        expect(useAssistantStore.getState().loadSavedCredentials).not.toHaveBeenCalled();
     });
 
     it('连接失败可重试，未启用与空列表区别明确', async () => {

@@ -1,3 +1,5 @@
+import type { CredentialsErrorCode } from '../services/connectionConfig';
+
 /** Read-only JSON-facing Schedule contract; no native runtime is loaded by the App. */
 
 interface ScheduleRecordBase {
@@ -55,7 +57,7 @@ export interface AutomaticTaskConnection {
     /** Injected providers must change this on every identity switch, including A → B → A. */
     generation: number;
 }
-export type AutomaticTaskErrorCode = 'connection_not_ready' | 'connection_changed' | 'invalid_endpoint'
+export type AutomaticTaskErrorCode = CredentialsErrorCode | 'connection_not_ready' | 'connection_changed' | 'invalid_endpoint'
     | 'invalid_token' | 'unauthorized' | 'forbidden' | 'invalid_input'
     | 'not_found' | 'metadata_invalid' | 'service_closed' | 'native_tasks_unavailable' | 'service_upgrading'
     | 'authentication_failed' | 'connection_failed' | 'timeout' | 'disposed' | 'remote_failed'

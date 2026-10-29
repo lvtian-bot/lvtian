@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
+import {
+    ASSISTANT_CHAT_KEY,
+    ConnectionConfigError,
+    CredentialsErrorCode,
+    credentialsErrorCode,
+    loadConnectionCredentials,
+    saveConnectionCredentials,
+} from '../services/connectionConfig';
 import {
     AssistantMessage,
     ConnectionState,
@@ -12,7 +19,77 @@ import {
     AgentSkill,
 } from '../types/assistantProtocol';
 
-const ASSISTANT_TOKEN_KEY = 'lvtian_assistant_token';
+// Zustand writes on every set, including hydration/status updates. Keep the legacy
+// record untouched until migration is durably committed and chat hydration succeeds.
+let credentialsInitialized = false;
+let chatHydrationSucceeded = false;
+let reportingChatWriteError = false;
+let connectionIdentityChanged = false;
+let operationTail: Promise<unknown> = Promise.resolve();
+function serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = operationTail.then(operation);
+    operationTail = result.catch(() => undefined);
+    return result;
+}
+
+const chatStorage = {
+    getItem: (name: string) => AsyncStorage.getItem(name),
+    setItem: async (name: string, value: string): Promise<void> => {
+        if (!credentialsInitialized || !chatHydrationSucceeded || reportingChatWriteError) return;
+        try {
+            await AsyncStorage.setItem(name, value);
+        } catch {
+            // The error setter suppresses its own persistence to avoid recursion.
+            setChatCacheError('chat_cache_write_failed');
+        }
+    },
+    removeItem: (name: string) => AsyncStorage.removeItem(name),
+};
+let setChatCacheError: (code: 'chat_cache_write_failed') => void = () => undefined;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+const isCounter = (value: unknown): boolean =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const isModel = (value: unknown): boolean => isRecord(value)
+    && typeof value.provider === 'string' && typeof value.model === 'string';
+const validOptionalArray = (value: unknown, check: (entry: unknown) => boolean): boolean =>
+    value === undefined || (Array.isArray(value) && value.every(check));
+const isAttachment = (value: unknown): boolean => isRecord(value)
+    && (value.type === 'image' || value.type === 'file') && typeof value.name === 'string';
+const isMessage = (value: unknown): boolean => isRecord(value)
+    && typeof value.id === 'string' && typeof value.content === 'string'
+    && ['user', 'assistant', 'system'].includes(String(value.role))
+    && isCounter(value.timestamp)
+    && (value.seq === undefined || isCounter(value.seq))
+    && ['sending', 'sent', 'queued', 'processing', 'done', 'error'].includes(String(value.status))
+    && validOptionalArray(value.attachments, isAttachment)
+    && validOptionalArray(value.toolCalls, (tool) => isRecord(tool)
+        && typeof tool.id === 'string' && typeof tool.name === 'string'
+        && ['running', 'done', 'failed'].includes(String(tool.status)))
+    && validOptionalArray(value.toolCallPositions, (position) => isRecord(position)
+        && typeof position.toolCallId === 'string' && isCounter(position.textOffset));
+
+/** Validate cache containers/render-critical fields, not a second protocol schema. */
+function parseChatCache(value: unknown): Partial<AssistantState> {
+    if (value === undefined) return {};
+    if (!isRecord(value)
+        || !validOptionalArray(value.messages, isMessage)
+        || !validOptionalArray(value.pendingSendQueue, (item) => isRecord(item)
+            && typeof item.sessionId === 'string' && typeof item.messageId === 'string'
+            && typeof item.content === 'string' && validOptionalArray(item.attachments, isAttachment))
+        || !validOptionalArray(value.pendingCancelQueue, (id) => typeof id === 'string')
+        || !validOptionalArray(value.agentModelOptions, isModel)
+        || (value.currentSeq !== undefined && !isCounter(value.currentSeq))
+        || (value.clearedSeq !== undefined && !isCounter(value.clearedSeq))
+        || (value.permissionMode !== undefined
+            && value.permissionMode !== 'workspace-write' && value.permissionMode !== 'danger-full-access')
+        || (value.agentModelSelection !== undefined && value.agentModelSelection !== null
+            && !isModel(value.agentModelSelection))) {
+        throw new Error('chat_hydration_failed');
+    }
+    return value as Partial<AssistantState>;
+}
 
 interface AssistantState {
     serverUrl: string;
@@ -24,7 +101,12 @@ interface AssistantState {
     /** 待审批队列：同一会话并发多个工具各自请求审批时按序展示与应答 */
     pendingApprovals: ApprovalRequest[];
     currentSeq: number;
+    /** Chat hydration attempt has settled; independent of credential readiness. */
     hasHydrated: boolean;
+    credentialsStatus: 'loading' | 'ready' | 'error';
+    credentialsError: CredentialsErrorCode | null;
+    chatHydrationError: 'chat_hydration_failed' | null;
+    chatCacheError: 'chat_cache_write_failed' | null;
     permissionMode: 'workspace-write' | 'danger-full-access';
     /** 服务端当前助理模型选择（provider 路由 + 模型 ID），未拉取到时为 null */
     agentModelSelection: { provider: string; model: string } | null;
@@ -70,227 +152,268 @@ interface AssistantState {
 
 export const useAssistantStore = create<AssistantState>()(
     persist(
-        (set, get) => ({
-            serverUrl: '',
-            serverToken: '',
-            connectionState: 'disconnected',
-            connectionError: null,
-            messages: [],
-            taskState: 'idle',
-            pendingApprovals: [],
-            currentSeq: 0,
-            clearedSeq: 0,
-            hasHydrated: false,
-            permissionMode: 'workspace-write',
-            agentModelSelection: null,
-            agentModelOptions: [],
-            isServerUpgrading: false,
-            pendingSendQueue: [],
-            pendingCancelQueue: [],
-            skills: [],
-
-            setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
-            setPermissionMode: (mode) => set({ permissionMode: mode }),
-            setAgentModelSelection: (agentModelSelection) => set({ agentModelSelection }),
-            setAgentModelOptions: (agentModelOptions) => set({ agentModelOptions }),
-            setSkills: (skills) => set({ skills }),
-
-            setServerConfig: async (url, token) => {
-                const cleanUrl = url.trim().replace(/\/+$/, '');
-                const cleanToken = token.trim();
-                const currentUrl = get().serverUrl;
-
-                // 持久化 Token 到 SecureStore，如失败则向外抛错以便界面捕获
+        (set, get) => {
+            setChatCacheError = (chatCacheError) => {
+                reportingChatWriteError = true;
                 try {
-                    if (cleanToken) {
-                        await SecureStore.setItemAsync(ASSISTANT_TOKEN_KEY, cleanToken);
-                    } else {
-                        await SecureStore.deleteItemAsync(ASSISTANT_TOKEN_KEY);
-                    }
-                } catch (err) {
-                    console.error('[useAssistantStore] 写入 SecureStore 失败:', err);
-                    throw new Error('安全凭据存储失败，请检查系统安全存储或权限');
+                    set({ chatCacheError });
+                } finally {
+                    reportingChatWriteError = false;
                 }
+            };
+            return {
+                serverUrl: '',
+                serverToken: '',
+                connectionState: 'disconnected',
+                connectionError: null,
+                messages: [],
+                taskState: 'idle',
+                pendingApprovals: [],
+                currentSeq: 0,
+                clearedSeq: 0,
+                hasHydrated: false,
+                credentialsStatus: 'loading',
+                credentialsError: null,
+                chatHydrationError: null,
+                chatCacheError: null,
+                permissionMode: 'workspace-write',
+                agentModelSelection: null,
+                agentModelOptions: [],
+                isServerUpgrading: false,
+                pendingSendQueue: [],
+                pendingCancelQueue: [],
+                skills: [],
 
-                // 如果切换了不同的服务器地址或访问令牌（代表新服务实例），重置本地旧服务器的对话与对账序列状态（含清空截断线）
-                const currentToken = get().serverToken;
-                if ((currentUrl && currentUrl !== cleanUrl) || (currentToken && currentToken !== cleanToken)) {
-                    set({
-                        serverUrl: cleanUrl,
-                        serverToken: cleanToken,
-                        messages: [],
-                        currentSeq: 0,
-                        clearedSeq: 0,
-                        taskState: 'idle',
-                        pendingApprovals: [],
-                        isServerUpgrading: false,
-                        pendingSendQueue: [],
-                        skills: [],
-                        agentModelSelection: null,
-                        agentModelOptions: [],
-                    });
-                } else {
-                    set({ serverUrl: cleanUrl, serverToken: cleanToken });
-                }
-            },
+                setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
+                setPermissionMode: (mode) => set({ permissionMode: mode }),
+                setAgentModelSelection: (agentModelSelection) => set({ agentModelSelection }),
+                setAgentModelOptions: (agentModelOptions) => set({ agentModelOptions }),
+                setSkills: (skills) => set({ skills }),
 
-            loadSavedCredentials: async () => {
-                let token = '';
-                try {
-                    token = (await SecureStore.getItemAsync(ASSISTANT_TOKEN_KEY)) || '';
-                } catch (err) {
-                    console.warn('[useAssistantStore] 从 SecureStore 读取 Token 失败:', err);
-                }
-                const url = get().serverUrl;
-                set({ serverToken: token });
-                return { url, token };
-            },
+                setServerConfig: (url, token) => serialize(async () => {
+                    const cleanUrl = url.trim().replace(/\/+$/, '');
+                    const cleanToken = token.trim();
+                    set({ credentialsStatus: 'loading', credentialsError: null });
+                    try {
+                        // Explicit user-supplied configuration authorizes replacement;
+                        // it must not depend on reading a corrupt legacy/chat record.
+                        const identityUnknown = !credentialsInitialized;
+                        const currentUrl = get().serverUrl;
+                        const currentToken = get().serverToken;
+                        await saveConnectionCredentials(cleanUrl, cleanToken);
+                        credentialsInitialized = true;
 
-            setConnectionState: (connectionState, connectionError = null) =>
-                set({ connectionState, connectionError }),
-
-            setMessages: (messages) => set({ messages }),
-
-            addOrUpdateMessage: (message) =>
-                set((state) => {
-                    const idx = state.messages.findIndex((m) => m.id === message.id);
-                    if (idx >= 0) {
-                        const updated = [...state.messages];
-                        const current = updated[idx];
-                        updated[idx] = {
-                            ...current,
-                            ...message,
-                            content:
-                                message.content !== undefined && message.content !== ''
-                                    ? message.content
-                                    : current.content,
-                        };
-                        return { messages: updated };
-                    }
-                    return { messages: [...state.messages, message] };
-                }),
-
-            removeMessage: (messageId) =>
-                set((state) => ({
-                    messages: state.messages.filter((m) => m.id !== messageId),
-                    pendingSendQueue: state.pendingSendQueue.filter((item) => item.messageId !== messageId),
-                })),
-
-            appendDeltaToMessage: (messageId, delta) =>
-                set((state) => {
-                    const idx = state.messages.findIndex((m) => m.id === messageId);
-                    if (idx >= 0) {
-                        const updated = [...state.messages];
-                        const target = updated[idx];
-                        updated[idx] = {
-                            ...target,
-                            content: target.content + delta,
-                            status: 'processing',
-                        };
-                        return { messages: updated };
-                    }
-                    return state;
-                }),
-
-            setToolCallForMessage: (messageId, toolCall) =>
-                set((state) => {
-                    const idx = state.messages.findIndex((m) => m.id === messageId);
-                    if (idx >= 0) {
-                        const updated = [...state.messages];
-                        const target = updated[idx];
-                        const existingTools = target.toolCalls ? [...target.toolCalls] : [];
-                        const positions = target.toolCallPositions ?? existingTools.map((tool) => ({
-                            toolCallId: tool.id, textOffset: 0,
-                        }));
-                        const toolIdx = existingTools.findIndex((t) => t.id === toolCall.id);
-                        if (toolIdx >= 0) {
-                            existingTools[toolIdx] = toolCall;
+                        // 切换身份或尚未读出旧身份时，清除旧服务器的聊天与对账状态。
+                        if (identityUnknown || (currentUrl && currentUrl !== cleanUrl) || (currentToken && currentToken !== cleanToken)) {
+                            connectionIdentityChanged = true;
+                            set({
+                                serverUrl: cleanUrl,
+                                serverToken: cleanToken,
+                                messages: [],
+                                currentSeq: 0,
+                                clearedSeq: 0,
+                                taskState: 'idle',
+                                pendingApprovals: [],
+                                isServerUpgrading: false,
+                                pendingSendQueue: [],
+                                pendingCancelQueue: [],
+                                skills: [],
+                                agentModelSelection: null,
+                                agentModelOptions: [],
+                            });
                         } else {
-                            existingTools.push(toolCall);
+                            set({ serverUrl: cleanUrl, serverToken: cleanToken });
                         }
-                        updated[idx] = {
-                            ...target,
-                            toolCalls: existingTools,
-                            toolCallPositions: toolIdx >= 0 ? positions : [
-                                ...positions, { toolCallId: toolCall.id, textOffset: target.content.length },
-                            ],
+                        set({ credentialsStatus: 'ready', credentialsError: null });
+                    } catch (error) {
+                        const code = credentialsErrorCode(error);
+                        set({ credentialsStatus: 'error', credentialsError: code });
+                        throw new ConnectionConfigError(code);
+                    }
+                }),
+
+                loadSavedCredentials: () => serialize(async () => {
+                    set({ credentialsStatus: 'loading', credentialsError: null });
+                    try {
+                        const credentials = await loadConnectionCredentials();
+                        credentialsInitialized = true;
+                        set({
+                            serverUrl: credentials.url,
+                            serverToken: credentials.token,
+                            credentialsStatus: 'ready',
+                            credentialsError: null,
+                        });
+                        return credentials;
+                    } catch (error) {
+                        const code = credentialsErrorCode(error);
+                        set({ credentialsStatus: 'error', credentialsError: code });
+                        throw new ConnectionConfigError(code);
+                    }
+                }),
+
+                setConnectionState: (connectionState, connectionError = null) =>
+                    set({ connectionState, connectionError }),
+
+                setMessages: (messages) => set({ messages }),
+
+                addOrUpdateMessage: (message) =>
+                    set((state) => {
+                        const idx = state.messages.findIndex((m) => m.id === message.id);
+                        if (idx >= 0) {
+                            const updated = [...state.messages];
+                            const current = updated[idx];
+                            updated[idx] = {
+                                ...current,
+                                ...message,
+                                content:
+                                    message.content !== undefined && message.content !== ''
+                                        ? message.content
+                                        : current.content,
+                            };
+                            return { messages: updated };
+                        }
+                        return { messages: [...state.messages, message] };
+                    }),
+
+                removeMessage: (messageId) =>
+                    set((state) => ({
+                        messages: state.messages.filter((m) => m.id !== messageId),
+                        pendingSendQueue: state.pendingSendQueue.filter((item) => item.messageId !== messageId),
+                    })),
+
+                appendDeltaToMessage: (messageId, delta) =>
+                    set((state) => {
+                        const idx = state.messages.findIndex((m) => m.id === messageId);
+                        if (idx >= 0) {
+                            const updated = [...state.messages];
+                            const target = updated[idx];
+                            updated[idx] = {
+                                ...target,
+                                content: target.content + delta,
+                                status: 'processing',
+                            };
+                            return { messages: updated };
+                        }
+                        return state;
+                    }),
+
+                setToolCallForMessage: (messageId, toolCall) =>
+                    set((state) => {
+                        const idx = state.messages.findIndex((m) => m.id === messageId);
+                        if (idx >= 0) {
+                            const updated = [...state.messages];
+                            const target = updated[idx];
+                            const existingTools = target.toolCalls ? [...target.toolCalls] : [];
+                            const positions = target.toolCallPositions ?? existingTools.map((tool) => ({
+                                toolCallId: tool.id, textOffset: 0,
+                            }));
+                            const toolIdx = existingTools.findIndex((t) => t.id === toolCall.id);
+                            if (toolIdx >= 0) {
+                                existingTools[toolIdx] = toolCall;
+                            } else {
+                                existingTools.push(toolCall);
+                            }
+                            updated[idx] = {
+                                ...target,
+                                toolCalls: existingTools,
+                                toolCallPositions: toolIdx >= 0 ? positions : [
+                                    ...positions, { toolCallId: toolCall.id, textOffset: target.content.length },
+                                ],
+                            };
+                            return { messages: updated };
+                        }
+                        return state;
+                    }),
+
+                setTaskState: (taskState) => set({ taskState }),
+
+                setPendingApprovals: (pendingApprovals) => set({ pendingApprovals }),
+
+                addPendingApproval: (approval) =>
+                    set((state) => ({
+                        pendingApprovals: state.pendingApprovals.some((a) => a.approvalId === approval.approvalId)
+                            ? state.pendingApprovals
+                            : [...state.pendingApprovals, approval],
+                    })),
+
+                removePendingApproval: (approvalId) =>
+                    set((state) => ({
+                        pendingApprovals: state.pendingApprovals.filter((a) => a.approvalId !== approvalId),
+                    })),
+
+                setCurrentSeq: (currentSeq) => set({ currentSeq }),
+
+                clearChat: () =>
+                    set((state) => {
+                        const maxSeq = Math.max(
+                            state.currentSeq,
+                            state.clearedSeq,
+                            ...state.messages.map((m) => m.seq ?? 0)
+                        );
+                        return {
+                            messages: [],
+                            currentSeq: 0,
+                            clearedSeq: maxSeq,
+                            taskState: 'idle',
+                            pendingApprovals: [],
+                            pendingSendQueue: [],
+                            pendingCancelQueue: [],
                         };
-                        return { messages: updated };
-                    }
-                    return state;
-                }),
+                    }),
 
-            setTaskState: (taskState) => set({ taskState }),
+                setIsServerUpgrading: (isServerUpgrading) => set({ isServerUpgrading }),
 
-            setPendingApprovals: (pendingApprovals) => set({ pendingApprovals }),
+                addToPendingSendQueue: (item) =>
+                    set((state) => {
+                        const idx = state.pendingSendQueue.findIndex((q) => q.messageId === item.messageId);
+                        if (idx >= 0) {
+                            const updated = [...state.pendingSendQueue];
+                            updated[idx] = { ...updated[idx], ...item };
+                            return { pendingSendQueue: updated };
+                        }
+                        return { pendingSendQueue: [...state.pendingSendQueue, item] };
+                    }),
 
-            addPendingApproval: (approval) =>
-                set((state) => ({
-                    pendingApprovals: state.pendingApprovals.some((a) => a.approvalId === approval.approvalId)
-                        ? state.pendingApprovals
-                        : [...state.pendingApprovals, approval],
-                })),
+                removeFromPendingSendQueue: (messageId) =>
+                    set((state) => ({
+                        pendingSendQueue: state.pendingSendQueue.filter((q) => q.messageId !== messageId),
+                    })),
 
-            removePendingApproval: (approvalId) =>
-                set((state) => ({
-                    pendingApprovals: state.pendingApprovals.filter((a) => a.approvalId !== approvalId),
-                })),
+                clearPendingSendQueue: () => set({ pendingSendQueue: [] }),
 
-            setCurrentSeq: (currentSeq) => set({ currentSeq }),
+                addToPendingCancelQueue: (messageId) =>
+                    set((state) => ({
+                        pendingCancelQueue: state.pendingCancelQueue.includes(messageId)
+                            ? state.pendingCancelQueue
+                            : [...state.pendingCancelQueue, messageId],
+                    })),
 
-            clearChat: () =>
-                set((state) => {
-                    const maxSeq = Math.max(
-                        state.currentSeq,
-                        state.clearedSeq,
-                        ...state.messages.map((m) => m.seq ?? 0)
-                    );
-                    return {
-                        messages: [],
-                        currentSeq: 0,
-                        clearedSeq: maxSeq,
-                        taskState: 'idle',
-                        pendingApprovals: [],
-                        pendingSendQueue: [],
-                        pendingCancelQueue: [],
-                    };
-                }),
-
-            setIsServerUpgrading: (isServerUpgrading) => set({ isServerUpgrading }),
-
-            addToPendingSendQueue: (item) =>
-                set((state) => {
-                    const idx = state.pendingSendQueue.findIndex((q) => q.messageId === item.messageId);
-                    if (idx >= 0) {
-                        const updated = [...state.pendingSendQueue];
-                        updated[idx] = { ...updated[idx], ...item };
-                        return { pendingSendQueue: updated };
-                    }
-                    return { pendingSendQueue: [...state.pendingSendQueue, item] };
-                }),
-
-            removeFromPendingSendQueue: (messageId) =>
-                set((state) => ({
-                    pendingSendQueue: state.pendingSendQueue.filter((q) => q.messageId !== messageId),
-                })),
-
-            clearPendingSendQueue: () => set({ pendingSendQueue: [] }),
-
-            addToPendingCancelQueue: (messageId) =>
-                set((state) => ({
-                    pendingCancelQueue: state.pendingCancelQueue.includes(messageId)
-                        ? state.pendingCancelQueue
-                        : [...state.pendingCancelQueue, messageId],
-                })),
-
-            removeFromPendingCancelQueue: (messageId) =>
-                set((state) => ({
-                    pendingCancelQueue: state.pendingCancelQueue.filter((id) => id !== messageId),
-                })),
-        }),
+                removeFromPendingCancelQueue: (messageId) =>
+                    set((state) => ({
+                        pendingCancelQueue: state.pendingCancelQueue.filter((id) => id !== messageId),
+                    })),
+            };
+        },
         {
-            name: 'lvtian-assistant-storage',
-            storage: createJSONStorage(() => AsyncStorage),
+            name: ASSISTANT_CHAT_KEY,
+            storage: createJSONStorage(() => chatStorage),
+            merge: (persisted, current) => {
+                // After switching identity, memory owns the new chat. This also
+                // protects explicit hydration retries from restoring the old cache.
+                if (connectionIdentityChanged) return current;
+                const saved = parseChatCache(persisted);
+                return {
+                    ...current,
+                    messages: saved.messages ?? current.messages,
+                    currentSeq: saved.currentSeq ?? current.currentSeq,
+                    clearedSeq: saved.clearedSeq ?? current.clearedSeq,
+                    pendingSendQueue: saved.pendingSendQueue ?? current.pendingSendQueue,
+                    pendingCancelQueue: saved.pendingCancelQueue ?? current.pendingCancelQueue,
+                    permissionMode: saved.permissionMode ?? current.permissionMode,
+                    agentModelSelection: saved.agentModelSelection ?? current.agentModelSelection,
+                    agentModelOptions: saved.agentModelOptions ?? current.agentModelOptions,
+                };
+            },
             partialize: (state) => {
                 const persistedMessages = state.messages
                     .filter((m) => m.status !== 'processing')
@@ -338,8 +461,7 @@ export const useAssistantStore = create<AssistantState>()(
                     };
                 });
                 return {
-                    serverUrl: state.serverUrl,
-                    // serverToken 不在此序列化，走 SecureStore
+                    // Connection URL and token are never part of the chat cache.
                     // 仅持久化非 processing 状态的已确认消息，避免流式打字期间每个 chunk 触发全量 AsyncStorage 序列化导致 UI 卡顿
                     messages: persistedMessages,
                     currentSeq: durableSeq,
@@ -351,11 +473,23 @@ export const useAssistantStore = create<AssistantState>()(
                     agentModelOptions: state.agentModelOptions ?? [],
                 };
             },
-            onRehydrateStorage: () => (state) => {
-                if (state) {
-                    state.setHasHydrated(true);
-                }
+            onRehydrateStorage: () => {
+                chatHydrationSucceeded = false;
+                return (_state, error) => {
+                    // Defer to support even a synchronous storage implementation:
+                    // the exported store must exist before this callback accesses it.
+                    Promise.resolve().then(() => {
+                        chatHydrationSucceeded = !error;
+                        useAssistantStore.setState({
+                            hasHydrated: true,
+                            chatHydrationError: error ? 'chat_hydration_failed' : null,
+                        });
+                    });
+                };
             },
         }
     )
 );
+
+// Credentials are independent of chat hydration (including a failed or slow read).
+Promise.resolve().then(() => useAssistantStore.getState().loadSavedCredentials()).catch(() => undefined);

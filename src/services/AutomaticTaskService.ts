@@ -1,5 +1,6 @@
 import { fetch as expoFetch } from 'expo/fetch';
 import { useAssistantStore } from '../store/useAssistantStore';
+import { ConnectionConfigError } from './connectionConfig';
 import type {
     AutomaticTask, AutomaticTaskConnection, AutomaticTaskDelivery, AutomaticTaskErrorCode,
     AutomaticTaskHistory, AutomaticTaskHistoryOptions, AutomaticTaskRecord,
@@ -96,21 +97,21 @@ export class AutomaticTaskService {
         } else {
             this.unsubscribe = useAssistantStore.subscribe((state, previous) => {
                 if (state.serverUrl !== previous.serverUrl || state.serverToken !== previous.serverToken
-                    || state.hasHydrated !== previous.hasHydrated) {
+                    || state.credentialsStatus !== previous.credentialsStatus) {
                     this.storeGeneration++;
                     this.currentGeneration++;
                 }
             });
             this.connection = async () => {
                 const state = useAssistantStore.getState();
-                if (!state.hasHydrated) throw new AutomaticTaskError('connection_not_ready');
-                if (!state.serverToken) {
+                if (state.credentialsStatus !== 'ready') {
                     // Existing secure loading mutates the store. Detect a concurrent config switch,
                     // rather than pairing a newly hydrated URL with an old secure-store read.
                     let switched = false;
                     let changes = 0;
                     const stop = useAssistantStore.subscribe((next, previous) => {
-                        if (next.serverUrl !== previous.serverUrl || next.hasHydrated !== previous.hasHydrated) switched = true;
+                        const loadingCommitted = next.credentialsStatus === 'ready' && previous.credentialsStatus !== 'ready';
+                        if (next.serverUrl !== previous.serverUrl && !loadingCommitted) switched = true;
                         if (next.serverToken !== previous.serverToken) changes++;
                     });
                     try { await state.loadSavedCredentials(); }
@@ -118,7 +119,7 @@ export class AutomaticTaskService {
                     if (switched || changes > 1) throw new AutomaticTaskError('connection_changed');
                 }
                 const next = useAssistantStore.getState();
-                if (!next.hasHydrated) throw new AutomaticTaskError('connection_not_ready');
+                if (next.credentialsStatus !== 'ready') throw new AutomaticTaskError('connection_not_ready');
                 return { serverUrl: next.serverUrl, token: next.serverToken, generation: this.storeGeneration };
             };
         }
@@ -194,6 +195,7 @@ export class AutomaticTaskService {
             })()]);
         } catch (error: unknown) {
             if (error instanceof AutomaticTaskError) throw error;
+            if (error instanceof ConnectionConfigError) throw new AutomaticTaskError(error.code);
             throw new AutomaticTaskError('network');
         } finally {
             clearTimeout(timer);
