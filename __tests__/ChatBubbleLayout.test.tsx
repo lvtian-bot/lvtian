@@ -1,5 +1,6 @@
 import React from 'react';
-import { FlatList, PixelRatio, StyleSheet, Text, View } from 'react-native';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
+import * as ReactNative from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 import { ChatBubbleText } from '../src/components/ChatBubbleText';
 import { ChatMarkdownBubble } from '../src/components/ChatMarkdownBubble';
@@ -64,9 +65,12 @@ describe('bubble rendering', () => {
     const layoutBubble = async (width: number, lineWidths: number[], clockWidth = 30, clockHeight = 12) => {
         await ReactTestRenderer.act(async () => {
             renderer!.root.findByType(View).props.onLayout({ nativeEvent: { layout: { width } } });
-            bodyText().props.onTextLayout({ nativeEvent: { lines: lineWidths.map((lineWidth, index) => ({
-                x: 0, y: index * 27, width: lineWidth, height: 27,
-            })) } });
+        });
+        const lines = lineWidths.map((lineWidth, index) => ({ x: 0, y: index * 27, width: lineWidth, height: 27 }));
+        await ReactTestRenderer.act(async () => { bodyText().props.onTextLayout({ nativeEvent: { lines } }); });
+        // If the native row wrapped, measure again in its unconstrained body mode.
+        await ReactTestRenderer.act(async () => {
+            bodyText().props.onTextLayout({ nativeEvent: { lines } });
             clockText().props.onLayout({ nativeEvent: { layout: { width: clockWidth, height: clockHeight } } });
         });
     };
@@ -84,27 +88,21 @@ describe('bubble rendering', () => {
             expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
         }
     });
-    it('grows a short bubble for a measured clock without inserting selectable padding', async () => {
+    it('starts and stays in a native row for short text, before any async measurement', async () => {
         await ReactTestRenderer.act(async () => {
             renderer = ReactTestRenderer.create(<ChatBubbleText text="short" time="12:05" textStyle={{ fontSize: 18 }} />);
         });
-        await layoutBubble(80, [80]);
-        expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style)).toMatchObject({ width: 118, maxWidth: '100%' });
-        expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
-        await layoutBubble(118, [80]);
-        expect(StyleSheet.flatten(clockText().props.style)).toMatchObject({ position: 'absolute', right: 0, top: 15 });
-        expect(bodyText().props.children).toBe('short');
-    });
-    it('rounds fractional short-bubble sizing upward to a physical pixel', async () => {
-        jest.spyOn(PixelRatio, 'get').mockReturnValue(1.5);
-        await ReactTestRenderer.act(async () => {
-            renderer = ReactTestRenderer.create(<ChatBubbleText text="short" time="12:05" textStyle={{ fontSize: 18 }} />);
-        });
-        await layoutBubble(80.1, [80.1], 30.1);
-        const requested = StyleSheet.flatten(renderer!.root.findByType(View).props.style).width;
-        expect(requested).toBe(178 / 1.5);
-        await layoutBubble(Number(requested), [80.1], 30.1);
-        expect(StyleSheet.flatten(clockText().props.style).position).toBe('absolute');
+        const assertRow = () => {
+            expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style)).toMatchObject({ flexDirection: 'row', maxWidth: '100%' });
+            expect(StyleSheet.flatten(bodyText().props.style)).toMatchObject({ flexShrink: 1 });
+            expect(StyleSheet.flatten(clockText().props.style)).toMatchObject({ marginLeft: 8, marginTop: 0, flexShrink: 0 });
+            expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+            expect(bodyText().props.children).toBe('short');
+        };
+        assertRow();
+        await layoutBubble(118.3, [80.1], 30.2);
+        assertRow();
+        expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style).width).toBeUndefined();
     });
     it('shares a multiline trailing edge only when width and height allow, including resize and font scaling', async () => {
         await ReactTestRenderer.act(async () => {
@@ -124,11 +122,18 @@ describe('bubble rendering', () => {
             renderer = ReactTestRenderer.create(<ChatBubbleText text="first\nlast" time="12:05" textStyle={{ fontSize: 18 }} />);
         });
         await layoutBubble(200, [200, 80]);
+        const streamedBody = bodyText();
+        const previousSourceCallback = bodyText().props.onTextLayout;
         await ReactTestRenderer.act(async () => {
             renderer!.update(<ChatBubbleText text="first\nlonger last" time="12:05" textStyle={{ fontSize: 18 }} />);
         });
         expect(StyleSheet.flatten(clockText().props.style).position).not.toBe('absolute');
+        expect(bodyText() === streamedBody).toBe(true);
+        expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style).flexDirection).toBeUndefined();
         await layoutBubble(200, [200, 100]);
+        await ReactTestRenderer.act(async () => {
+            previousSourceCallback({ nativeEvent: { lines: [{ x: 0, y: 0, width: 500, height: 27 }] } });
+        });
         expect(StyleSheet.flatten(clockText().props.style).position).toBe('absolute');
         const previousClock = clockText();
         const previousBody = bodyText();
@@ -149,6 +154,45 @@ describe('bubble rendering', () => {
         });
         expect(renderer!.root.findAllByType(Text)).toHaveLength(1);
     });
+    it('retries native row layout when rotation or system font scaling changes', async () => {
+        const dimensions = jest.spyOn(jest.requireActual<typeof ReactNative>('react-native'), 'useWindowDimensions');
+        dimensions.mockReturnValue({ width: 200, height: 600, scale: 2, fontScale: 1.5 });
+        const element = () => <ChatBubbleText text="previously wrapped" time="12:05" textStyle={{ fontSize: 18 }} />;
+        await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(element()); });
+        await layoutBubble(160, [160, 80]);
+        expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style).flexDirection).toBeUndefined();
+        dimensions.mockReturnValue({ width: 600, height: 200, scale: 2, fontScale: 1.5 });
+        await ReactTestRenderer.act(async () => { renderer!.update(element()); });
+        expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style).flexDirection).toBe('row');
+        await layoutBubble(160, [160, 80]);
+        dimensions.mockReturnValue({ width: 600, height: 200, scale: 2, fontScale: 1 });
+        await ReactTestRenderer.act(async () => { renderer!.update(element()); });
+        expect(StyleSheet.flatten(renderer!.root.findByType(View).props.style).flexDirection).toBe('row');
+    });
+    it('ignores out-of-order native callbacks after resize, clock and typography updates', async () => {
+        const element = (time = '12:05', fontSize = 18, text = 'first\nlast') => <ChatBubbleText text={text} time={time} textStyle={{ fontSize }} fullWidth />;
+        await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(element()); });
+        await layoutBubble(200, [200, 80]);
+        const oldBodyCallback = bodyText().props.onTextLayout;
+        const oldClockCallback = clockText().props.onLayout;
+        await layoutBubble(220, [220, 80]);
+        await ReactTestRenderer.act(async () => { renderer!.update(element('12:06')); });
+        const stableBody = bodyText();
+        await ReactTestRenderer.act(async () => { clockText().props.onLayout({ nativeEvent: { layout: { width: 30, height: 12 } } }); });
+        await ReactTestRenderer.act(async () => {
+            oldBodyCallback({ nativeEvent: { lines: [{ x: 0, y: 0, width: 500, height: 27 }] } });
+            oldClockCallback({ nativeEvent: { layout: { width: 500, height: 12 } } });
+        });
+        expect(bodyText()).toBe(stableBody);
+        expect(StyleSheet.flatten(clockText().props.style).position).toBe('absolute');
+        const previousBodyCallback = bodyText().props.onTextLayout;
+        await ReactTestRenderer.act(async () => { renderer!.update(element('12:06', 24, 'new source')); });
+        await ReactTestRenderer.act(async () => {
+            previousBodyCallback({ nativeEvent: { lines: [{ x: 0, y: 0, width: 10, height: 27 }] } });
+        });
+        expect(StyleSheet.flatten(clockText().props.style).position).toBeUndefined();
+        expect(bodyText().props.children).toBe('new source');
+    });
     it('keeps complex blocks in Markdown, not a plain text fallback', () => {
         for (const source of ['```js\nx\n```', '| a | b |', '# heading', '- item', '1. item', '[link](https://example.com)', '**bold**',
             '    const x = 1;', '\tconst x = 1;', '  \tconst x = 1;', 'intro\n\n    code',
@@ -166,7 +210,7 @@ describe('bubble rendering', () => {
         const renderItem = renderer!.root.findByType(FlatList).props.renderItem;
         for (const content of ['    const x = 1;', '\tconst x = 1;', '&lt; &amp; &#60; &#x3c;']) {
             await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: message({ content }), index: 0 })));
-            expect(renderer!.root.findAllByType(ChatBubbleText)).toHaveLength(0);
+            expect(renderer!.root.findAllByType(ChatMarkdownBubble)).toHaveLength(1);
             const rendered = JSON.stringify(renderer!.toJSON());
             if (content.startsWith('&')) {
                 expect(rendered).toContain('< & < <');
@@ -188,7 +232,7 @@ describe('bubble rendering', () => {
         const richBubble = renderer!.root.findByType(ChatMarkdownBubble);
         expect(StyleSheet.flatten(richBubble.parent!.props.style)).toMatchObject({ width: '92%', alignItems: 'flex-start' });
         expect(StyleSheet.flatten(richBubble.findAllByType(View)[0].props.style)).toMatchObject({ width: '100%', flexShrink: 0 });
-        expect(renderer!.root.findAllByType(ChatBubbleText)).toHaveLength(0);
+        expect(renderer!.root.findByType(ChatBubbleText).props.fullWidth).toBe(true);
         expect(renderer!.root.findByProps({ testID: 'markdown-bubble-time' }).props.children).toBe('12:05');
         expect(JSON.stringify(renderer!.toJSON())).toContain('最后一个完整列表段落。');
     });
