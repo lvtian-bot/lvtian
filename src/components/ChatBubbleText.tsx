@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { PixelRatio, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+import React, { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { StyleSheet, Text, View, useWindowDimensions, type StyleProp, type TextStyle } from 'react-native';
 import { theme } from '../utils/theme';
 import { auxFontSizes } from '../utils/fontSize';
 
@@ -7,6 +7,10 @@ interface ChatBubbleTextProps {
     text: string;
     time: string;
     textStyle: StyleProp<TextStyle>;
+    /** Preserve the renderer's inline Text tree for a terminal Markdown paragraph. */
+    children?: ReactNode;
+    fullWidth?: boolean;
+    clockTestID?: string;
 }
 
 interface LineBounds {
@@ -16,36 +20,48 @@ interface LineBounds {
     height: number;
 }
 
-/** Keep the clock outside selectable content. Only share the last line when
- * native measurements prove there is room; otherwise use a normal footer.
- */
-export function ChatBubbleText({ text, time, textStyle }: ChatBubbleTextProps) {
+/** Reset the layout regime for typography/window changes, not each streamed token. */
+export function ChatBubbleText(props: ChatBubbleTextProps) {
+    const { width, fontScale } = useWindowDimensions();
+    const identity = JSON.stringify([StyleSheet.flatten(props.textStyle), props.fullWidth, width, fontScale]);
+    return <MeasuredBubbleText key={identity} {...props} />;
+}
+
+function MeasuredBubbleText({ text, time, textStyle, children, fullWidth = false,
+    clockTestID = 'inline-bubble-time' }: ChatBubbleTextProps) {
+    const [multiline, setMultiline] = useState(false);
     const [width, setWidth] = useState(0);
-    const [body, setBody] = useState<{ text: string; lines: LineBounds[] }>();
-    const [clock, setClock] = useState<{ time: string; width: number; height: number }>();
-    const lines = body?.text === text ? body.lines : [];
-    const last = lines.at(-1);
-    const measuredClock = clock?.time === time ? clock : undefined;
-    const gap = 8;
-    // Grow short bubbles to include the clock, but never exceed the parent's
-    // width constraint. Multiline text keeps the full available line width.
-    const scale = PixelRatio.get();
-    const singleLineWidth = lines.length === 1 && last && measuredClock
-        ? Math.ceil((last.width + gap + measuredClock.width) * scale) / scale : undefined;
-    const inline = !!(last && measuredClock && last.height >= measuredClock.height
-        && last.x + last.width + gap + measuredClock.width <= width);
+    const [body, setBody] = useState<{ text: string; width: number; lines: LineBounds[] }>();
+    const [clockMeasurement, setClock] = useState<{ time: string; width: number; height: number }>();
+    const clock = clockMeasurement?.time === time ? clockMeasurement : undefined;
+    // A real native row gives a new short message its final geometry immediately:
+    // no footer-first frame, hidden text, or estimated character widths.
+    const row = !fullWidth && !multiline;
+    const committed = useRef({ width, time, row, text });
+    useLayoutEffect(() => { committed.current = { width, time, row, text }; }, [width, time, row, text]);
+    const last = body?.width === width && body.text === text ? body.lines.at(-1) : undefined;
+    const inline = !row && !!(last && clock && last.height >= clock.height
+        && last.x >= 0 && last.x + last.width + 8 + clock.width <= width);
 
     return (
-        <View style={[styles.container, singleLineWidth !== undefined && { width: singleLineWidth }]}
+        <View style={[styles.container, fullWidth && styles.fullWidth, row && styles.row]}
             onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
-            <Text style={textStyle} selectable
-                onTextLayout={(event) => setBody({ text, lines: event.nativeEvent.lines })}>
-                {text}
+            <Text key={row ? 'row' : `measured-${width}`} style={[textStyle, row && styles.rowBody]} selectable
+                onTextLayout={(event) => {
+                    if (committed.current.width !== width || committed.current.row !== row || committed.current.text !== text) return;
+                    if (row) {
+                        if (event.nativeEvent.lines.length > 1) setMultiline(true);
+                    } else {
+                        setBody({ text, width, lines: event.nativeEvent.lines });
+                    }
+                }}>
+                {children ?? text}
             </Text>
-            {time ? <Text key={time} style={[styles.clock, inline && styles.inlineClock,
-                inline && { top: last!.y + last!.height - measuredClock!.height },
-            ]} testID="inline-bubble-time" accessible={false} selectable={false}
+            {time ? <Text key={time} style={[styles.clock, row && styles.rowClock, inline && styles.inlineClock,
+                inline && { top: last!.y + last!.height - clock!.height },
+            ]} testID={clockTestID} accessible={false} selectable={false}
                 onLayout={(event) => {
+                    if (committed.current.time !== time) return;
                     const { width: clockWidth, height } = event.nativeEvent.layout;
                     setClock((previous) => previous?.time === time && previous.width === clockWidth && previous.height === height
                         ? previous : { time, width: clockWidth, height });
@@ -57,6 +73,10 @@ export function ChatBubbleText({ text, time, textStyle }: ChatBubbleTextProps) {
 
 const styles = StyleSheet.create({
     container: { maxWidth: '100%', minWidth: 0 },
+    fullWidth: { width: '100%', flexShrink: 0 },
+    row: { flexDirection: 'row', alignItems: 'flex-end' },
+    rowBody: { flexShrink: 1, minWidth: 0 },
+    rowClock: { marginLeft: 8, marginTop: 0, flexShrink: 0 },
     clock: { alignSelf: 'flex-end', marginTop: 2, fontSize: auxFontSizes.badge, color: theme.colors.textSecondary },
     inlineClock: { position: 'absolute', right: 0, marginTop: 0 },
 });

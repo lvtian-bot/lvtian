@@ -2,7 +2,12 @@ import React from 'react';
 import { StyleSheet, Text, View, type TextStyle, type ViewStyle } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 import { ChatMarkdownBubble } from '../src/components/ChatMarkdownBubble';
+import { ChatBubbleText } from '../src/components/ChatBubbleText';
 import { FONT_SIZE_METRICS } from '../src/utils/fontSize';
+
+// Expo's mocked Image.getSize does not support FitImage's Promise API.
+// Keep parsing/image AST rules real; only replace remote image sizing.
+jest.mock('react-native-fit-image', () => 'FitImage');
 
 // Exercise the actual markdown-display parser/rules, not a text-only Markdown mock.
 // ReactTestRenderer does not run Yoga: these are layout-contract regressions, not device measurements.
@@ -38,7 +43,7 @@ describe('ChatMarkdownBubble', () => {
         expect(viewStyles.some((style) => style.flex === 1)).toBe(true);
         const clock = renderer.root.findByProps({ testID: 'markdown-bubble-time' });
         expect(clock.props.selectable).toBe(false);
-        expect(clock.parent).toBe(markdown.parent);
+        expect(renderer.root.findByType(ChatBubbleText).props.fullWidth).toBe(true);
         expect(clock.parent?.children.at(-1)).toBe(clock);
         for (const node of [nativeBubble, renderedBody, clock]) {
             const style = StyleSheet.flatten(node.props.style) as ViewStyle;
@@ -51,6 +56,45 @@ describe('ChatMarkdownBubble', () => {
         expect(StyleSheet.flatten(leaf('bold').props.style)).toMatchObject({ fontWeight: '700' });
         expect(leaf('inline').props.selectable).toBe(true);
         expect(leaf('Last paragraph')).toBeDefined();
+    });
+
+    it.each([
+        '**bold** then terminal paragraph',
+        '- **配置**：[链接](https://example.com) 与 `command`\n- 真机验证仍未完成，可重启 App 检查更新后的行为。',
+        '1. first\n   - nested final **bold**',
+    ])('uses native terminal text-line bounds within its own indented host: %s', async (source) => {
+        await render(source);
+        const terminal = renderer.root.findByType(ChatBubbleText);
+        const host = terminal.findByType(View);
+        const body = () => terminal.findAllByType(Text).find((node) => typeof node.props.onTextLayout === 'function')!;
+        const clock = () => renderer.root.findByProps({ testID: 'markdown-bubble-time' });
+        await ReactTestRenderer.act(async () => { host.props.onLayout({ nativeEvent: { layout: { width: 220 } } }); });
+        await ReactTestRenderer.act(async () => {
+            body().props.onTextLayout({ nativeEvent: { lines: [{ x: 0, y: 27, width: 110, height: 27 }] } });
+            clock().props.onLayout({ nativeEvent: { layout: { width: 30, height: 12 } } });
+        });
+        expect(StyleSheet.flatten(clock().props.style)).toMatchObject({ position: 'absolute', right: 0, top: 42 });
+        expect(host.findAllByProps({ testID: 'markdown-bubble-time' }).some((node) => node === clock())).toBe(true);
+        expect(body().findAllByProps({ testID: 'markdown-bubble-time' })).toHaveLength(0);
+        await ReactTestRenderer.act(async () => {
+            body().props.onTextLayout({ nativeEvent: { lines: [{ x: 20, y: 27, width: 175, height: 27 }] } });
+        });
+        expect(StyleSheet.flatten(clock().props.style).position).toBeUndefined();
+    });
+
+    it.each(['```sh\nx\n```', '| a | b |\n| --- | --- |\n| c | d |', '# heading', '> quote', '---', '![image](https://example.com/a.png)'])('keeps unsupported terminal blocks in normal footer flow: %s', async (source) => {
+        await render(source);
+        expect(renderer.root.findAllByType(ChatBubbleText)).toHaveLength(0);
+        expect(StyleSheet.flatten(renderer.root.findByProps({ testID: 'markdown-bubble-time' }).props.style).position).toBeUndefined();
+    });
+
+    it('does not add clocks or measured wrappers to plain work-record content', async () => {
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<ChatMarkdownBubble text="- **final**" metrics={FONT_SIZE_METRICS.standard} plain />);
+        });
+        expect(renderer.root.findAllByType(ChatBubbleText)).toHaveLength(0);
+        expect(renderer.root.findAllByProps({ testID: 'markdown-bubble-time' })).toHaveLength(0);
+        expect(leaf('final').props.selectable).toBe(true);
     });
 
     it.each(['small', 'standard', 'large'] as const)('preserves %s dynamic typography, nested formatting and code copying', async (size) => {

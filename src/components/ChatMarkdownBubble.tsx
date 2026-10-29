@@ -3,6 +3,7 @@ import { Platform, StyleSheet, Text, View, type TextStyle, type ViewStyle } from
 import Markdown, { type ASTNode } from 'react-native-markdown-display';
 import { auxFontSizes, type FontSizeMetrics } from '../utils/fontSize';
 import { theme } from '../utils/theme';
+import { ChatBubbleText } from './ChatBubbleText';
 
 interface ChatMarkdownBubbleProps {
     text: string;
@@ -39,17 +40,53 @@ function renderCodeBlock(node: ASTNode, _children: ReactNode[], _parent: ASTNode
     );
 }
 
+const terminalContainers = new Set(['body', 'paragraph', 'bullet_list', 'ordered_list', 'list_item']);
+
+/** Only ordinary terminal paragraphs/list children are safe. Never infer geometry
+ * from Markdown source, or move the clock past a later code block/table/image. */
+function terminalTextGroup(node: ASTNode): ASTNode | undefined {
+    if (node.type === 'textgroup') {
+        const hasImage = (child: ASTNode): boolean => child.type === 'image' || child.type === 'blocklink'
+            || child.children.some(hasImage);
+        return node.children.some(hasImage) ? undefined : node;
+    }
+    const last = node.children.at(-1);
+    return terminalContainers.has(node.type) && last ? terminalTextGroup(last) : undefined;
+}
+
 /** Rich text needs a definite width before Yoga measures paragraphs and list rows.
  * Do not nest this inside the shrink-to-content plain-text bubble.
  */
 export function ChatMarkdownBubble({ text, time, metrics, testID, plain = false }: ChatMarkdownBubbleProps) {
     const markdownStyles = useMemo(() => getMarkdownStyles(metrics), [metrics]);
+    const rules = useMemo(() => createClockRules(text, time, metrics), [text, time, metrics]);
     return (
         <View testID={testID} style={plain ? layoutStyles.plain : layoutStyles.bubble}>
-            <Markdown style={markdownStyles} rules={markdownRules}>{text}</Markdown>
-            {time ? <Text testID="markdown-bubble-time" style={layoutStyles.time} selectable={false}>{time}</Text> : null}
+            <Markdown style={markdownStyles} rules={rules}>{text}</Markdown>
         </View>
     );
+}
+
+function createClockRules(text: string, time: string | undefined, metrics: FontSizeMetrics) {
+    return {
+        ...markdownRules,
+        body: (node: ASTNode, children: ReactNode[], _parent: ASTNode[], styles: RuleStyles) => (
+            <View key={node.key} style={styles._VIEW_SAFE_body}>
+                {children}
+                {time && !terminalTextGroup(node) ? <Text testID="markdown-bubble-time"
+                    style={layoutStyles.time} selectable={false} accessible={false}>{time}</Text> : null}
+            </View>
+        ),
+        textgroup: (node: ASTNode, children: ReactNode[], parents: ASTNode[], styles: RuleStyles) => {
+            const root = parents.at(-1);
+            if (time && root && terminalTextGroup(root)?.key === node.key) {
+                return <ChatBubbleText key={node.key} text={text} time={time}
+                    textStyle={[styles.textgroup, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]}
+                    fullWidth clockTestID="markdown-bubble-time">{children}</ChatBubbleText>;
+            }
+            return markdownRules.textgroup(node, children, parents, styles);
+        },
+    };
 }
 
 const getMarkdownStyles = (metrics: FontSizeMetrics) => StyleSheet.create({
