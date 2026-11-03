@@ -28,9 +28,17 @@ export class AssistantClient {
     private lastBackgroundTimestamp = 0;
     private appStateSubscription: { remove: () => void } | null = null;
     private pendingResetCallbacks: Map<string, Array<(success: boolean) => void>> = new Map();
+    private serverSynced = false;
+    private awaitingFullSnapshot = false;
 
     private constructor() {
         this.setupAppStateListener();
+        useAssistantStore.subscribe((state, previous) => {
+            if (state.outboxStatus === 'ready' && previous.outboxStatus !== 'ready' && this.serverSynced) {
+                this.flushPendingCancelQueue();
+                this.flushPendingSendQueue().catch(() => {});
+            }
+        });
     }
 
     /**
@@ -361,10 +369,9 @@ export class AssistantClient {
             }
         }
 
-        // Wait for the chat cursor before opening WebSocket, but do not make HTTP
-        // task access depend on chat cache hydration.
+        // Local cache and outbox loading never block the server connection.
         store = useAssistantStore.getState();
-        if (!store.hasHydrated || store.chatHydrationError || this.isExplicitlyClosed) return;
+        if (this.isExplicitlyClosed) return;
         // Use the settled store snapshot if a save followed the pending read.
         const url = store.serverUrl;
         const token = store.serverToken;
@@ -403,7 +410,8 @@ export class AssistantClient {
                 if (token) {
                     this.sendRaw({ type: 'auth', token });
                 }
-                const lastSeq = Math.max(store.currentSeq, store.clearedSeq ?? 0);
+                const lastSeq = useAssistantStore.getState().clearedSeq ?? 0;
+                this.awaitingFullSnapshot = lastSeq === 0;
                 this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq });
             };
 
@@ -421,6 +429,7 @@ export class AssistantClient {
             };
 
             this.ws.onclose = (_event) => {
+                this.serverSynced = false;
                 this.stopPing();
                 if (!this.isExplicitlyClosed) {
                     store.setConnectionState('disconnected', '连接已断开，正在准备重连...');
@@ -453,6 +462,8 @@ export class AssistantClient {
     }
 
     private cleanUpWs(): void {
+        this.serverSynced = false;
+        this.awaitingFullSnapshot = false;
         this.clearPongTimeout();
         if (this.ws) {
             try {
@@ -552,6 +563,7 @@ export class AssistantClient {
             throw new Error(i18n.t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
         }
         const store = useAssistantStore.getState();
+        const isConnected = this.ws && this.ws.readyState === WebSocket.OPEN && store.connectionState === 'connected';
         const messageId = customMessageId || `msg-${Date.now()}-${++AssistantClient.messageSeq}`;
 
         const localMessage: AssistantMessage = {
@@ -566,7 +578,6 @@ export class AssistantClient {
 
         store.addOrUpdateMessage(localMessage);
 
-        const isConnected = this.ws && this.ws.readyState === WebSocket.OPEN && store.connectionState === 'connected';
         const isUpgrading = store.isServerUpgrading;
 
         // 若处于升级中或连接未就绪：自动进入本地待发队列排队，状态保持 sending（微小等待图标），不报任何网络错误
@@ -622,7 +633,8 @@ export class AssistantClient {
         const queue = store.pendingSendQueue;
         if (queue.length === 0) return;
 
-        const nextItem = queue[0];
+        const nextItem = queue.find(item => store.messages.find(message => message.id === item.messageId)?.status !== 'error');
+        if (!nextItem) return;
         let attachments = nextItem.attachments;
 
         // 若附件在持久化脱水后缺少 Base64/content，依据本地 uri 异步重新读取补全
@@ -630,9 +642,10 @@ export class AssistantClient {
             try {
                 attachments = await Promise.all(
                     attachments.map(async (att) => {
-                        if (att.data !== undefined || att.content !== undefined || !att.uri) {
+                        if (att.data !== undefined || att.content !== undefined) {
                             return att;
                         }
+                        if (!att.uri) throw new Error('ATTACHMENT_URI_MISSING');
                         const isImg = att.type === 'image';
                         const res = await fsService.readAttachment(
                             att.uri,
@@ -670,7 +683,6 @@ export class AssistantClient {
                         : i18n.t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'),
                     attachments: nextItem.attachments,
                 });
-                currentStore.removeFromPendingSendQueue(nextItem.messageId);
                 // 推进后续排队消息
                 this.flushPendingSendQueue();
                 return;
@@ -857,9 +869,8 @@ export class AssistantClient {
         if (current) {
             this.cancellingMessages.set(messageId, current);
         }
-        store.removeMessage(messageId);
-        // 无条件先入持久化待撤销队列，杜绝半开连接下本地误判发送成功但服务端未收到导致漏撤销
-        store.addToPendingCancelQueue(messageId);
+        // Remove from the send queue and enqueue the cancellation in one update.
+        store.cancelPendingMessage(messageId);
         return this.sendRaw({
             type: 'cancel_queued',
             sessionId: 'main',
@@ -921,6 +932,10 @@ export class AssistantClient {
             }
 
             case 'sync_result': {
+                this.serverSynced = true;
+                store.markChatAuthoritative();
+                const replaceCache = this.awaitingFullSnapshot;
+                this.awaitingFullSnapshot = false;
                 // 重连并完成对账，服务端已恢复正常，解除升级态
                 store.setIsServerUpgrading(false);
                 store.setCurrentSeq(msg.currentSeq);
@@ -948,6 +963,7 @@ export class AssistantClient {
                 const msgMap = new Map<string, AssistantMessage>();
                 // 先写入本地已有的所有消息；排队中消息保持 sending 态，其余未确认消息转 error
                 for (const m of localMessages) {
+                    if (replaceCache && m.status !== 'sending' && m.status !== 'error' && !pendingIds.has(m.id)) continue;
                     if (m.status === 'sending' && !serverIdSet.has(m.id)) {
                         if (pendingIds.has(m.id)) {
                             // 消息仍在本地队列中等待补发，保持 sending 态，不报错
@@ -966,7 +982,7 @@ export class AssistantClient {
                 // 服务端下发的有效消息优先覆盖更新
                 for (const m of validServerMessages) {
                     msgMap.set(m.id, m);
-                    if (pendingIds.has(m.id)) {
+                    if (pendingIds.has(m.id) && m.status !== 'error') {
                         store.removeFromPendingSendQueue(m.id);
                     }
                 }
@@ -1062,8 +1078,8 @@ export class AssistantClient {
                     attachments: existing?.attachments || msg.attachments,
                 });
                 store.setCurrentSeq(msg.seq);
-                // 收到服务端终态回执（成功或明确失败）：均移出本地待发队列释放队首
-                store.removeFromPendingSendQueue(msg.messageId);
+                // Only a successful server acknowledgement removes a queued message.
+                if (!isError) store.removeFromPendingSendQueue(msg.messageId);
                 // 若为终态失败回执，后续不会产生任务执行与状态回调，主动推进队列中的下一条积压消息
                 if (isError) {
                     this.flushPendingSendQueue();

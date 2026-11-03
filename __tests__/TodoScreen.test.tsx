@@ -61,8 +61,7 @@ describe('TodoScreen 服务器只读自动任务', () => {
         mockFocus.current = undefined; mockFocus.cleanup = undefined;
         jest.clearAllMocks();
         Object.defineProperty(service, 'generation', { configurable: true, value: 0 });
-        useAssistantStore.setState({ serverUrl: 'http://server-a', serverToken: 'a', hasHydrated: true,
-            credentialsStatus: 'ready', credentialsError: null, chatHydrationError: null,
+        useAssistantStore.setState({ serverUrl: 'http://server-a', serverToken: 'a', credentialsStatus: 'ready', credentialsError: null,
             loadSavedCredentials: jest.fn(), connectionState: 'connected' });
         catalog.mockReset().mockResolvedValue({ tasks: [task], generation: 0 });
         history.mockReset().mockResolvedValue({ history: { id: task.id, records: [], retention: { days: 30, records: 100 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false }, generation: 0 });
@@ -107,8 +106,8 @@ describe('TodoScreen 服务器只读自动任务', () => {
         expect(texts()).toContain('暂无开启的任务');
     });
 
-    it.each([null, 'chat_hydration_failed'] as const)('聊天恢复未完成或失败不阻止已就绪凭据读取任务：%s', async chatHydrationError => {
-        useAssistantStore.setState({ hasHydrated: false, chatHydrationError });
+    it.each(['loading', 'ready'] as const)('待发送队列状态不阻止读取任务：%s', async outboxStatus => {
+        useAssistantStore.setState({ outboxStatus });
         await mount();
         expect(catalog).toHaveBeenCalledTimes(1);
         expect(texts()).toContain(task.title);
@@ -116,7 +115,7 @@ describe('TodoScreen 服务器只读自动任务', () => {
     });
 
     it('聊天已恢复也必须等待独立凭据就绪', async () => {
-        useAssistantStore.setState({ hasHydrated: true, credentialsStatus: 'loading' });
+        useAssistantStore.setState({ credentialsStatus: 'loading' });
         await mount();
         expect(catalog).not.toHaveBeenCalled();
         expect(texts()).not.toContain('暂无开启的任务');

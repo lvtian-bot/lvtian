@@ -45,7 +45,7 @@ describe('AssistantClient independent connection initialization', () => {
         useAssistantStore.setState({
             serverUrl: 'https://memory.test', serverToken: 'memory-token',
             credentialsStatus: 'ready', credentialsError: null,
-            hasHydrated: true, chatHydrationError: null,
+            outboxStatus: 'ready',
             connectionState: 'disconnected', connectionError: null,
             loadSavedCredentials: load, isServerUpgrading: false,
             messages: [], pendingSendQueue: [], pendingCancelQueue: [],
@@ -96,51 +96,45 @@ describe('AssistantClient independent connection initialization', () => {
         });
         expect(socket.send.mock.calls.map(([value]) => JSON.parse(value as string) as unknown)).toEqual([
             { type: 'auth', token: 'saved-token' },
-            { type: 'sync', sessionId: 'main', lastSeq: 15 },
+            { type: 'sync', sessionId: 'main', lastSeq: 0 },
         ]);
     });
 
-    it.each([null, 'chat_hydration_failed'] as const)('waits for successful chat hydration before opening WebSocket (%s)', async chatHydrationError => {
-        useAssistantStore.setState({ hasHydrated: false });
+    it('opens a connection without waiting for chat cache', async () => {
         await client.connect();
-        expect(TestSocket.instances).toHaveLength(0);
-        expect(load).not.toHaveBeenCalled();
-
-        useAssistantStore.setState({ hasHydrated: true, chatHydrationError });
-        await client.connect();
-        if (chatHydrationError) {
-            // A settled failed read is not a usable cursor/cache. Do not replay or
-            // send while a later cache retry could overwrite the live state.
-            expect(TestSocket.instances).toHaveLength(0);
-            useAssistantStore.setState({ chatHydrationError: null });
-            await client.connect();
-        }
         expect(TestSocket.instances).toHaveLength(1);
+        expect(load).not.toHaveBeenCalled();
         const socket = TestSocket.instances[0];
         socket.open();
         expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: 15 }));
-        expect(useAssistantStore.getState().connectionState).toBe('connected');
-        expect(load).not.toHaveBeenCalled();
     });
 
-    it('loads credentials independently while chat is unsettled, but opens no socket before both settle', async () => {
+    it('connects as soon as credentials are ready even while cache is unsettled', async () => {
         let resolveToken!: (token: string) => void;
         const token = new Promise<string>(resolve => { resolveToken = resolve; });
         jest.mocked(SecureStore.getItemAsync).mockReturnValueOnce(token);
-        useAssistantStore.setState({ credentialsStatus: 'loading', hasHydrated: false });
+        useAssistantStore.setState({ credentialsStatus: 'loading' });
         const connecting = client.connect();
         expect(load).toHaveBeenCalledTimes(1);
         expect(TestSocket.instances).toHaveLength(0);
         resolveToken('saved-token');
         await connecting;
         expect(useAssistantStore.getState().credentialsStatus).toBe('ready');
-        expect(TestSocket.instances).toHaveLength(0);
-
-        useAssistantStore.setState({ hasHydrated: true });
-        await client.connect();
-        expect(load).toHaveBeenCalledTimes(1);
         expect(TestSocket.instances).toHaveLength(1);
+        expect(load).toHaveBeenCalledTimes(1);
         expect(TestSocket.instances[0].url).toBe('wss://saved.test');
+    });
+
+    it('connects and sends in-memory queued messages while the outbox loads', async () => {
+        useAssistantStore.setState({ outboxStatus: 'loading', clearedSeq: 0 });
+        await client.connect();
+        const socket = TestSocket.instances[0];
+        socket.open();
+        useAssistantStore.getState().addToPendingSendQueue({ sessionId: 'main', messageId: 'late', content: 'hello' });
+        socket.onmessage?.({ data: JSON.stringify({
+            type: 'sync_result', sessionId: 'main', messages: [], taskState: 'idle', currentSeq: 0,
+        }) });
+        expect(socket.send.mock.calls.some(([value]) => JSON.parse(value as string).messageId === 'late')).toBe(true);
     });
 
     it('treats ready with an empty token as settled absence, without reloading or a loading/ready loop', async () => {

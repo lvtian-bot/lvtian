@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { outboxKey, readOutbox, writeOutbox, type ChatOutbox } from '../services/chatOutbox';
 import {
-    ASSISTANT_CHAT_KEY,
     ConnectionConfigError,
     CredentialsErrorCode,
     credentialsErrorCode,
@@ -19,12 +19,15 @@ import {
     AgentSkill,
 } from '../types/assistantProtocol';
 
-// Zustand writes on every set, including hydration/status updates. Keep the legacy
-// record untouched until migration is durably committed and chat hydration succeeds.
+// Defer disposable cache writes until its first read finishes; server connection
+// and the independent outbox do not wait for it.
 let credentialsInitialized = false;
+const CHAT_CACHE_KEY = 'lvtian-chat-cache-v2';
 let chatHydrationSucceeded = false;
-let reportingChatWriteError = false;
-let connectionIdentityChanged = false;
+let cacheIdentityStarted = '';
+let cacheSuperseded = false;
+let outboxGeneration = 0;
+const outboxWrites = new Map<string, Promise<void>>();
 let operationTail: Promise<unknown> = Promise.resolve();
 function serialize<T>(operation: () => Promise<T>): Promise<T> {
     const result = operationTail.then(operation);
@@ -35,24 +38,18 @@ function serialize<T>(operation: () => Promise<T>): Promise<T> {
 const chatStorage = {
     getItem: (name: string) => AsyncStorage.getItem(name),
     setItem: async (name: string, value: string): Promise<void> => {
-        if (!credentialsInitialized || !chatHydrationSucceeded || reportingChatWriteError) return;
+        if (!credentialsInitialized || !chatHydrationSucceeded) return;
         try {
             await AsyncStorage.setItem(name, value);
-        } catch {
-            // The error setter suppresses its own persistence to avoid recursion.
-            setChatCacheError('chat_cache_write_failed');
-        }
+        } catch { /* disposable cache; the server remains authoritative */ }
     },
     removeItem: (name: string) => AsyncStorage.removeItem(name),
 };
-let setChatCacheError: (code: 'chat_cache_write_failed') => void = () => undefined;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === 'object' && !Array.isArray(value);
 const isCounter = (value: unknown): boolean =>
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
-const isModel = (value: unknown): boolean => isRecord(value)
-    && typeof value.provider === 'string' && typeof value.model === 'string';
 const validOptionalArray = (value: unknown, check: (entry: unknown) => boolean): boolean =>
     value === undefined || (Array.isArray(value) && value.every(check));
 const isAttachment = (value: unknown): boolean => isRecord(value)
@@ -74,18 +71,7 @@ const isMessage = (value: unknown): boolean => isRecord(value)
 function parseChatCache(value: unknown): Partial<AssistantState> {
     if (value === undefined) return {};
     if (!isRecord(value)
-        || !validOptionalArray(value.messages, isMessage)
-        || !validOptionalArray(value.pendingSendQueue, (item) => isRecord(item)
-            && typeof item.sessionId === 'string' && typeof item.messageId === 'string'
-            && typeof item.content === 'string' && validOptionalArray(item.attachments, isAttachment))
-        || !validOptionalArray(value.pendingCancelQueue, (id) => typeof id === 'string')
-        || !validOptionalArray(value.agentModelOptions, isModel)
-        || (value.currentSeq !== undefined && !isCounter(value.currentSeq))
-        || (value.clearedSeq !== undefined && !isCounter(value.clearedSeq))
-        || (value.permissionMode !== undefined
-            && value.permissionMode !== 'workspace-write' && value.permissionMode !== 'danger-full-access')
-        || (value.agentModelSelection !== undefined && value.agentModelSelection !== null
-            && !isModel(value.agentModelSelection))) {
+        || !validOptionalArray(value.messages, isMessage)) {
         throw new Error('chat_hydration_failed');
     }
     return value as Partial<AssistantState>;
@@ -101,12 +87,10 @@ interface AssistantState {
     /** 待审批队列：同一会话并发多个工具各自请求审批时按序展示与应答 */
     pendingApprovals: ApprovalRequest[];
     currentSeq: number;
-    /** Chat hydration attempt has settled; independent of credential readiness. */
-    hasHydrated: boolean;
     credentialsStatus: 'loading' | 'ready' | 'error';
     credentialsError: CredentialsErrorCode | null;
-    chatHydrationError: 'chat_hydration_failed' | null;
-    chatCacheError: 'chat_cache_write_failed' | null;
+    outboxStatus: 'loading' | 'ready';
+    markChatAuthoritative: () => void;
     permissionMode: 'workspace-write' | 'danger-full-access';
     /** 服务端当前助理模型选择（provider 路由 + 模型 ID），未拉取到时为 null */
     agentModelSelection: { provider: string; model: string } | null;
@@ -122,7 +106,6 @@ interface AssistantState {
     skills: AgentSkill[];
 
     // Actions
-    setHasHydrated: (hydrated: boolean) => void;
     setPermissionMode: (mode: 'workspace-write' | 'danger-full-access') => void;
     setAgentModelSelection: (selection: { provider: string; model: string } | null) => void;
     setAgentModelOptions: (options: Array<{ provider: string; model: string }>) => void;
@@ -133,6 +116,7 @@ interface AssistantState {
     setMessages: (messages: AssistantMessage[]) => void;
     addOrUpdateMessage: (message: AssistantMessage) => void;
     removeMessage: (messageId: string) => void;
+    cancelPendingMessage: (messageId: string) => void;
     appendDeltaToMessage: (messageId: string, delta: string) => void;
     setToolCallForMessage: (messageId: string, toolCall: ToolCallState) => void;
     setTaskState: (state: TaskExecutionState) => void;
@@ -153,14 +137,6 @@ interface AssistantState {
 export const useAssistantStore = create<AssistantState>()(
     persist(
         (set, get) => {
-            setChatCacheError = (chatCacheError) => {
-                reportingChatWriteError = true;
-                try {
-                    set({ chatCacheError });
-                } finally {
-                    reportingChatWriteError = false;
-                }
-            };
             return {
                 serverUrl: '',
                 serverToken: '',
@@ -171,11 +147,10 @@ export const useAssistantStore = create<AssistantState>()(
                 pendingApprovals: [],
                 currentSeq: 0,
                 clearedSeq: 0,
-                hasHydrated: false,
                 credentialsStatus: 'loading',
                 credentialsError: null,
-                chatHydrationError: null,
-                chatCacheError: null,
+                outboxStatus: 'ready',
+                markChatAuthoritative: () => { cacheSuperseded = true; },
                 permissionMode: 'workspace-write',
                 agentModelSelection: null,
                 agentModelOptions: [],
@@ -184,7 +159,6 @@ export const useAssistantStore = create<AssistantState>()(
                 pendingCancelQueue: [],
                 skills: [],
 
-                setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
                 setPermissionMode: (mode) => set({ permissionMode: mode }),
                 setAgentModelSelection: (agentModelSelection) => set({ agentModelSelection }),
                 setAgentModelOptions: (agentModelOptions) => set({ agentModelOptions }),
@@ -204,11 +178,14 @@ export const useAssistantStore = create<AssistantState>()(
                         credentialsInitialized = true;
 
                         // 切换身份或尚未读出旧身份时，清除旧服务器的聊天与对账状态。
-                        if (identityUnknown || (currentUrl && currentUrl !== cleanUrl) || (currentToken && currentToken !== cleanToken)) {
-                            connectionIdentityChanged = true;
+                        if (identityUnknown || currentUrl !== cleanUrl || currentToken !== cleanToken) {
+                            outboxGeneration += 1;
+                            cacheSuperseded = true;
+                            cacheIdentityStarted = '';
                             set({
                                 serverUrl: cleanUrl,
                                 serverToken: cleanToken,
+                                outboxStatus: 'loading',
                                 messages: [],
                                 currentSeq: 0,
                                 clearedSeq: 0,
@@ -225,6 +202,7 @@ export const useAssistantStore = create<AssistantState>()(
                             set({ serverUrl: cleanUrl, serverToken: cleanToken });
                         }
                         set({ credentialsStatus: 'ready', credentialsError: null });
+                        startChatStorage(cleanUrl, cleanToken);
                     } catch (error) {
                         const code = credentialsErrorCode(error);
                         set({ credentialsStatus: 'error', credentialsError: code });
@@ -235,14 +213,31 @@ export const useAssistantStore = create<AssistantState>()(
                 loadSavedCredentials: () => serialize(async () => {
                     set({ credentialsStatus: 'loading', credentialsError: null });
                     try {
+                        const currentUrl = get().serverUrl;
+                        const currentToken = get().serverToken;
                         const credentials = await loadConnectionCredentials();
+                        const identityChanged = credentialsInitialized
+                            && (currentUrl !== credentials.url || currentToken !== credentials.token);
+                        if (identityChanged) {
+                            outboxGeneration += 1;
+                            cacheSuperseded = true;
+                            cacheIdentityStarted = '';
+                        }
                         credentialsInitialized = true;
                         set({
                             serverUrl: credentials.url,
                             serverToken: credentials.token,
                             credentialsStatus: 'ready',
                             credentialsError: null,
+                            ...(identityChanged ? {
+                                outboxStatus: 'loading' as const,
+                                messages: [], currentSeq: 0, clearedSeq: 0,
+                                pendingSendQueue: [], pendingCancelQueue: [], pendingApprovals: [],
+                                taskState: 'idle' as const, isServerUpgrading: false,
+                                skills: [], agentModelSelection: null, agentModelOptions: [],
+                            } : {}),
                         });
+                        startChatStorage(credentials.url, credentials.token);
                         return credentials;
                     } catch (error) {
                         const code = credentialsErrorCode(error);
@@ -280,6 +275,13 @@ export const useAssistantStore = create<AssistantState>()(
                         messages: state.messages.filter((m) => m.id !== messageId),
                         pendingSendQueue: state.pendingSendQueue.filter((item) => item.messageId !== messageId),
                     })),
+
+                cancelPendingMessage: (messageId) => set((state) => ({
+                    messages: state.messages.filter(message => message.id !== messageId),
+                    pendingSendQueue: state.pendingSendQueue.filter(item => item.messageId !== messageId),
+                    pendingCancelQueue: state.pendingCancelQueue.includes(messageId)
+                        ? state.pendingCancelQueue : [...state.pendingCancelQueue, messageId],
+                })),
 
                 appendDeltaToMessage: (messageId, delta) =>
                     set((state) => {
@@ -395,28 +397,18 @@ export const useAssistantStore = create<AssistantState>()(
             };
         },
         {
-            name: ASSISTANT_CHAT_KEY,
+            name: CHAT_CACHE_KEY,
+            skipHydration: true,
             storage: createJSONStorage(() => chatStorage),
             merge: (persisted, current) => {
-                // After switching identity, memory owns the new chat. This also
-                // protects explicit hydration retries from restoring the old cache.
-                if (connectionIdentityChanged) return current;
+                if (cacheSuperseded || current.messages.length > 0 || !isRecord(persisted)
+                    || persisted.identity !== outboxKey(current.serverUrl, current.serverToken)) return current;
                 const saved = parseChatCache(persisted);
-                return {
-                    ...current,
-                    messages: saved.messages ?? current.messages,
-                    currentSeq: saved.currentSeq ?? current.currentSeq,
-                    clearedSeq: saved.clearedSeq ?? current.clearedSeq,
-                    pendingSendQueue: saved.pendingSendQueue ?? current.pendingSendQueue,
-                    pendingCancelQueue: saved.pendingCancelQueue ?? current.pendingCancelQueue,
-                    permissionMode: saved.permissionMode ?? current.permissionMode,
-                    agentModelSelection: saved.agentModelSelection ?? current.agentModelSelection,
-                    agentModelOptions: saved.agentModelOptions ?? current.agentModelOptions,
-                };
+                return { ...current, messages: saved.messages ?? [] };
             },
             partialize: (state) => {
-                const persistedMessages = state.messages
-                    .filter((m) => m.status !== 'processing')
+                const cacheableMessages = state.messages
+                    .filter((m) => m.status === 'sent' || m.status === 'queued' || m.status === 'done')
                     .map((m) => {
                         if (!m.attachments || m.attachments.length === 0) {
                             return m;
@@ -435,55 +427,30 @@ export const useAssistantStore = create<AssistantState>()(
                             attachments: sanitizedAttachments,
                         };
                     });
-                // 持久化的游标必须与持久化的消息快照严格绑定：
-                // 若直接持久化已被流式 chunk 推高的 state.currentSeq，而进行中的消息被排除，
-                // 应用冷启动重连时向服务端发送 sync(lastSeq = currentSeq)，服务端会判定客户端已拥有该消息并跳过返回，
-                // 导致正在流式输出的消息永久丢失；因此持久化的 currentSeq 必须锚定已持久化消息的最大 seq（无消息时为 0）。
-                const durableSeq = persistedMessages.reduce(
-                    (max, m) => Math.max(max, m.seq ?? 0),
-                    0
-                );
-                // 待发送队列脱水：同样剥离附件庞大 Base64 数据，仅保留轻量元数据与本地 uri，避免突破 Android AsyncStorage 2MB 上限
-                const sanitizedPendingSendQueue = state.pendingSendQueue.map((item) => {
-                    if (!item.attachments || item.attachments.length === 0) {
-                        return item;
-                    }
-                    const sanitizedAttachments = item.attachments.map((att) => ({
-                        type: att.type,
-                        name: att.name,
-                        mimeType: att.mimeType,
-                        size: att.size,
-                        uri: att.uri,
-                    }));
-                    return {
-                        ...item,
-                        attachments: sanitizedAttachments,
-                    };
-                });
+                // Keep the newest complete messages within a conservative size
+                // budget, avoiding oversized Android AsyncStorage rows.
+                const persistedMessages: AssistantMessage[] = [];
+                let cacheCharacters = 0;
+                for (let i = cacheableMessages.length - 1; i >= 0; i -= 1) {
+                    const size = JSON.stringify(cacheableMessages[i]).length;
+                    if (cacheCharacters + size > 128 * 1024) break;
+                    cacheCharacters += size;
+                    persistedMessages.unshift(cacheableMessages[i]);
+                }
                 return {
-                    // Connection URL and token are never part of the chat cache.
-                    // 仅持久化非 processing 状态的已确认消息，避免流式打字期间每个 chunk 触发全量 AsyncStorage 序列化导致 UI 卡顿
+                    identity: outboxKey(state.serverUrl, state.serverToken),
                     messages: persistedMessages,
-                    currentSeq: durableSeq,
-                    clearedSeq: state.clearedSeq ?? 0,
-                    pendingSendQueue: sanitizedPendingSendQueue,
-                    pendingCancelQueue: state.pendingCancelQueue ?? [],
-                    permissionMode: state.permissionMode ?? 'workspace-write',
-                    agentModelSelection: state.agentModelSelection ?? null,
-                    agentModelOptions: state.agentModelOptions ?? [],
                 };
             },
             onRehydrateStorage: () => {
                 chatHydrationSucceeded = false;
                 return (_state, error) => {
-                    // Defer to support even a synchronous storage implementation:
-                    // the exported store must exist before this callback accesses it.
-                    Promise.resolve().then(() => {
-                        chatHydrationSucceeded = !error;
-                        useAssistantStore.setState({
-                            hasHydrated: true,
-                            chatHydrationError: error ? 'chat_hydration_failed' : null,
-                        });
+                    Promise.resolve().then(async () => {
+                        if (error) {
+                            try { await AsyncStorage.removeItem(CHAT_CACHE_KEY); } catch { /* cache is disposable */ }
+                        }
+                        chatHydrationSucceeded = true;
+                        useAssistantStore.setState({});
                     });
                 };
             },
@@ -491,5 +458,67 @@ export const useAssistantStore = create<AssistantState>()(
     )
 );
 
-// Credentials are independent of chat hydration (including a failed or slow read).
+// Chat snapshots and the durable outbox are independent of credentials and each other.
+function startChatStorage(url: string, token: string): void {
+    if (!url) { cacheIdentityStarted = ''; return; }
+    const identity = outboxKey(url, token);
+    if (cacheIdentityStarted !== identity) {
+        cacheIdentityStarted = identity;
+        cacheSuperseded = false;
+        Promise.resolve(useAssistantStore.persist.rehydrate()).catch(() => {});
+        initializeOutbox().catch(() => {});
+    }
+}
+
+async function initializeOutbox(): Promise<void> {
+    const state = useAssistantStore.getState();
+    if (!state.serverUrl || state.credentialsStatus !== 'ready') return;
+    const key = outboxKey(state.serverUrl, state.serverToken);
+    const generation = ++outboxGeneration;
+    useAssistantStore.setState({ outboxStatus: 'loading' });
+    try {
+        // An unreadable queue is disposable; continue with messages created in
+        // this session and replace the unusable record when storage allows it.
+        const saved = await readOutbox(key).catch(() => ({ pendingSendQueue: [], pendingCancelQueue: [] }));
+        const current = useAssistantStore.getState();
+        if (generation !== outboxGeneration || key !== outboxKey(current.serverUrl, current.serverToken)) return;
+        const cancelled = new Set([...saved.pendingCancelQueue, ...current.pendingCancelQueue]);
+        const messages = new Map(saved.pendingSendQueue.map(item => [item.messageId, item]));
+        for (const item of current.pendingSendQueue) messages.set(item.messageId, item);
+        for (const id of cancelled) messages.delete(id);
+        if (cacheSuperseded) {
+            for (const message of current.messages) {
+                if (message.status === 'sent' || message.status === 'queued') messages.delete(message.id);
+            }
+        }
+        const pendingSendQueue = Array.from(messages.values());
+        const displayed = new Set(current.messages.map(message => message.id));
+        const pendingMessages: AssistantMessage[] = pendingSendQueue.filter(item => !displayed.has(item.messageId)).map(item => ({
+            id: item.messageId, seq: 0, role: 'user', content: item.content, timestamp: Date.now(),
+            status: 'sending', attachments: item.attachments,
+        }));
+        useAssistantStore.setState({
+            messages: [...current.messages, ...pendingMessages], pendingSendQueue,
+            pendingCancelQueue: Array.from(cancelled), outboxStatus: 'ready',
+        });
+    } catch { /* connection and in-memory messages remain usable */ }
+}
+
+function persistOutbox(key: string, outbox: ChatOutbox): void {
+    const previous = outboxWrites.get(key) ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(() => writeOutbox(key, outbox)).catch(() => {});
+    outboxWrites.set(key, write);
+    write.then(() => { if (outboxWrites.get(key) === write) outboxWrites.delete(key); });
+}
+
+useAssistantStore.subscribe((state, previous) => {
+    if (state.outboxStatus !== 'ready' || state.credentialsStatus !== 'ready' || !state.serverUrl) return;
+    if (state.pendingSendQueue === previous.pendingSendQueue && state.pendingCancelQueue === previous.pendingCancelQueue) return;
+    persistOutbox(outboxKey(state.serverUrl, state.serverToken), {
+        pendingSendQueue: state.pendingSendQueue, pendingCancelQueue: state.pendingCancelQueue,
+    });
+});
+
+// The retired mixed record is disposable and is not read or migrated.
+Promise.resolve().then(() => AsyncStorage.removeItem('lvtian-assistant-storage')).catch(() => undefined);
 Promise.resolve().then(() => useAssistantStore.getState().loadSavedCredentials()).catch(() => undefined);

@@ -323,7 +323,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(asst?.errorMessage).toBe('approval_timeout');
     });
 
-    test('收到不可恢复的终态失败回执时，移出队列并自动推进下一条排队消息', () => {
+    test('收到终态失败回执时保留失败消息并自动推进下一条', () => {
         const handleServerMessage = (client as unknown as {
             handleServerMessage: (msg: ServerMessage) => void;
         }).handleServerMessage.bind(client);
@@ -370,9 +370,8 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(failedMsg?.status).toBe('error');
         expect(failedMsg?.errorMessage).toBe('disk_full');
 
-        // 2. 失败消息被移出待发队列，释放队首
-        expect(state.pendingSendQueue.length).toBe(1);
-        expect(state.pendingSendQueue[0].messageId).toBe('m-pending-2');
+        // 2. 失败消息保留，后面的消息仍可发送。
+        expect(state.pendingSendQueue.map(item => item.messageId)).toEqual(['m-fail-1', 'm-pending-2']);
 
         // 3. 自动触发推进队列中的下一条消息
         expect(sendRawSpy).toHaveBeenCalledWith(
@@ -475,8 +474,8 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         // 2. 消息标记为失败状态以供重试
         expect(state.messages[0].status).toBe('error');
         expect(state.messages[0].errorMessage).toMatch(/失效|无法重新发送|Attachment file is no longer available/);
-        // 3. 移出队列释放队首
-        expect(state.pendingSendQueue.length).toBe(0);
+        // 3. 失败的待发送消息继续保留，供用户处理。
+        expect(state.pendingSendQueue.length).toBe(1);
 
         sendRawSpy.mockRestore();
     });
