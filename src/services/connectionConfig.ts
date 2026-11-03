@@ -2,14 +2,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
 export const CONNECTION_CONFIG_KEY = 'lvtian-connection-config-v1';
-export const ASSISTANT_CHAT_KEY = 'lvtian-assistant-storage';
 const TOKEN_KEY = 'lvtian_assistant_token';
 
 export type CredentialsErrorCode =
     | 'connection_config_read_failed'
     | 'connection_config_invalid'
-    | 'connection_legacy_read_failed'
-    | 'connection_legacy_invalid'
     | 'connection_config_write_failed'
     | 'credentials_read_failed'
     | 'credentials_write_failed'
@@ -67,20 +64,7 @@ export async function loadConnectionConfig(): Promise<string> {
         return normalizeUrl(config.url);
     }
 
-    const legacyRaw = await read(ASSISTANT_CHAT_KEY, 'connection_legacy_read_failed');
-    let url = '';
-    if (legacyRaw !== null) {
-        const legacy = parse(legacyRaw, 'connection_legacy_invalid');
-        const state = record(legacy.state);
-        if (!state || (state.serverUrl !== undefined && typeof state.serverUrl !== 'string')) {
-            throw new ConnectionConfigError('connection_legacy_invalid');
-        }
-        url = normalizeUrl(typeof state.serverUrl === 'string' ? state.serverUrl : '');
-    }
-    // Commit the migration before callers may overwrite the old chat record. Retrying
-    // after interruption is safe: the dedicated record always wins once committed.
-    await writeUrl(url);
-    return url;
+    return '';
 }
 
 export async function loadConnectionCredentials(): Promise<{ url: string; token: string }> {

@@ -169,10 +169,8 @@ export const ChatScreen = () => {
     const {
         serverUrl,
         serverToken,
-        hasHydrated,
         credentialsStatus,
         credentialsError,
-        chatCacheError,
         loadSavedCredentials,
         connectionState,
         connectionError,
@@ -416,10 +414,10 @@ export const ChatScreen = () => {
 
     useEffect(() => {
         // 自动连接
-        if (serverUrl && hasHydrated && credentialsStatus === 'ready') {
+        if (serverUrl && credentialsStatus === 'ready') {
             AssistantClient.getInstance().connect();
         }
-    }, [serverUrl, serverToken, hasHydrated, credentialsStatus]);
+    }, [serverUrl, serverToken, credentialsStatus]);
 
     const pickImage = useCallback(async () => {
         try {
@@ -637,7 +635,7 @@ export const ChatScreen = () => {
 
     // Loading is not an unconfigured connection. Never offer replacement input
     // before the saved credentials have been read successfully.
-    if (credentialsStatus === 'loading' || (credentialsStatus !== 'error' && !hasHydrated)) {
+    if (credentialsStatus === 'loading') {
         return <View style={styles.centerContainer}><ActivityIndicator color={theme.colors.primary} /></View>;
     }
 
@@ -715,13 +713,6 @@ export const ChatScreen = () => {
                     </View>
                 </View>
             )}
-            {chatCacheError && <View style={styles.statusBar}>
-                <Text accessibilityRole="alert" style={styles.statusText}>{t('settings.failure')}</Text>
-                <TouchableOpacity accessibilityRole="button" style={styles.reconnectBtn}
-                    onPress={() => useAssistantStore.setState({ chatCacheError: null })}>
-                    <Text style={styles.reconnectBtnText}>{t('browser.retry')}</Text>
-                </TouchableOpacity>
-            </View>}
             {/* 服务端升级中温和提示横幅；升级期间隐藏普通未连接条，消除断网误解 */}
             {isServerUpgrading ? (
                 <View style={styles.upgradingBanner}>

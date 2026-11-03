@@ -21,7 +21,6 @@ const realLoad = useAssistantStore.getState().loadSavedCredentials;
 const realSave = useAssistantStore.getState().setServerConfig;
 const connectionMessage = '读取连接配置失败，请重试；已保存的配置未被清除。';
 const tokenMessage = '读取访问令牌失败，请重试；已保存的令牌未被清除。';
-const chatMessage = '读取聊天缓存失败，请重试。';
 
 describe('connection storage failure presentation', () => {
     let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
@@ -40,7 +39,7 @@ describe('connection storage failure presentation', () => {
         await Promise.resolve(); await Promise.resolve();
         connect = jest.spyOn(AssistantClient.getInstance(), 'connect').mockResolvedValue(undefined);
         useAssistantStore.setState({ serverUrl: '', serverToken: '', credentialsStatus: 'ready', credentialsError: null,
-            hasHydrated: true, chatHydrationError: null, chatCacheError: null, messages: [], pendingApprovals: [],
+            messages: [], pendingApprovals: [],
             connectionState: 'disconnected', connectionError: null, taskState: 'idle', loadSavedCredentials: realLoad });
     });
     afterEach(async () => {
@@ -102,35 +101,6 @@ describe('connection storage failure presentation', () => {
         expect(texts()).toContain(tokenMessage);
         expect(renderer!.root.findAllByType(TextInput)).toHaveLength(0);
         expect(connect).not.toHaveBeenCalled();
-    });
-
-    it('pending chat read does not expose a composer that late hydration could overwrite', async () => {
-        useAssistantStore.setState({ serverUrl: 'https://saved.test', hasHydrated: false });
-        await act(async () => { renderer = ReactTestRenderer.create(<ChatScreen />); });
-        expect(renderer!.root.findAllByType(TextInput)).toHaveLength(0);
-        expect(renderer!.root.findAllByType(ActivityIndicator)).toHaveLength(1);
-        expect(texts()).not.toContain('尚未连接绿天助理服务');
-        expect(connect).not.toHaveBeenCalled();
-        await act(async () => { useAssistantStore.setState({ hasHydrated: true }); });
-        expect(renderer!.root.findAllByType(TextInput)).toHaveLength(1);
-        expect(connect).toHaveBeenCalled();
-    });
-
-    it('failed cache read allows chat and starts connecting', async () => {
-        useAssistantStore.setState({ serverUrl: 'https://saved.test', serverToken: 'saved', chatHydrationError: 'chat_hydration_failed' });
-        await act(async () => { renderer = ReactTestRenderer.create(<ChatScreen />); });
-        expect(connect).toHaveBeenCalled();
-        expect(texts()).not.toContain(chatMessage);
-        expect(renderer!.root.findAllByType(TextInput)).toHaveLength(1);
-    });
-
-    it('cache write failure is not mislabeled as a read failure', async () => {
-        useAssistantStore.setState({ serverUrl: 'https://saved.test', serverToken: 'saved', chatCacheError: 'chat_cache_write_failed' });
-        await act(async () => { renderer = ReactTestRenderer.create(<ChatScreen />); });
-        expect(texts()).toContain('保存失败');
-        expect(texts()).not.toContain(chatMessage);
-        await press('重试');
-        expect(useAssistantStore.getState().chatCacheError).toBeNull();
     });
 
     it.each([

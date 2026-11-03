@@ -131,7 +131,7 @@
 ### 2.2 技术骨架
 
 - **分层协作**：`App.tsx` 为应用主入口（Provider 初始化与状态挂载）；`navigation/` 与 `screens/` 构成 UI 层；核心业务逻辑下沉 `services/`（业务中枢）；全局状态由 `store/`（Zustand）管理。
-- **连接配置与聊天缓存**：`connectionConfig.ts` 独立管理唯一地址记录与 SecureStore 令牌，禁止随聊天缓存序列化或增加地址副本兜底。`credentialsStatus` 只管连接初始化；聊天缓存读取失败时清除并从服务端重新同步，不阻断聊天；连接凭据旧数据迁移先于缓存清理。任务 HTTP 不依赖聊天缓存。详见 `docs/服务端/服务端架构与协议.md`。
+- **连接配置、聊天缓存与待发送队列**：`connectionConfig.ts` 管理服务地址和 SecureStore 令牌；聊天缓存只作可丢弃的首屏快显，服务端为聊天记录来源；待发送与待撤销队列独立持久化，按服务身份隔离。缓存与队列读取均不阻断连接，旧混存数据不读取或迁移，启动时直接清理。详见 `docs/服务端/服务端架构与协议.md`。
 - **云同步链路**：`CloudService` 作为云策略入口调度 `WebDavProvider`（原腾讯云 COS 已退出）；`SyncService` 实现三阶段同步引擎（ETag 乐观锁、diff-match-patch 三路合并、`ShadowFileService` 维护的 `.shadows/` 影子基准）；`useFileMetadataStore` 保存 ETag/LastModified 作为冲突检测核心依据；`useSyncStore` 以 Write-Through 机制（写入即入队）管理上传队列。
 - **云优先数据流**：“列表即菜单，点击即下单”——本地缓存仅作首屏加速，云端为唯一真相来源；`useFileListStore` 保存云端列表快照。
 - **闪念与待办**：`FlashNoteService` 向 `flash_notes.md` 时间线流式追加写入；待办系统后续由服务端驱动，原 Markdown `TodoParser` 已清理；`FlashNoteInputModal` 为全局快速录入模态框。

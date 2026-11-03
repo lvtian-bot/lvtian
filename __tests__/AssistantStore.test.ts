@@ -6,7 +6,7 @@ describe('useAssistantStore persistence cursor and messages', () => {
         useAssistantStore.getState().clearChat();
     });
 
-    test('partialize anchors currentSeq to durable persisted messages and filters processing', () => {
+    test('cache stores confirmed messages but no sync cursor', () => {
         const store = useAssistantStore.getState();
 
         const userMsg: AssistantMessage = {
@@ -51,11 +51,10 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(partial.messages.length).toBe(1);
         expect(partial.messages[0].id).toBe('user-1');
 
-        // 验证 currentSeq 锚定在持久化消息集合的最大 seq (1)，杜绝冷启动 sync 跳过返回丢失流式消息
-        expect(partial.currentSeq).toBe(1);
+        expect(partial).not.toHaveProperty('currentSeq');
     });
 
-    test('empty messages partialize currentSeq to 0 and records clearedSeq', () => {
+    test('empty chat produces an empty disposable cache', () => {
         const store = useAssistantStore.getState();
         const userMsg: AssistantMessage = {
             id: 'user-1',
@@ -86,8 +85,8 @@ describe('useAssistantStore persistence cursor and messages', () => {
 
         const partial = persistOptions.partialize(useAssistantStore.getState());
         expect(partial.messages.length).toBe(0);
-        expect(partial.currentSeq).toBe(0);
-        expect(partial.clearedSeq).toBe(12);
+        expect(partial).not.toHaveProperty('currentSeq');
+        expect(partial).not.toHaveProperty('clearedSeq');
     });
 
     test('setServerConfig resets clearedSeq when switching to a different server', async () => {
@@ -148,29 +147,8 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(queue[1].messageId).toBe('m2');
         expect(queue[1].content).toBe('world');
 
-        // partialize 包含 pendingSendQueue 并完成附件脱水剥离 Base64
-        const persistOptions = (
-            useAssistantStore as unknown as {
-                persist: {
-                    getOptions: () => {
-                        partialize: (state: unknown) => {
-                            pendingSendQueue: Array<{
-                                sessionId: string;
-                                messageId: string;
-                                content: string;
-                                attachments?: Array<{ type: string; name: string; uri?: string; data?: string; content?: string }>;
-                            }>;
-                        };
-                    };
-                };
-            }
-        ).persist.getOptions();
-
-        const partial = persistOptions.partialize(useAssistantStore.getState());
-        expect(partial.pendingSendQueue.length).toBe(2);
-        expect(partial.pendingSendQueue[0].attachments?.[0].uri).toBe('file:///photo.jpg');
-        expect(partial.pendingSendQueue[0].attachments?.[0].data).toBeUndefined();
-        expect(partial.pendingSendQueue[0].attachments?.[0].content).toBeUndefined();
+        const partial = useAssistantStore.persist.getOptions().partialize!(useAssistantStore.getState());
+        expect(partial).not.toHaveProperty('pendingSendQueue');
 
         // 出队
         store.removeFromPendingSendQueue('m2');
@@ -183,7 +161,7 @@ describe('useAssistantStore persistence cursor and messages', () => {
         expect(useAssistantStore.getState().pendingSendQueue).toEqual([]);
     });
 
-    test('partialize 包含 pendingCancelQueue 待撤销队列持久化快照', () => {
+    test('disposable chat cache does not contain pending cancellations', () => {
         const store = useAssistantStore.getState();
         store.addToPendingCancelQueue('del-msg-1');
         store.addToPendingCancelQueue('del-msg-2');
@@ -201,6 +179,6 @@ describe('useAssistantStore persistence cursor and messages', () => {
         ).persist.getOptions();
 
         const partial = persistOptions.partialize(useAssistantStore.getState());
-        expect(partial.pendingCancelQueue).toEqual(['del-msg-1', 'del-msg-2']);
+        expect(partial).not.toHaveProperty('pendingCancelQueue');
     });
 });
