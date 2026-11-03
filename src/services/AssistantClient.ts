@@ -361,10 +361,10 @@ export class AssistantClient {
             }
         }
 
-        // Wait for the chat cursor before opening WebSocket, but do not make HTTP
-        // task access depend on chat cache hydration.
+        // A completed but failed cache read must not prevent connecting. In that
+        // case we request a fresh server view after the cache recovery attempt.
         store = useAssistantStore.getState();
-        if (!store.hasHydrated || store.chatHydrationError || this.isExplicitlyClosed) return;
+        if (!store.hasHydrated || this.isExplicitlyClosed) return;
         // Use the settled store snapshot if a save followed the pending read.
         const url = store.serverUrl;
         const token = store.serverToken;
@@ -403,7 +403,9 @@ export class AssistantClient {
                 if (token) {
                     this.sendRaw({ type: 'auth', token });
                 }
-                const lastSeq = Math.max(store.currentSeq, store.clearedSeq ?? 0);
+                const currentStore = useAssistantStore.getState();
+                const lastSeq = currentStore.chatHydrationError
+                    ? 0 : Math.max(currentStore.currentSeq, currentStore.clearedSeq ?? 0);
                 this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq });
             };
 
@@ -552,6 +554,7 @@ export class AssistantClient {
             throw new Error(i18n.t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
         }
         const store = useAssistantStore.getState();
+        const isConnected = this.ws && this.ws.readyState === WebSocket.OPEN && store.connectionState === 'connected';
         const messageId = customMessageId || `msg-${Date.now()}-${++AssistantClient.messageSeq}`;
 
         const localMessage: AssistantMessage = {
@@ -566,7 +569,6 @@ export class AssistantClient {
 
         store.addOrUpdateMessage(localMessage);
 
-        const isConnected = this.ws && this.ws.readyState === WebSocket.OPEN && store.connectionState === 'connected';
         const isUpgrading = store.isServerUpgrading;
 
         // 若处于升级中或连接未就绪：自动进入本地待发队列排队，状态保持 sending（微小等待图标），不报任何网络错误
@@ -991,6 +993,7 @@ export class AssistantClient {
                     .map(({ message }) => message);
                 const unsequenced = merged.filter((m) => !(typeof m.seq === 'number' && m.seq > 0));
                 store.setMessages([...sequenced, ...unsequenced]);
+                if (store.chatHydrationError) useAssistantStore.setState({ chatHydrationError: null });
 
                 // 对账完成后，自动静默补发待撤销队列与待发队列
                 this.flushPendingCancelQueue();

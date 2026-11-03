@@ -20,7 +20,8 @@ import {
 } from '../types/assistantProtocol';
 
 // Zustand writes on every set, including hydration/status updates. Keep the legacy
-// record untouched until migration is durably committed and chat hydration succeeds.
+// record untouched until connection migration is durably committed and the
+// chat read or recovery attempt has finished.
 let credentialsInitialized = false;
 let chatHydrationSucceeded = false;
 let reportingChatWriteError = false;
@@ -415,7 +416,7 @@ export const useAssistantStore = create<AssistantState>()(
                 };
             },
             partialize: (state) => {
-                const persistedMessages = state.messages
+                const cacheableMessages = state.messages
                     .filter((m) => m.status !== 'processing')
                     .map((m) => {
                         if (!m.attachments || m.attachments.length === 0) {
@@ -435,11 +436,22 @@ export const useAssistantStore = create<AssistantState>()(
                             attachments: sanitizedAttachments,
                         };
                     });
+                // Keep the newest complete messages within a conservative size
+                // budget, avoiding oversized Android AsyncStorage rows.
+                const persistedMessages: AssistantMessage[] = [];
+                let cacheCharacters = 0;
+                for (let i = cacheableMessages.length - 1; i >= 0; i -= 1) {
+                    const size = JSON.stringify(cacheableMessages[i]).length;
+                    if (cacheCharacters + size > 128 * 1024) break;
+                    cacheCharacters += size;
+                    persistedMessages.unshift(cacheableMessages[i]);
+                }
+                const cacheTrimmed = persistedMessages.length !== cacheableMessages.length;
                 // 持久化的游标必须与持久化的消息快照严格绑定：
                 // 若直接持久化已被流式 chunk 推高的 state.currentSeq，而进行中的消息被排除，
                 // 应用冷启动重连时向服务端发送 sync(lastSeq = currentSeq)，服务端会判定客户端已拥有该消息并跳过返回，
                 // 导致正在流式输出的消息永久丢失；因此持久化的 currentSeq 必须锚定已持久化消息的最大 seq（无消息时为 0）。
-                const durableSeq = persistedMessages.reduce(
+                const durableSeq = cacheTrimmed ? 0 : persistedMessages.reduce(
                     (max, m) => Math.max(max, m.seq ?? 0),
                     0
                 );
@@ -478,11 +490,31 @@ export const useAssistantStore = create<AssistantState>()(
                 return (_state, error) => {
                     // Defer to support even a synchronous storage implementation:
                     // the exported store must exist before this callback accesses it.
-                    Promise.resolve().then(() => {
-                        chatHydrationSucceeded = !error;
+                    Promise.resolve().then(async () => {
+                        // Chat is disposable cache: clear an unreadable record so
+                        // the next server sync can rebuild it. A failed deletion
+                        // is reported but never prevents connecting.
+                        let cleared = !error;
+                        if (error) {
+                            // The legacy connection URL may still be in this
+                            // record; let its independent migration finish first.
+                            await initialCredentials;
+                            if (credentialsInitialized) {
+                                try {
+                                    await AsyncStorage.removeItem(ASSISTANT_CHAT_KEY);
+                                    cleared = true;
+                                } catch {
+                                    cleared = false;
+                                }
+                            }
+                        }
+                        // After credentials have been migrated, replacing a bad
+                        // cache is safe even when removeItem itself failed.
+                        chatHydrationSucceeded = true;
                         useAssistantStore.setState({
                             hasHydrated: true,
                             chatHydrationError: error ? 'chat_hydration_failed' : null,
+                            chatCacheError: cleared ? null : 'chat_cache_write_failed',
                         });
                     });
                 };
@@ -492,4 +524,4 @@ export const useAssistantStore = create<AssistantState>()(
 );
 
 // Credentials are independent of chat hydration (including a failed or slow read).
-Promise.resolve().then(() => useAssistantStore.getState().loadSavedCredentials()).catch(() => undefined);
+const initialCredentials = Promise.resolve().then(() => useAssistantStore.getState().loadSavedCredentials()).catch(() => undefined);

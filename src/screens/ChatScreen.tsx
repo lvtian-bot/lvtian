@@ -172,7 +172,6 @@ export const ChatScreen = () => {
         hasHydrated,
         credentialsStatus,
         credentialsError,
-        chatHydrationError,
         chatCacheError,
         loadSavedCredentials,
         connectionState,
@@ -417,10 +416,10 @@ export const ChatScreen = () => {
 
     useEffect(() => {
         // 自动连接
-        if (serverUrl && hasHydrated && !chatHydrationError && credentialsStatus === 'ready') {
+        if (serverUrl && hasHydrated && credentialsStatus === 'ready') {
             AssistantClient.getInstance().connect();
         }
-    }, [serverUrl, serverToken, hasHydrated, chatHydrationError, credentialsStatus]);
+    }, [serverUrl, serverToken, hasHydrated, credentialsStatus]);
 
     const pickImage = useCallback(async () => {
         try {
@@ -549,7 +548,6 @@ export const ChatScreen = () => {
             Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
             return;
         }
-        // 关键修复：重发前先从本地状态中移除该条失败消息，避免重发后列表中残留重复的失败气泡与红感叹号
         useAssistantStore.getState().removeMessage(item.id);
         const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
         flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
@@ -643,21 +641,14 @@ export const ChatScreen = () => {
         return <View style={styles.centerContainer}><ActivityIndicator color={theme.colors.primary} /></View>;
     }
 
-    if (credentialsStatus === 'error' || chatHydrationError) {
-        const failureKey = credentialsStatus === 'error'
-            ? connectionErrorKey(credentialsError) : 'assistant.chatReadFailed';
+    if (credentialsStatus === 'error') {
+        const failureKey = connectionErrorKey(credentialsError);
         const retry = async () => {
             if (retryingStorage) return;
             setRetryingStorage(true);
             try {
                 if (credentialsStatus === 'error') await loadSavedCredentials();
-                if (useAssistantStore.getState().chatHydrationError) {
-                    AssistantClient.getInstance().disconnect();
-                    await useAssistantStore.persist.rehydrate();
-                    // The storage callback settles state in a microtask.
-                    await Promise.resolve();
-                }
-                if (!useAssistantStore.getState().chatHydrationError) await AssistantClient.getInstance().connect(true);
+                await AssistantClient.getInstance().connect(true);
             } catch {
                 // The store retains a localized, retryable failure; never report success.
             } finally { setRetryingStorage(false); }

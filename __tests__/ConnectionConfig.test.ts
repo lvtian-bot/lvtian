@@ -33,6 +33,7 @@ function setup(entries: Record<string, string> = {}) {
     const data = new Map(Object.entries(entries));
     storage.getItem.mockImplementation(async (key: string) => data.get(key) ?? null);
     storage.setItem.mockImplementation(async (key: string, value: string) => { data.set(key, value); });
+    storage.removeItem.mockImplementation(async (key: string) => { data.delete(key); });
     secure.getItemAsync.mockResolvedValue('saved-token');
     secure.setItemAsync.mockResolvedValue(undefined);
     secure.deleteItemAsync.mockResolvedValue(undefined);
@@ -224,31 +225,46 @@ describe('independent connection configuration', () => {
         expect(store.getState()).toMatchObject({ credentialsStatus: 'ready', serverUrl: 'https://saved.example', hasHydrated: true, chatHydrationError: 'chat_hydration_failed' });
     });
 
-    it.each(['corrupt', 'read-failure'])('preserves chat after %s until a successful real hydration retry', async (failure) => {
+    it.each(['corrupt', 'read-failure'])('clears %s cache and permits rebuilding', async (failure) => {
         const raw = failure === 'corrupt' ? '{broken' : legacy();
         const { start, data, storage } = setup({ [CONFIG]: JSON.stringify({ url: 'https://saved.example' }), [CHAT]: raw });
         if (failure === 'read-failure') {
             storage.getItem.mockImplementation(async (key: string) => {
-                if (key === CHAT) throw new Error('temporarily unreadable');
+                if (key === CHAT) throw new Error('unreadable');
                 return data.get(key) ?? null;
             });
         }
         const store = start();
         await flush();
-        expect(store.getState().credentialsStatus).toBe('ready');
-        await store.getState().loadSavedCredentials();
-        store.getState().setConnectionState('disconnected');
-        store.getState().setCurrentSeq(5);
+        expect(storage.removeItem).toHaveBeenCalledWith(CHAT);
+        expect(store.getState()).toMatchObject({ credentialsStatus: 'ready', hasHydrated: true, chatHydrationError: 'chat_hydration_failed' });
+        expect(data.get(CHAT)).not.toBe(raw);
+        store.getState().setMessages([{ ...message, role: 'assistant', status: 'done' }]);
         await flush();
-        expect(data.get(CHAT)).toBe(raw);
-        expect(storage.setItem).not.toHaveBeenCalled();
-        data.set(CHAT, legacy());
-        storage.getItem.mockImplementation(async (key: string) => data.get(key) ?? null);
-        await store.persist.rehydrate();
+        expect(JSON.parse(data.get(CHAT)!).state.messages).toEqual([message]);
+    });
+
+    it('does not block connection when cache removal fails', async () => {
+        const { start, storage } = setup({ [CONFIG]: JSON.stringify({ url: 'https://saved.example' }), [CHAT]: '{broken' });
+        storage.removeItem.mockRejectedValue(new Error('unavailable'));
+        const store = start();
         await flush();
-        expect(store.getState().chatHydrationError).toBeNull();
-        expect(storage.setItem).toHaveBeenCalled();
-        expect(JSON.parse(data.get(CHAT)!).state).not.toHaveProperty('serverUrl');
+        expect(store.getState()).toMatchObject({ hasHydrated: true, credentialsStatus: 'ready', chatHydrationError: 'chat_hydration_failed', chatCacheError: 'chat_cache_write_failed' });
+    });
+
+    it('bounds cached message size and requests a fresh server snapshot when trimming', async () => {
+        const { start, data } = setup({ [CONFIG]: JSON.stringify({ url: 'https://saved.example' }) });
+        const store = start();
+        await flush();
+        store.getState().setMessages([
+            { ...message, role: 'assistant', status: 'done', id: 'large', content: 'x'.repeat(140000), seq: 1 },
+            { ...message, role: 'assistant', status: 'done', id: 'recent', seq: 2 },
+        ]);
+        await flush();
+        const cache = JSON.parse(data.get(CHAT)!).state;
+        expect(cache.messages.map((item: { id: string }) => item.id)).toEqual(['recent']);
+        expect(cache.currentSeq).toBe(0);
+        expect(data.get(CHAT)!.length).toBeLessThan(128 * 1024);
     });
 
     it.each([
@@ -276,8 +292,8 @@ describe('independent connection configuration', () => {
         });
         store.getState().setCurrentSeq(5);
         await flush();
-        expect(data.get(CHAT)).toBe(raw);
-        expect(storage.setItem).not.toHaveBeenCalled();
+        expect(storage.removeItem).toHaveBeenCalledWith(CHAT);
+        expect(data.get(CHAT)).not.toBe(raw);
     });
 
     it.each([CONFIG, CHAT])('explicit save replaces corrupt %s without depending on migration', async (key) => {
@@ -288,7 +304,7 @@ describe('independent connection configuration', () => {
         await store.getState().setServerConfig('https://replacement.example', 'replacement-token');
         expect(store.getState()).toMatchObject({ serverUrl: 'https://replacement.example', serverToken: 'replacement-token', credentialsStatus: 'ready', messages: [] });
         expect(data.get(CONFIG)).toBe(JSON.stringify({ url: 'https://replacement.example' }));
-        expect(data.get(CHAT)).toBe('{broken');
+        expect(data.get(CHAT)).not.toBe('{broken');
     });
 
     it('explicit save succeeds when automatic legacy reads fail', async () => {
@@ -302,7 +318,7 @@ describe('independent connection configuration', () => {
         expect(store.getState().credentialsStatus).toBe('error');
         await store.getState().setServerConfig('https://replacement.example', 'replacement-token');
         expect(store.getState().credentialsStatus).toBe('ready');
-        expect(data.get(CHAT)).toBe(legacy());
+        expect(data.get(CHAT)).not.toBe(legacy());
         expect(data.get(CONFIG)).toBe(JSON.stringify({ url: 'https://replacement.example' }));
     });
 

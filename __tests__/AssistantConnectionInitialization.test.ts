@@ -100,7 +100,7 @@ describe('AssistantClient independent connection initialization', () => {
         ]);
     });
 
-    it.each([null, 'chat_hydration_failed'] as const)('waits for successful chat hydration before opening WebSocket (%s)', async chatHydrationError => {
+    it.each([null, 'chat_hydration_failed'] as const)('connects after chat hydration settles, using a fresh sync after failure (%s)', async chatHydrationError => {
         useAssistantStore.setState({ hasHydrated: false });
         await client.connect();
         expect(TestSocket.instances).toHaveLength(0);
@@ -108,17 +108,10 @@ describe('AssistantClient independent connection initialization', () => {
 
         useAssistantStore.setState({ hasHydrated: true, chatHydrationError });
         await client.connect();
-        if (chatHydrationError) {
-            // A settled failed read is not a usable cursor/cache. Do not replay or
-            // send while a later cache retry could overwrite the live state.
-            expect(TestSocket.instances).toHaveLength(0);
-            useAssistantStore.setState({ chatHydrationError: null });
-            await client.connect();
-        }
         expect(TestSocket.instances).toHaveLength(1);
         const socket = TestSocket.instances[0];
         socket.open();
-        expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: 15 }));
+        expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: chatHydrationError ? 0 : 15 }));
         expect(useAssistantStore.getState().connectionState).toBe('connected');
         expect(load).not.toHaveBeenCalled();
     });

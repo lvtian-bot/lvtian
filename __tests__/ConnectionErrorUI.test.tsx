@@ -116,31 +116,12 @@ describe('connection storage failure presentation', () => {
         expect(connect).toHaveBeenCalled();
     });
 
-    it('failed cache read blocks the composer and retries before connecting', async () => {
+    it('failed cache read allows chat and starts connecting', async () => {
         useAssistantStore.setState({ serverUrl: 'https://saved.test', serverToken: 'saved', chatHydrationError: 'chat_hydration_failed' });
-        const rehydrate = jest.spyOn(useAssistantStore.persist, 'rehydrate').mockImplementation(async () => {
-            expect(connect).not.toHaveBeenCalled();
-            useAssistantStore.setState({ chatHydrationError: null });
-        });
         await act(async () => { renderer = ReactTestRenderer.create(<ChatScreen />); });
-        expect(texts()).toContain(chatMessage);
-        expect(renderer!.root.findAllByType(TextInput)).toHaveLength(0);
-        expect(connect).not.toHaveBeenCalled();
-        await press('重试');
-        expect(rehydrate).toHaveBeenCalledTimes(1);
         expect(connect).toHaveBeenCalled();
         expect(texts()).not.toContain(chatMessage);
         expect(renderer!.root.findAllByType(TextInput)).toHaveLength(1);
-    });
-
-    it('a failed cache retry stays an error and never opens a connection', async () => {
-        useAssistantStore.setState({ serverUrl: 'https://saved.test', chatHydrationError: 'chat_hydration_failed' });
-        jest.spyOn(useAssistantStore.persist, 'rehydrate').mockResolvedValue(undefined);
-        await act(async () => { renderer = ReactTestRenderer.create(<ChatScreen />); });
-        await press('重试');
-        expect(texts()).toContain(chatMessage);
-        expect(renderer!.root.findAllByType(TextInput)).toHaveLength(0);
-        expect(connect).not.toHaveBeenCalled();
     });
 
     it('cache write failure is not mislabeled as a read failure', async () => {
