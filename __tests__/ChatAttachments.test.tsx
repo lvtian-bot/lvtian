@@ -70,7 +70,8 @@ describe('聊天附件待发送', () => {
         })]);
         expect(drafts()).toHaveLength(0);
         expect(renderer.root.findByType(TextInput).props.value).toBe('');
-        expect(button(i18n.t('common.send'))).toBeUndefined();
+        expect(button(i18n.t('common.send'))?.props.disabled).toBe(true);
+        expect(button(i18n.t('common.send'))?.props.onPress).toBeUndefined();
     });
     it('选择文件保留原输入，点击发送时带上读取好的文件内容', async () => {
         jest.mocked(DocumentPicker.getDocumentAsync).mockResolvedValue(fileResult());

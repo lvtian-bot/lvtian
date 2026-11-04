@@ -28,7 +28,7 @@ describe('ChatMarkdownBubble', () => {
     const textNodes = () => renderer.root.findAllByType(Text);
     const leaf = (content: string) => textNodes().find((node) => node.props.children === content)!;
 
-    it('gives list/paragraph measurement a definite width and keeps the clock below normal-flow content', async () => {
+    it('gives list/paragraph measurement a definite width and hides the provisional clock outside normal flow', async () => {
         await render('Intro **bold** and `inline`\n\n- first long list item\n- second\n  - nested item\n\nLast paragraph');
         const bubble = renderer.root.findByProps({ testID: 'rich-bubble' });
         const nativeBubble = bubble.findAllByType(View)[0];
@@ -45,7 +45,8 @@ describe('ChatMarkdownBubble', () => {
         expect(clock.props.selectable).toBe(false);
         expect(renderer.root.findByType(ChatBubbleText).props.fullWidth).toBe(true);
         expect(clock.parent?.children.at(-1)).toBe(clock);
-        for (const node of [nativeBubble, renderedBody, clock]) {
+        expect(StyleSheet.flatten(clock.props.style)).toMatchObject({ position: 'absolute', opacity: 0 });
+        for (const node of [nativeBubble, renderedBody]) {
             const style = StyleSheet.flatten(node.props.style) as ViewStyle;
             expect(style.position).not.toBe('absolute');
             expect(style.height).toBeUndefined();

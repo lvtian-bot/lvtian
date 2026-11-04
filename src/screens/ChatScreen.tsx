@@ -38,6 +38,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { fsService } from '../services/FileSystemService';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { ChatMarkdownBubble } from '../components/ChatMarkdownBubble';
+import { ChatBubbleReveal } from '../components/ChatBubbleReveal';
 import { ImageViewerModal } from '../components/ImageViewerModal';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
 import { theme } from '../utils/theme';
@@ -784,8 +785,10 @@ export const ChatScreen = () => {
                         ? getAssistantDisplayParts(item).filter((part) => part.type === 'text')
                         : [];
                     const lastTextPartKey = [...assistantParts].reverse().find((part) => part.type === 'text')?.key;
-                    const inlineUserTime = isUser && Boolean(item.content) &&
-                        !item.errorMessage && !['sending', 'queued', 'error'].includes(item.status);
+                    // Status changes must not move the clock from a footer into
+                    // the body after acknowledgement. Status controls stay separate.
+                    const inlineUserTime = isUser && Boolean(item.content);
+                    const showUserStatus = isUser && ['sending', 'queued', 'error'].includes(item.status);
                     // Data is newest-first, while each cell remains top-to-bottom.
                     const showDate = startsChatDay(item.timestamp, displayMessages[index + 1]?.timestamp);
                     const hasProseBubble = isUser || Boolean(item.attachments?.length ||
@@ -799,7 +802,9 @@ export const ChatScreen = () => {
                                 {formatChatDate(item.timestamp, dateNow, chatI18n.language, t)}
                             </Text>
                         </View>}
-                        {hasVisibleRow ? <View
+                        {hasVisibleRow ? <ChatBubbleReveal
+                            layoutKey={JSON.stringify([item.id, metrics])}
+                            streaming={!isUser && item.status === 'processing'}
                             style={[
                                 styles.messageRow,
                                 isUser ? styles.userRow : styles.assistantRow,
@@ -913,7 +918,7 @@ export const ChatScreen = () => {
                                 )}
 
                                 {/* 时间与状态 */}
-                                {!inlineUserTime && <View style={styles.msgFooter}>
+                                {(!inlineUserTime || showUserStatus) && <View style={styles.msgFooter}>
                                     {isUser && item.status === 'queued' && (
                                         <TouchableOpacity
                                             style={styles.queuedBadge}
@@ -924,14 +929,14 @@ export const ChatScreen = () => {
                                             <Text style={styles.queuedText}>{t('assistant.statusQueued', '排队中')}</Text>
                                         </TouchableOpacity>
                                     )}
-                                    <Text
+                                    {!inlineUserTime && <Text
                                         style={[
                                             styles.timeText,
                                             isUser ? styles.userTime : styles.assistantTime,
                                         ]}
                                     >
                                         {!isUser && item.completedAt ? formatChatTime(item.completedAt, chatI18n.language) : time}
-                                    </Text>
+                                    </Text>}
                                     {isUser && item.status === 'sending' && (
                                         <ActivityIndicator size={10} color={theme.colors.primaryDark} style={styles.statusMargin} />
                                     )}
@@ -952,7 +957,7 @@ export const ChatScreen = () => {
                                 </View>}
                             </View>}
                             </View>
-                        </View> : null}
+                        </ChatBubbleReveal> : null}
                         </View>
                     );
                 }}
@@ -1176,7 +1181,7 @@ export const ChatScreen = () => {
                                 if (isAttachMenuVisible) setIsAttachMenuVisible(false);
                             }}
                             multiline
-                            maxLength={2000}
+                            maxLength={5000}
                             onLayout={handleInputLayout}
                         />
                         {inputContent.trim() || pendingAttachments.length > 0 ? (
@@ -1199,7 +1204,17 @@ export const ChatScreen = () => {
                             >
                                 <View style={styles.stopSquare} />
                             </TouchableOpacity>
-                        ) : null}
+                        ) : (
+                            <TouchableOpacity
+                                style={[styles.sendBtnActive, styles.sendBtnDisabled]}
+                                disabled
+                                accessibilityRole="button"
+                                accessibilityLabel={t('common.send', '发送')}
+                                accessibilityState={{ disabled: true }}
+                            >
+                                <Icon name="arrow-upward" size={18} color={theme.colors.white} />
+                            </TouchableOpacity>
+                        )}
                     </View>
                 </View>
             </View>
@@ -1694,6 +1709,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 6,
+    },
+    sendBtnDisabled: {
+        backgroundColor: theme.colors.chevron,
     },
     stopBtnActive: {
         width: 32,
