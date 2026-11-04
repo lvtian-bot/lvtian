@@ -47,7 +47,7 @@ describe('ChatScreen 输入区与操作菜单', () => {
         jest.restoreAllMocks();
     });
 
-    it('渲染加号按钮，不渲染麦克风图标，未输入时不渲染发送按钮', async () => {
+    it('渲染加号按钮和灰色禁用发送按钮，不渲染麦克风图标，输入上限为5000', async () => {
         await ReactTestRenderer.act(async () => {
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
@@ -58,7 +58,16 @@ describe('ChatScreen 输入区与操作菜单', () => {
         const allTexts = root.findAllByType(Text).map((node) => node.props.children);
         expect(allTexts).toContain('add');
         expect(allTexts).not.toContain('mic');
-        expect(allTexts).not.toContain('arrow-upward');
+        expect(allTexts).toContain('arrow-upward');
+        expect(root.findByType(TextInput).props.maxLength).toBe(5000);
+        const sendButton = root.findAllByType(TouchableOpacity).find((button) =>
+            /^(发送|Send)$/.test(button.props.accessibilityLabel));
+        expect(sendButton?.props.disabled).toBe(true);
+        expect(sendButton?.props.onPress).toBeUndefined();
+        expect(sendButton?.props.accessibilityState).toEqual({ disabled: true });
+        expect(StyleSheet.flatten(sendButton!.props.style)).toMatchObject({
+            width: 32, height: 32, backgroundColor: '#C4CBD6',
+        });
     });
 
     it('点击加号展开轻量悬浮气泡菜单，渲染图片与文件选项；再次点击或选择后收起', async () => {
@@ -94,7 +103,7 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(texts.some((t) => typeof t === 'string' && /图片|Image/.test(t))).toBe(false);
     });
 
-    it('输入文字后渲染发送按钮，清空后隐藏', async () => {
+    it('输入文字后启用蓝色发送按钮，清空或仅空白时恢复灰色禁用状态', async () => {
         await ReactTestRenderer.act(async () => {
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
@@ -106,15 +115,40 @@ describe('ChatScreen 输入区与操作菜单', () => {
             textInput.props.onChangeText('你好，绿天');
         });
 
-        let allTexts = root.findAllByType(Text).map((node) => node.props.children);
-        expect(allTexts).toContain('arrow-upward');
+        const sendButton = () => root.findAllByType(TouchableOpacity).find((button) =>
+            /^(发送|Send)$/.test(button.props.accessibilityLabel))!;
+        expect(sendButton().props.disabled).not.toBe(true);
+        expect(typeof sendButton().props.onPress).toBe('function');
+        expect(StyleSheet.flatten(sendButton().props.style).backgroundColor).toBe('#60A5FA');
 
+        for (const text of ['', '  \n\t']) {
+            await ReactTestRenderer.act(async () => {
+                textInput.props.onChangeText(text);
+            });
+            expect(sendButton().props.disabled).toBe(true);
+            expect(StyleSheet.flatten(sendButton().props.style).backgroundColor).toBe('#C4CBD6');
+        }
+    });
+
+    it('5000字符长消息完整交给客户端，发送后恢复禁用按钮', async () => {
+        const send = jest.spyOn(AssistantClient.getInstance(), 'sendMessage').mockReturnValue('long-message');
         await ReactTestRenderer.act(async () => {
-            textInput.props.onChangeText('');
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
-
-        allTexts = root.findAllByType(Text).map((node) => node.props.children);
-        expect(allTexts).not.toContain('arrow-upward');
+        const root = currentRenderer!.root;
+        const text = '日志'.repeat(2499) + '末尾';
+        expect(text.length).toBe(5000);
+        await ReactTestRenderer.act(async () => {
+            root.findByType(TextInput).props.onChangeText(text);
+        });
+        const sendButton = () => root.findAllByType(TouchableOpacity).find((button) =>
+            /^(发送|Send)$/.test(button.props.accessibilityLabel))!;
+        await ReactTestRenderer.act(async () => {
+            sendButton().props.onPress();
+        });
+        expect(send).toHaveBeenCalledWith(text, undefined);
+        expect(root.findByType(TextInput).props.value).toBe('');
+        expect(sendButton().props.disabled).toBe(true);
     });
 
     it('当 AI 执行任务中且输入框为空时，渲染停止正方形且不渲染黄色悬浮条；输入内容切换为发送箭头', async () => {

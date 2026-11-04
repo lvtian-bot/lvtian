@@ -1,9 +1,10 @@
 import React, { useMemo, type ReactNode } from 'react';
 import { Platform, StyleSheet, Text, View, type TextStyle, type ViewStyle } from 'react-native';
-import Markdown, { type ASTNode } from 'react-native-markdown-display';
+import Markdown, { MarkdownIt, type ASTNode } from 'react-native-markdown-display';
 import { auxFontSizes, type FontSizeMetrics } from '../utils/fontSize';
 import { theme } from '../utils/theme';
 import { ChatBubbleText } from './ChatBubbleText';
+import { useBubbleLayoutPolicy } from './ChatBubbleReveal';
 
 interface ChatMarkdownBubbleProps {
     text: string;
@@ -16,6 +17,10 @@ interface ChatMarkdownBubbleProps {
 }
 
 type RuleStyles = Record<string, TextStyle & ViewStyle>;
+
+// Match preview's safe common syntax, without HTML, plugins or a second scroll host.
+// Keep the parser stable across streaming updates; code contents remain untouched.
+const chatMarkdown = MarkdownIt({ html: false, breaks: true, linkify: true, typographer: true });
 
 /** Keep the library's inline Text tree (including bold/link inheritance) selectable. */
 const markdownRules = {
@@ -58,22 +63,23 @@ function terminalTextGroup(node: ASTNode): ASTNode | undefined {
  * Do not nest this inside the shrink-to-content plain-text bubble.
  */
 export function ChatMarkdownBubble({ text, time, metrics, testID, plain = false }: ChatMarkdownBubbleProps) {
+    const { streaming } = useBubbleLayoutPolicy();
     const markdownStyles = useMemo(() => getMarkdownStyles(metrics), [metrics]);
-    const rules = useMemo(() => createClockRules(text, time, metrics), [text, time, metrics]);
+    const rules = useMemo(() => createClockRules(text, time, metrics, streaming), [text, time, metrics, streaming]);
     return (
         <View testID={testID} style={plain ? layoutStyles.plain : layoutStyles.bubble}>
-            <Markdown style={markdownStyles} rules={rules}>{text}</Markdown>
+            <Markdown markdownit={chatMarkdown} style={markdownStyles} rules={rules}>{text}</Markdown>
         </View>
     );
 }
 
-function createClockRules(text: string, time: string | undefined, metrics: FontSizeMetrics) {
+function createClockRules(text: string, time: string | undefined, metrics: FontSizeMetrics, streaming: boolean) {
     return {
         ...markdownRules,
         body: (node: ASTNode, children: ReactNode[], _parent: ASTNode[], styles: RuleStyles) => (
             <View key={node.key} style={styles._VIEW_SAFE_body}>
                 {children}
-                {time && !terminalTextGroup(node) ? <Text testID="markdown-bubble-time"
+                {time && !streaming && !terminalTextGroup(node) ? <Text testID="markdown-bubble-time"
                     style={layoutStyles.time} selectable={false} accessible={false}>{time}</Text> : null}
             </View>
         ),
@@ -97,29 +103,47 @@ const getMarkdownStyles = (metrics: FontSizeMetrics) => StyleSheet.create({
         fontSize: metrics.chatBody,
         lineHeight: metrics.chatLineHeight,
     },
-    heading1: { color: theme.colors.text, fontSize: metrics.chatHeading1, fontWeight: '700', marginTop: 10, marginBottom: 6 },
-    heading2: { color: theme.colors.text, fontSize: metrics.chatHeading2, fontWeight: '700', marginTop: 8, marginBottom: 4 },
-    heading3: { color: theme.colors.text, fontSize: metrics.chatHeading3, fontWeight: '700', marginTop: 6, marginBottom: 4 },
-    paragraph: { marginTop: 2, marginBottom: 4 },
+    // Preview uses GitHub-style hierarchy; retain chat's user-selected size ladder.
+    heading1: { color: theme.colors.text, fontSize: metrics.chatHeading1, lineHeight: Math.ceil(metrics.chatHeading1 * 1.3), fontWeight: '700', marginTop: 16, marginBottom: 8, paddingBottom: 6, borderBottomWidth: 1, borderColor: theme.colors.border },
+    heading2: { color: theme.colors.text, fontSize: metrics.chatHeading2, lineHeight: Math.ceil(metrics.chatHeading2 * 1.3), fontWeight: '700', marginTop: 14, marginBottom: 8, paddingBottom: 6, borderBottomWidth: 1, borderColor: theme.colors.border },
+    heading3: { color: theme.colors.text, fontSize: metrics.chatHeading3, lineHeight: Math.ceil(metrics.chatHeading3 * 1.3), fontWeight: '700', marginTop: 12, marginBottom: 6 },
+    heading4: { color: theme.colors.text, fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight, fontWeight: '700', marginTop: 10, marginBottom: 6 },
+    heading5: { color: theme.colors.text, fontSize: metrics.chatCode, lineHeight: metrics.chatLineHeight, fontWeight: '700', marginTop: 10, marginBottom: 6 },
+    heading6: { color: theme.colors.textSecondary, fontSize: metrics.chatCode, lineHeight: metrics.chatLineHeight, fontWeight: '700', marginTop: 10, marginBottom: 6 },
+    paragraph: { marginTop: 0, marginBottom: 8 },
     list_item: { marginVertical: 2 },
-    bullet_list: { marginVertical: 4 },
-    ordered_list: { marginVertical: 4 },
+    bullet_list: { marginTop: 0, marginBottom: 8 },
+    ordered_list: { marginTop: 0, marginBottom: 8 },
+    bullet_list_icon: { marginLeft: 4, marginRight: 8 },
+    ordered_list_icon: { marginLeft: 4, marginRight: 8 },
+    blockquote: {
+        backgroundColor: 'transparent', borderColor: theme.colors.border, borderLeftWidth: 4,
+        marginLeft: 0, marginVertical: 8, paddingHorizontal: 12, color: theme.colors.textSecondary,
+    },
     code_inline: {
         color: theme.colors.text, backgroundColor: theme.colors.border, borderRadius: 4,
-        paddingHorizontal: 5, paddingVertical: 2, fontSize: metrics.chatCode,
+        borderWidth: 0, padding: 0, paddingHorizontal: 4, paddingVertical: 2, fontSize: metrics.chatCode,
         fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
     },
     fence: {
-        backgroundColor: theme.colors.border, borderRadius: 8, padding: 10,
-        fontSize: metrics.chatCode, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        color: theme.colors.text, marginVertical: 6, borderWidth: 0,
+        backgroundColor: 'rgba(128, 128, 128, 0.05)', borderRadius: 8, padding: 12,
+        fontSize: metrics.chatCode, lineHeight: Math.ceil(metrics.chatCode * 1.5), fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+        color: theme.colors.text, marginVertical: 8, borderWidth: 1, borderColor: 'rgba(128, 128, 128, 0.2)',
     },
     code_block: {
-        backgroundColor: theme.colors.border, borderRadius: 8, padding: 10,
-        fontSize: metrics.chatCode, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-        color: theme.colors.text, marginVertical: 6, borderWidth: 0,
+        backgroundColor: 'rgba(128, 128, 128, 0.05)', borderRadius: 8, padding: 12,
+        fontSize: metrics.chatCode, lineHeight: Math.ceil(metrics.chatCode * 1.5), fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+        color: theme.colors.text, marginVertical: 8, borderWidth: 1, borderColor: 'rgba(128, 128, 128, 0.2)',
     },
-    hr: { backgroundColor: theme.colors.border, height: 1, marginVertical: 8 },
+    // Keep tables in normal flow with wrapping cells, rather than nesting a horizontal
+    // ScrollView inside chat. Preview's wide-table scrolling is intentionally not copied.
+    table: { borderWidth: 1, borderColor: theme.colors.border, borderRadius: 6, marginVertical: 8 },
+    thead: { backgroundColor: theme.colors.inputBg },
+    th: { padding: 8, borderRightWidth: 1, borderColor: theme.colors.border, fontWeight: '700' },
+    tr: { borderBottomWidth: 1, borderColor: theme.colors.border },
+    td: { padding: 8, borderRightWidth: 1, borderColor: theme.colors.border },
+    link: { color: theme.colors.primaryDark, textDecorationLine: 'underline' },
+    hr: { backgroundColor: theme.colors.border, height: 1, marginVertical: 12 },
     strong: { fontWeight: '700', color: theme.colors.text },
 });
 

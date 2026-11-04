@@ -41,6 +41,25 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue[0].content).toBe('离线发送的消息');
     });
 
+    test('5000字符长消息离线入队并在重连后完整补发', () => {
+        const content = '日志'.repeat(2499) + '末尾';
+        const messageId = client.sendMessage(content);
+        expect(useAssistantStore.getState().messages[0].content).toBe(content);
+        expect(useAssistantStore.getState().pendingSendQueue[0].content).toBe(content);
+        const sendRaw = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw')
+            .mockReturnValue(true);
+        try {
+            useAssistantStore.setState({ connectionState: 'connected', taskState: 'idle' });
+            client.flushPendingSendQueue();
+            expect(sendRaw).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'chat', messageId, content,
+            }));
+            expect(useAssistantStore.getState().pendingSendQueue[0].content).toBe(content);
+        } finally {
+            sendRaw.mockRestore();
+        }
+    });
+
     test('收到 service_upgrading 报文时设置 isServerUpgrading=true', () => {
         const handleServerMessage = (client as unknown as {
             handleServerMessage: (msg: ServerMessage) => void;
