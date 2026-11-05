@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertCreatedTask, assertCompletedDelivery } from '../scripts/nativeScheduleProbeAssertions.mjs';
 
-const task = { id: 'schedule-test', sessionId: 'session-test', title: 'Lvtian native probe', prompt: 'Reply LVT_SCHEDULE_PROBE_OK', kind: 'after', afterSeconds: 90, scheduledAt: new Date(90000).toISOString() };
+const task = { id: 'schedule-test', sessionId: 'session-test', target: { kind: 'session', sessionId: 'session-test' }, title: 'Lvtian native probe', prompt: 'Reply LVT_SCHEDULE_PROBE_OK', kind: 'after', afterSeconds: 90, scheduledAt: new Date(90000).toISOString() };
 const event = (type, seq, data) => ({ type: 'event', event: { type, seq, time: seq * 100, data } });
-const catalog = [{ ...task, status: 'inactive', lastDelivery: { messageId: 'delivered', deliveredAt: new Date(1000).toISOString() } }];
+const catalog = [{ ...task, status: 'ended', lastDelivery: { messageId: 'delivered', deliveredAt: new Date(1000).toISOString() } }];
 const records = [event('turn/start', 1, { turn: 2 }), event('user/message', 2, { id: 'delivered' }), event('assistant/message', 3, { turn: 2, message: { content: [{ type: 'text', text: 'LVT_SCHEDULE_PROBE_OK' }] } }), event('turn/end', 4, { turn: 2, reason: { kind: 'completed' } })];
 
 test('accepts equivalent native after and at one-shot rules', () => {
@@ -24,7 +24,7 @@ test('requires receipt-linked exact assistant output and successful turn before 
 
 test('does not confuse missing task or delivery receipt with execution success', () => {
   assert.throws(() => assertCompletedDelivery([], task, records, 500));
-  assert.throws(() => assertCompletedDelivery([{ ...task, status: 'inactive' }], task, records, 500));
+  assert.throws(() => assertCompletedDelivery([{ ...task, status: 'ended' }], task, records, 500));
   assert.throws(() => assertCompletedDelivery(catalog, task, records.filter(row => row.event.type !== 'user/message'), 500));
 });
 

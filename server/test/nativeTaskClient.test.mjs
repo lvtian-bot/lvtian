@@ -9,7 +9,7 @@ function fixture(overrides = {}) {
   let transport;
   let disposeCount = 0;
   const remote = {
-    schedule: Object.fromEntries(['catalog', 'list', 'history', 'update', 'delete'].map(name => [name, async (...args) => { calls.push([name, ...args]); return ok(name === 'catalog' ? [] : { name }); }])),
+    schedule: Object.fromEntries(['catalog', 'list', 'history', 'create', 'edit'].map(name => [name, async (...args) => { calls.push([name, ...args]); return ok(name === 'catalog' ? [] : { name }); }])),
     session: Object.fromEntries(['create', 'prompt', 'projections', 'page'].map(name => [name, async (...args) => { calls.push([name, ...args]); return ok({ name }); }])),
     dispose: async () => { disposeCount++; },
   };
@@ -109,7 +109,7 @@ test('fails and disposes if initial catalog returns !ok', async () => {
 test('forwards all narrow methods and unwraps successful results', async () => {
   const f = fixture();
   const client = await NativeTaskClient.connect(options, f.dependencies);
-  for (const [method, expected] of [['list', 'list'], ['history', 'history'], ['update', 'update'], ['delete', 'delete'], ['createSession', 'create'], ['prompt', 'prompt'], ['projections', 'projections'], ['page', 'page']]) {
+  for (const [method, expected] of [['list', 'list'], ['history', 'history'], ['create', 'create'], ['edit', 'edit'], ['createSession', 'create'], ['prompt', 'prompt'], ['projections', 'projections'], ['page', 'page']]) {
     const request = { sessionId: 'test-session' };
     assert.deepEqual(await client[method](request), { name: expected });
     const call = f.calls.at(-1);
@@ -124,8 +124,8 @@ test('never exposes native !ok payload and never retries writes', async () => {
   const f = fixture();
   const client = await NativeTaskClient.connect(options, f.dependencies);
   let count = 0;
-  f.remote.schedule.update = async () => { count++; return { ok: false, error: { message: 'SECRET_COOKIE', details: { token: 'SECRET_BOOT_TOKEN' } } }; };
-  await assert.rejects(client.update({}), safeError('remote_failed', 'update', true));
+  f.remote.schedule.edit = async () => { count++; return { ok: false, error: { message: 'SECRET_COOKIE', details: { token: 'SECRET_BOOT_TOKEN' } } }; };
+  await assert.rejects(client.edit({}), safeError('remote_failed', 'edit', true));
   assert.equal(count, 1);
   await client.dispose();
 });

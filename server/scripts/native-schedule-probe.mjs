@@ -39,11 +39,11 @@ try {
   if (execute) {
     const requestedAt = Date.now();
     const { sessionId } = await client.createSession({ cwd: workspace, agentPreset: 'standard' });
-    await client.prompt({ sessionId, requestId: crypto.randomUUID(), mode: 'queue', content: [{ type: 'text', text: 'This is an isolated Schedule integration test. Actually invoke schedule_create to create ONE one-time reminder 90 seconds from now, title Lvtian native probe, time zone Asia/Shanghai. Reminder instruction: reply exactly LVT_SCHEDULE_PROBE_OK and do not call tools. Do not create any other reminder. After creating it, briefly confirm and finish.' }], clientTimeZone: 'Asia/Shanghai' });
+    await client.create({ title: 'Lvtian native probe', prompt: 'Reply exactly LVT_SCHEDULE_PROBE_OK and do not call tools.', timing: { kind: 'at', at: new Date(requestedAt + 90000).toISOString() }, target: { kind: 'session', sessionId } });
     let task;
     for (let i = 0; i < 90; i++) {
       const catalog = await client.catalog();
-      if (catalog.some(entry => entry.sessionId === sessionId)) {
+      if (catalog.some(entry => entry.target.kind === 'session' && entry.target.sessionId === sessionId)) {
         task = assertCreatedTask(catalog, sessionId, requestedAt);
         break;
       }

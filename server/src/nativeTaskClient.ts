@@ -193,8 +193,8 @@ export class NativeTaskClient {
   catalog() { return this.#call('catalog', false, remote => remote.schedule.catalog()); }
   list(request: Parameters<Schedule['list']>[0]) { return this.#call('list', false, remote => remote.schedule.list(request)); }
   history(request: Parameters<Schedule['history']>[0]) { return this.#call('history', false, remote => remote.schedule.history(request)); }
-  update(request: Parameters<Schedule['update']>[0]) { return this.#call('update', true, (remote, signal) => remote.schedule.update(request, signal)); }
-  delete(request: Parameters<Schedule['delete']>[0]) { return this.#call('delete', true, (remote, signal) => remote.schedule.delete(request, signal)); }
+  create(request: Parameters<Schedule['create']>[0]) { return this.#call('create', true, (remote, signal) => remote.schedule.create(request, signal)); }
+  edit(request: Parameters<Schedule['edit']>[0]) { return this.#call('edit', true, (remote, signal) => remote.schedule.edit(request, signal)); }
   createSession(request: Parameters<Session['create']>[0]) { return this.#call('createSession', true, remote => remote.session.create(request)); }
   prompt(request: Parameters<Session['prompt']>[0]) { return this.#call('prompt', true, (remote, signal) => remote.session.prompt(request, signal)); }
   projections(request: Parameters<Session['projections']>[0]) { return this.#call('projections', false, (remote, signal) => remote.session.projections(request, signal)); }
