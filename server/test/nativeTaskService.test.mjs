@@ -12,19 +12,17 @@ async function fixture(t, overrides = {}) {
   const metadataPath = path.join(root, 'metadata.json');
   const calls = { create: 0, prompt: 0, page: [], update: [] };
   let tasks = [];
-  const task = { id: 'task-1', sessionId: 'session-owned', kind: 'at', title: input.title, prompt: input.prompt, scheduledAt: '2099-01-01T08:00:00.000Z', status: 'active' };
+  const task = { id: 'task-1', sessionId: 'session-owned', target: { kind: 'session', sessionId: 'session-owned' }, kind: 'at', title: input.title, prompt: input.prompt, scheduledAt: '2099-01-01T08:00:00.000Z', status: 'active' };
   const client = {
     catalog: async () => tasks,
     createSession: async request => { calls.create++; assert.equal(request.agentPreset, 'standard'); assert.equal(request.sessionId, undefined); return { sessionId: 'session-owned' }; },
-    prompt: async request => {
+    create: async request => {
       calls.prompt++;
       const persisted = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
-      assert.equal(persisted.operations[0].sessionId, request.sessionId);
-      assert.match(request.requestId, /^lvtian-task-[a-f0-9]{64}$/);
-      tasks = [task]; return { accepted: true };
+      assert.equal(persisted.operations[0].sessionId, request.target.sessionId);
+      tasks = [task]; return task;
     },
-    update: async request => { calls.update.push(request); return { id: task.id, updated: false, code: 'schedule_conflict' }; },
-    delete: async () => ({ id: task.id, deleted: true }),
+    edit: async request => { calls.update.push(request); return request.action === 'delete' ? { id: task.id, deleted: true } : { id: task.id, code: 'schedule_conflict' }; },
     history: async () => ({ id: task.id, records: [], retention: { days: 30, records: 200 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false }),
     projections: async () => ({ kind: 'sequenced', asOfSeq: 100, values: { secret: 'NEVER_RETURN' } }),
     page: async request => { calls.page.push(request); return { records: [event('tool/call', 5, { name: 'schedule_create', arguments: JSON.stringify({ title: input.title, prompt: input.prompt, at: input.timing.at }) })], hasMore: false, header: { secret: 'NEVER_RETURN' } }; },
@@ -35,7 +33,7 @@ async function fixture(t, overrides = {}) {
 }
 function event(type, seq, data) { return { type: 'event', event: { type, seq, time: seq * 100, data } }; }
 
-test('create persists root before stable prompt and confirms native facts; concurrent request merges', async t => {
+test('create persists root before native creation and confirms native facts; concurrent request merges', async t => {
   const f = await fixture(t);
   const [a, b] = await Promise.all([f.service.create(input), f.service.create(input)]);
   assert.equal(a.status, 'ready'); assert.deepEqual(a, b); assert.equal(f.calls.create, 1); assert.equal(f.calls.prompt, 1);
@@ -58,7 +56,7 @@ test('close waits for admitted metadata writes and refuses subsequent operations
   let enter; let release;
   const entered = new Promise(resolve => { enter = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
-  const f = await fixture(t, { prompt: async () => { enter(); await gate; return { accepted: true }; } });
+  const f = await fixture(t, { create: async () => { enter(); await gate; return { accepted: true }; } });
   const pending = f.service.create(input).catch(error => error);
   await entered;
   let closed = false;
@@ -77,13 +75,13 @@ test('same request with changed payload is rejected', async t => {
   const f = await fixture(t); await f.service.create(input);
   await assert.rejects(async () => f.service.create({ ...input, prompt: 'changed' }), error => error instanceof NativeTaskServiceError && error.httpStatus === 409);
 });
-test('verbal acceptance without native task remains pending and never replays after restart', async t => {
-  const f = await fixture(t, { prompt: async () => ({ accepted: true }) });
+test('successful response without native catalog record remains pending and never replays after restart', async t => {
+  const f = await fixture(t, { create: async () => ({ accepted: true }) });
   assert.equal((await f.service.create(input)).status, 'pending');
   assert.equal((await new NativeTaskService(f.options).create(input)).status, 'pending'); assert.equal(f.calls.create, 1);
 });
-test('lost prompt response reconciles without replay', async t => {
-  const f = await fixture(t, { prompt: async () => { throw new Error('lost response'); } });
+test('lost creation response reconciles without replay', async t => {
+  const f = await fixture(t, { create: async () => { throw new Error('lost response'); } });
   assert.equal((await f.service.create(input)).status, 'unknown');
   const restarted = new NativeTaskService(f.options);
   assert.equal((await restarted.create(input)).status, 'unknown');
@@ -96,16 +94,17 @@ test('unknown session creation never creates a second session', async t => {
   assert.equal((await new NativeTaskService(f.options).create(input)).status, 'unknown'); assert.equal(attempts, 1);
 });
 test('incorrect or duplicate native records cannot confirm create', async t => {
-  const f = await fixture(t, { prompt: async () => ({ accepted: true }) }); await f.service.create(input);
+  const f = await fixture(t, { create: async () => ({ accepted: true }) }); await f.service.create(input);
   f.setTasks([{ ...f.task, prompt: 'wrong' }]); assert.equal((await f.service.getOperationStatus('r1')).status, 'pending');
   f.setTasks([f.task, { ...f.task, id: 'duplicate' }]); assert.equal((await f.service.getOperationStatus('r1')).status, 'pending');
 });
-test('catalog alone cannot confirm a task without native schedule_create evidence', async t => {
-  const f = await fixture(t, { page: async () => ({ records: [event('assistant/message', 10, { turn: 1, message: { content: [{ type: 'text', text: 'Scheduled successfully' }] } })], hasMore: false }) });
-  assert.equal((await f.service.create(input)).status, 'pending');
+test('native catalog confirms a successful create without a model call', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.service.create(input)).status, 'ready');
+  assert.equal(f.calls.page.length, 0);
 });
 test('distinct concurrent requests serialize metadata without losing intents', async t => {
-  const f = await fixture(t, { prompt: async () => ({ accepted: true }) });
+  const f = await fixture(t, { create: async () => ({ accepted: true }) });
   await Promise.all(Array.from({ length: 10 }, (_, index) => f.service.create({ ...input, requestId: `request-${index}` })));
   const data = JSON.parse(await fs.readFile(f.metadataPath, 'utf8'));
   assert.equal(data.operations.length, 10); assert.equal(new Set(data.operations.map(row => row.requestId)).size, 10);
@@ -116,14 +115,14 @@ test('corrupt metadata is a failure, never an empty task list', async t => {
   await assert.rejects(async () => f.service.create(input), error => error.code === 'metadata_invalid'); assert.equal(f.calls.create, 0);
 });
 test('unowned task/session cannot be read, updated, deleted or queried for results', async t => {
-  const f = await fixture(t); f.setTasks([{ ...f.task, sessionId: 'main-chat' }]);
+  const f = await fixture(t); f.setTasks([{ ...f.task, target: { kind: 'session', sessionId: 'main-chat' } }]);
   assert.deepEqual(await f.service.catalog(), []);
   for (const run of [() => f.service.history('task-1'), () => f.service.getResult('task-1'), () => f.service.getResult('task-1', 'foreign'), () => f.service.delete('task-1'), () => f.service.update('task-1', { expected: f.task })]) await assert.rejects(run(), error => error.code === 'not_found');
 });
-test('update forwards complete original expected record without re-reading it into expected', async t => {
+test('update forwards original revision without replacing it with the latest', async t => {
   const f = await fixture(t); await f.service.create(input);
-  const expected = { id: f.task.id, kind: 'weekly', title: 'old', prompt: 'old', time: '09:00:00.000', timeZone: 'UTC', weekdays: [2, 4], scheduledAt: '2098-12-01T09:00:00.000Z' };
-  const result = await f.service.update(f.task.id, { expected, title: 'new' }); assert.equal(result.code, 'schedule_conflict'); assert.deepEqual(f.calls.update[0].expected, expected);
+  const expected = { id: f.task.id, kind: 'weekly', title: 'old', prompt: 'old', time: '09:00:00.000', timeZone: 'UTC', weekdays: [2, 4], scheduledAt: '2098-12-01T09:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+  const result = await f.service.update(f.task.id, { expected, title: 'new' }); assert.equal(result.code, 'schedule_conflict'); assert.equal(f.calls.update[0].expectedUpdatedAt, expected.updatedAt);
 });
 test('rejects invalid strings, time zones, wall times, weekdays and invalid absolute dates', async t => {
   const f = await fixture(t);
@@ -132,12 +131,12 @@ test('rejects invalid strings, time zones, wall times, weekdays and invalid abso
   await assert.rejects(async () => f.service.create({ ...input, title: 'x'.repeat(121) }), error => error.code === 'invalid_input'); assert.equal(f.calls.create, 0);
 });
 test('receipt alone never implies execution completion and does not expose projections/header', async t => {
-  const f = await fixture(t); await f.service.create(input); f.setTasks([{ ...f.task, status: 'inactive', lastDelivery: { messageId: 'delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt } }]);
+  const f = await fixture(t); await f.service.create(input); f.setTasks([{ ...f.task, status: 'inactive', lastDelivery: { messageId: 'delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt, targetSessionId: f.task.sessionId } }]);
   const result = await f.service.getResult(f.task.id); assert.equal(result.status, 'unknown'); assert.deepEqual(result.assistantText, []); assert.ok(!JSON.stringify(result).includes('NEVER_RETURN'));
 });
 test('historical result resolves a task-owned receipt across native history pages', async t => {
   const f = await fixture(t); await f.service.create(input);
-  const old = { messageId: 'old-delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt };
+  const old = { messageId: 'old-delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt, targetSessionId: f.task.sessionId };
   const latest = { ...old, messageId: 'latest-delivery' };
   f.setTasks([{ ...f.task, lastDelivery: latest }]);
   const historyCalls = [];
@@ -158,7 +157,7 @@ test('historical result resolves a task-owned receipt across native history page
   };
   const result = await f.service.getResult(f.task.id, old.messageId);
   assert.deepEqual(result, { taskId: f.task.id, delivery: old, status: 'ended', turn: 1, endReason: 'completed', assistantText: ['old answer'], truncated: false });
-  assert.deepEqual(historyCalls, [{ id: f.task.id, sessionId: f.task.sessionId, limit: 100 }, { id: f.task.id, sessionId: f.task.sessionId, limit: 100, before: latest.messageId }]);
+  assert.deepEqual(historyCalls, [{ id: f.task.id, limit: 100 }, { id: f.task.id, limit: 100, before: latest.messageId }]);
   assert.ok(f.calls.page.every(request => request.address.sessionId === f.task.sessionId && request.throughSeq === 100));
   historyCalls.length = 0;
   const current = await f.service.getResult(f.task.id);
@@ -167,7 +166,7 @@ test('historical result resolves a task-owned receipt across native history page
 });
 test('selected foreign, missing and pruned receipts never read arbitrary session messages or fall back', async t => {
   const f = await fixture(t); await f.service.create(input);
-  f.setTasks([{ ...f.task, lastDelivery: { messageId: 'latest', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt } }]);
+  f.setTasks([{ ...f.task, lastDelivery: { messageId: 'latest', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt, targetSessionId: f.task.sessionId } }]);
   f.client.history = async () => ({ id: f.task.id, records: [], retention: { days: 30, records: 200 }, earlierRecordsUnavailable: true, earlierRecordsPruned: true });
   f.client.projections = async () => { assert.fail('Unauthorized receipt must not read session'); };
   for (const id of ['other-task-same-session', 'creation-message', 'missing', 'pruned']) {
@@ -179,7 +178,7 @@ test('selected foreign, missing and pruned receipts never read arbitrary session
 });
 test('historical receipt with unavailable session facts stays unknown, not not_delivered', async t => {
   const f = await fixture(t); await f.service.create(input);
-  const receipt = { messageId: 'old', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt };
+  const receipt = { messageId: 'old', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt, targetSessionId: f.task.sessionId };
   f.client.history = async () => ({ id: f.task.id, records: [receipt], retention: { days: 30, records: 200 }, earlierRecordsUnavailable: false, earlierRecordsPruned: false });
   f.client.projections = async () => undefined;
   const result = await f.service.getResult(f.task.id, receipt.messageId);
@@ -198,7 +197,7 @@ test('historical lookup bounds broken or disappearing cursors without claiming a
 });
 test('cold result uses projection cut and backwards pages, maps only associated assistant text/end', async t => {
   const f = await fixture(t); await f.service.create(input);
-  f.setTasks([{ ...f.task, lastDelivery: { messageId: 'delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt } }]);
+  f.setTasks([{ ...f.task, lastDelivery: { messageId: 'delivery', scheduledAt: f.task.scheduledAt, deliveredAt: f.task.scheduledAt, targetSessionId: f.task.sessionId } }]);
   f.calls.page.length = 0;
   f.client.page = async request => {
     f.calls.page.push(request);

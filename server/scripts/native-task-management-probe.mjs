@@ -43,10 +43,9 @@ try {
   assert.equal(weeklyTask.kind, 'weekly');
   assert.deepEqual(weeklyTask.weekdays, [1, 3, 5]);
   const update = await runtime.service.update(daily.taskId, { expected: dailyTask, title: 'Changed daily probe' });
-  assert.equal(update.updated, true);
-  assert.equal(update.record.id, daily.taskId);
+  assert.equal(update.id, daily.taskId);
+  assert.equal(update.title, 'Changed daily probe');
   const conflict = await runtime.service.update(daily.taskId, { expected: dailyTask, title: 'Must not overwrite' });
-  assert.equal(conflict.updated, false);
   assert.equal(conflict.code, 'schedule_conflict');
   const history = await runtime.service.history(weekly.taskId, { limit: 10 });
   assert.deepEqual(history.records, []);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 export function assertCreatedTask(catalog, sessionId, requestedAt) {
-  const owned = catalog.filter(entry => entry.sessionId === sessionId);
+  const owned = catalog.filter(entry => entry.target.kind === 'session' && entry.target.sessionId === sessionId);
   assert.equal(owned.length, 1, 'Exactly one task must be created');
   const task = owned[0];
   const oneShot = (task.kind === 'after' && task.afterSeconds === 90) || task.kind === 'at';
@@ -14,8 +14,8 @@ export function assertCreatedTask(catalog, sessionId, requestedAt) {
 }
 
 export function assertCompletedDelivery(catalog, task, records, observedAt) {
-  const restored = catalog.find(entry => entry.id === task.id && entry.sessionId === task.sessionId);
-  assert.equal(restored?.status, 'inactive', 'One-shot task must remain as inactive');
+  const restored = catalog.find(entry => entry.id === task.id && entry.target.kind === 'session' && task.target.kind === 'session' && entry.target.sessionId === task.target.sessionId);
+  assert.equal(restored?.status, 'ended', 'One-shot task must remain as inactive');
   assert.ok(restored.lastDelivery, 'Missing durable delivery receipt');
   const events = records.map(record => record.event);
   const receipt = restored.lastDelivery;
@@ -31,5 +31,5 @@ export function assertCompletedDelivery(catalog, task, records, observedAt) {
   const ended = events.find(event => event.type === 'turn/end' && event.data?.turn === turn && event.seq > answer.seq);
   assert.equal(ended?.data?.reason?.kind, 'completed', 'Execution must end successfully');
   assert.ok(ended.time < observedAt, 'Execution must complete before reconnect observation');
-  return { taskId: task.id, sessionId: task.sessionId, deliveredAt: receipt.deliveredAt, resultSeq: answer.seq, turnEnd: ended.data };
+  return { taskId: task.id, sessionId: task.target.sessionId, deliveredAt: receipt.deliveredAt, resultSeq: answer.seq, turnEnd: ended.data };
 }
