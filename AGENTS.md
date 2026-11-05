@@ -119,7 +119,7 @@
 | 类别 | 技术 | 版本/说明 |
 |-----|------|----------|
 | **运行时** | Node.js, JDK | Node.js 22 LTS >=22.13.0 (移动端构建), Node.js 22 LTS >=22.19.0 (服务端守护), JDK 17 |
-| **核心框架** | React Native<br>Expo<br>React | 0.88.0<br>SDK 58 (托管工作流 + 预构建插件)<br>19.3.0 |
+| **核心框架** | React Native<br>Expo<br>React | 0.88.1<br>SDK 58 (托管工作流 + 预构建插件)<br>19.3.0 |
 | **语言** | TypeScript | 6.0.3 (严格模式，严禁使用 any) |
 | **状态管理** | Zustand | 轻量级，模块化 Store (支持持久化) |
 | **导航** | React Navigation | 7 (Native Stack + Bottom Tabs) |
