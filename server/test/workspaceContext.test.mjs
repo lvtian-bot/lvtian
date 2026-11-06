@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import yaml from 'yaml';
 import { Context } from '@deepseek-ai/cordis';
 import SystemPrompt, { renderPrompt, renderContextSnapshot } from '@deepseek-ai/dsh-system-prompt';
@@ -70,6 +71,20 @@ test('跨月按本地日历找昨日；非法 UTF-8 和过大源文件显式标�
     assert.match(snapshot, /文件超过读取上限/);
 });
 
+test('Linux 无写入者的命名管道不会阻塞上下文加载', { skip: process.platform !== 'linux' }, t => {
+    const root = workspace(t);
+    const fifo = path.join(root, 'IDENTITY.md');
+    const created = spawnSync('mkfifo', [fifo], { timeout: 5_000, encoding: 'utf8' });
+    assert.equal(created.status, 0, created.stderr);
+    // 在子进程验证，避免实现退化后阻塞整个测试进程。
+    const moduleUrl = new URL('../dist/workspaceContext.js', import.meta.url).href;
+    const script = `import { buildWorkspaceContext } from ${JSON.stringify(moduleUrl)}; process.stdout.write(buildWorkspaceContext(process.argv[1]));`;
+    const loaded = spawnSync(process.execPath, ['--input-type=module', '-e', script, root], { timeout: 5_000, encoding: 'utf8' });
+    assert.equal(loaded.error, undefined);
+    assert.equal(loaded.status, 0, loaded.stderr);
+    assert.match(loaded.stdout, /## IDENTITY.md\n\[不是普通文件；未自动加载\]/);
+});
+
 test('DSH 正式组装接口分别承载固定系统规则和可编辑快照，子代理不自动注入', async t => {
     const root = workspace(t);
     fs.writeFileSync(path.join(root, 'MEMORY.md'), '个人事实甲 {{literal}}');
@@ -103,6 +118,11 @@ test('配置挂载项目插件且保留原配置，重复启动幂等，冲突�
     assert.equal(plugin.config.workspace, root);
     assert.ok(plugin.name.endsWith('workspaceContextPlugin.js'));
     assert.equal(await prepareWorkspaceContextOverlay(root, root), target);
+    const anotherWorkspace = path.join(root, 'another');
+    const changed = await prepareWorkspaceContextOverlay(root, anotherWorkspace);
+    assert.notEqual(changed, target);
+    assert.equal(yaml.parse(fs.readFileSync(changed, 'utf8'))[0].insert[0].config.workspace, anotherWorkspace);
+    assert.equal(yaml.parse(fs.readFileSync(target, 'utf8'))[0].insert[0].config.workspace, root);
     fs.writeFileSync(target, '# 已有自定义内容');
     await assert.rejects(prepareWorkspaceContextOverlay(root, root), /overlay_conflict/);
     assert.equal(fs.readFileSync(target, 'utf8'), '# 已有自定义内容');

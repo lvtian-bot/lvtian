@@ -64,7 +64,9 @@ export function buildWorkspaceContext(workspace: string, options: WorkspaceConte
             if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
                 content = '[文件指向工作区外；未自动加载]';
             } else {
-                const fd = fs.openSync(file, 'r');
+                // Linux FIFO 在普通只读打开时就会阻塞；先非阻塞打开，再检查描述符类型。
+                // eslint-disable-next-line no-bitwise
+                const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
                 try {
                     const stat = fs.fstatSync(fd);
                     if (!stat.isFile()) content = '[不是普通文件；未自动加载]';
