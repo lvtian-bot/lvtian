@@ -90,6 +90,11 @@ describe('AssistantClient independent connection initialization', () => {
         const socket = TestSocket.instances[0];
         expect(socket.url).toBe('wss://saved.test');
         socket.open();
+        expect(useAssistantStore.getState().connectionState).toBe('connecting');
+        socket.onmessage?.({ data: JSON.stringify({ type: 'auth_result', success: true }) });
+        socket.onmessage?.({ data: JSON.stringify({
+            type: 'sync_result', sessionId: 'main', messages: [], taskState: 'idle', currentSeq: 0,
+        }) });
         expect(useAssistantStore.getState()).toMatchObject({
             credentialsStatus: 'ready', credentialsError: null,
             connectionState: 'connected', connectionError: null,

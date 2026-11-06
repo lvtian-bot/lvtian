@@ -348,6 +348,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         }).handleServerMessage.bind(client);
 
         useAssistantStore.setState({
+            connectionState: 'connected',
             messages: [
                 {
                     id: 'm-fail-1',
@@ -450,6 +451,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
 
         useAssistantStore.setState({
+            connectionState: 'connected',
             messages: [
                 {
                     id: 'm-att-missing',
@@ -503,6 +505,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
 
         useAssistantStore.setState({
+            connectionState: 'connected',
             messages: [
                 {
                     id: 'm-cleared',

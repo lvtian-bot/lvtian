@@ -1,4 +1,5 @@
 import { AppState, type AppStateStatus } from 'react-native';
+import * as Network from 'expo-network';
 import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
@@ -12,6 +13,13 @@ import {
     AgentModelOption,
 } from '../types/assistantProtocol';
 
+const HANDSHAKE_TIMEOUT_MS = 8000;
+const AUTH_TIMEOUT_MS = 8000;
+const SYNC_TIMEOUT_MS = 20000;
+const FOREGROUND_STALE_MS = 3000;
+
+type ConnectionPhase = 'handshake' | 'authentication' | 'sync';
+
 export class AssistantClient {
     private static instance: AssistantClient | null = null;
     private static messageSeq = 0;
@@ -19,6 +27,14 @@ export class AssistantClient {
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
     private pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    private phaseTimer: ReturnType<typeof setTimeout> | null = null;
+    private connectionPhase: ConnectionPhase | null = null;
+    private phaseStartedAt = 0;
+    private connectionStartedAt = 0;
+    private connectionRequest = 0;
+    private connectionId = 0;
+    private networkState: Network.NetworkState | null = null;
+    private networkSubscription: { remove: () => void } | null = null;
     private reconnectAttempts = 0;
     private isExplicitlyClosed = false;
     private activeUrl: string | null = null;
@@ -33,6 +49,7 @@ export class AssistantClient {
 
     private constructor() {
         this.setupAppStateListener();
+        this.setupNetworkListener();
         useAssistantStore.subscribe((state, previous) => {
             if (state.outboxStatus === 'ready' && previous.outboxStatus !== 'ready' && this.serverSynced) {
                 this.flushPendingCancelQueue();
@@ -69,45 +86,117 @@ export class AssistantClient {
         });
     }
 
-    /**
-     * 应用切回前台（热启动唤醒）的极速重连机制：
-     * 1. 清除任何正在排队的延迟重连定时器；
-     * 2. 重置重连次数为 0，前台用户交互拥有最高连接优先级；
-     * 3. 若切入后台超过 3 秒，移动端旧 Socket 极大概率已处于操作系统休眠或半开假死态，
-     *    不再盲目等待心跳超时，立即果断推倒旧连接，0 毫秒极速重建；
-     * 4. 若切入后台时间极短且 Socket 仍处于 OPEN，立即主动发送探活 Ping 并开启 3.5 秒熔断保护。
-     */
+    private setupNetworkListener(): void {
+        try {
+            this.networkSubscription = Network.addNetworkStateListener((state) => {
+                const previous = this.networkState;
+                this.networkState = state;
+                if (this.isExplicitlyClosed) return;
+
+                // Internet validation can fail on a working LAN or VPN. Only a known
+                // disconnected interface blocks attempts to reach the configured server.
+                if (state.isConnected === false) {
+                    this.logConnection('network_offline');
+                    this.clearReconnectTimer();
+                    this.cleanUpWs();
+                    useAssistantStore.getState().setConnectionState('disconnected');
+                    return;
+                }
+                const restored = previous?.isConnected === false && state.isConnected === true;
+                const switched = previous?.type !== undefined && state.type !== undefined
+                    && previous.type !== state.type && state.isConnected === true;
+                const validated = previous?.isInternetReachable === false && state.isInternetReachable === true
+                    && useAssistantStore.getState().connectionState !== 'connected';
+                if (!restored && !switched && !validated) return;
+                const store = useAssistantStore.getState();
+                if (!store.serverUrl || store.credentialsStatus !== 'ready') return;
+
+                this.logConnection('network_changed');
+                this.clearReconnectTimer();
+                this.cleanUpWs();
+                store.setConnectionState('reconnecting');
+                this.reconnectAttempts = 0;
+                if (this.currentAppState === 'active') {
+                    // Coalesce interface and validation events; foreground resume can
+                    // cancel this timer and connect immediately instead.
+                    this.reconnectTimer = setTimeout(() => {
+                        this.reconnectTimer = null;
+                        this.connect(true);
+                    }, 250);
+                } else {
+                    this.scheduleReconnect();
+                }
+            });
+        } catch {
+            console.warn('[AssistantClient:connection] network_listener_unavailable');
+        }
+    }
+
+    /** 回到前台时复核连接期限；刚发起的握手继续等待，陈旧握手立即替换。 */
     public handleAppForeground(): void {
         const store = useAssistantStore.getState();
-        if (!store.serverUrl) return;
+        if (!store.serverUrl || this.isExplicitlyClosed) return;
 
+        this.clearReconnectTimer();
+        this.reconnectAttempts = 0;
+        const backgroundDurationMs = this.lastBackgroundTimestamp > 0
+            ? Date.now() - this.lastBackgroundTimestamp : 0;
+        this.lastBackgroundTimestamp = 0;
+        this.logConnection('foreground');
+        if (this.networkState?.isConnected === false) return;
+
+        const isWsOpen = this.ws?.readyState === WebSocket.OPEN;
+        const isWsConnecting = this.ws?.readyState === WebSocket.CONNECTING;
+        if (isWsConnecting || (isWsOpen && !this.serverSynced)) {
+            const ageMs = Date.now() - this.phaseStartedAt;
+            if (this.connectionPhase && ageMs < FOREGROUND_STALE_MS) return;
+            this.connect(true);
+        } else if (!isWsOpen || backgroundDurationMs > FOREGROUND_STALE_MS) {
+            this.connect(true);
+        } else {
+            this.sendPingWithTimeout();
+        }
+    }
+
+    private clearReconnectTimer(): void {
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
+    }
 
-        this.reconnectAttempts = 0;
+    private clearPhaseTimeout(): void {
+        if (this.phaseTimer) clearTimeout(this.phaseTimer);
+        this.phaseTimer = null;
+        this.connectionPhase = null;
+    }
 
-        const backgroundDurationMs = this.lastBackgroundTimestamp > 0
-            ? Date.now() - this.lastBackgroundTimestamp
-            : 0;
-        this.lastBackgroundTimestamp = 0;
+    private startPhaseTimeout(ws: WebSocket, phase: ConnectionPhase, timeoutMs: number): void {
+        this.clearPhaseTimeout();
+        this.connectionPhase = phase;
+        this.phaseStartedAt = Date.now();
+        this.phaseTimer = setTimeout(() => {
+            if (this.ws !== ws) return;
+            this.logConnection('timeout');
+            this.retryConnection();
+        }, timeoutMs);
+    }
 
-        const isWsOpen = this.ws && this.ws.readyState === WebSocket.OPEN;
-        const isWsConnecting = this.ws && this.ws.readyState === WebSocket.CONNECTING;
+    private retryConnection(): void {
+        this.cleanUpWs();
+        if (this.isExplicitlyClosed) return;
+        useAssistantStore.getState().setConnectionState('reconnecting');
+        this.scheduleReconnect();
+    }
 
-        // 若当前已有连接正处于握手建立中（CONNECTING），避免重复触发推倒重建
-        if (isWsConnecting) {
-            return;
-        }
-
-        if (!isWsOpen || backgroundDurationMs > 3000) {
-            // 切后台超过 3 秒或连接已断：推倒旧连接，0ms 极速重建
-            this.connect(true);
-        } else {
-            // 短暂停留：主动发送探活 Ping 并挂载假死熔断保护
-            this.sendPingWithTimeout();
-        }
+    /** Diagnostic fields are fixed labels and durations; never include URLs, tokens or message data. */
+    private logConnection(event: string): void {
+        console.info('[AssistantClient:connection]', JSON.stringify({
+            event, connectionId: this.connectionId, phase: this.connectionPhase,
+            elapsedMs: this.connectionStartedAt ? Date.now() - this.connectionStartedAt : 0,
+            phaseElapsedMs: this.connectionPhase ? Date.now() - this.phaseStartedAt : 0,
+            appState: this.currentAppState,
+        }));
     }
 
     /**
@@ -355,6 +444,7 @@ export class AssistantClient {
      */
     public async connect(forceReconnect = false): Promise<void> {
         this.isExplicitlyClosed = false;
+        const request = ++this.connectionRequest;
         let store = useAssistantStore.getState();
 
         // 已成功加载的配置（包括确实为空）直接使用内存值；未完成或失败时重读。
@@ -364,14 +454,20 @@ export class AssistantClient {
             } catch {
                 // Storage errors are distinct from an absent configuration. The store
                 // retains the safe error code and existing credentials for an explicit retry.
-                store.setConnectionState('disconnected', useAssistantStore.getState().credentialsError);
+                if (request === this.connectionRequest && !this.isExplicitlyClosed) {
+                    store.setConnectionState('disconnected', useAssistantStore.getState().credentialsError);
+                }
                 return;
             }
         }
 
         // Local cache and outbox loading never block the server connection.
         store = useAssistantStore.getState();
-        if (this.isExplicitlyClosed) return;
+        if (this.isExplicitlyClosed || request !== this.connectionRequest) return;
+        if (this.networkState?.isConnected === false) {
+            store.setConnectionState('disconnected');
+            return;
+        }
         // Use the settled store snapshot if a save followed the pending read.
         const url = store.serverUrl;
         const token = store.serverToken;
@@ -392,19 +488,26 @@ export class AssistantClient {
             return;
         }
 
+        this.clearReconnectTimer();
         this.cleanUpWs();
         this.activeUrl = url;
         this.activeToken = token;
         store.setConnectionState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
+        this.connectionId += 1;
+        this.connectionStartedAt = Date.now();
         try {
             // 将 http/https 转换为 ws/wss，不再在 URL 查询参数中携带 token，避免在反向代理等访问日志中泄露长效凭据
             const wsUrl = url.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://');
-            this.ws = new WebSocket(wsUrl);
+            const ws = new WebSocket(wsUrl);
+            this.ws = ws;
+            this.startPhaseTimeout(ws, 'handshake', HANDSHAKE_TIMEOUT_MS);
+            this.logConnection('connect_start');
 
-            this.ws.onopen = () => {
-                store.setConnectionState('connected');
-                this.startPing();
+            ws.onopen = () => {
+                if (this.ws !== ws) return;
+                this.logConnection('socket_open');
+                this.startPhaseTimeout(ws, 'authentication', AUTH_TIMEOUT_MS);
 
                 // 认证 & 增量对账
                 if (token) {
@@ -415,7 +518,8 @@ export class AssistantClient {
                 this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq });
             };
 
-            this.ws.onmessage = (event) => {
+            ws.onmessage = (event) => {
+                if (this.ws !== ws) return;
                 try {
                     const data = JSON.parse(event.data as string) as ServerMessage;
                     this.handleServerMessage(data);
@@ -424,19 +528,16 @@ export class AssistantClient {
                 }
             };
 
-            this.ws.onerror = (_event) => {
-                console.warn('[AssistantClient] WebSocket 发生异常');
+            ws.onerror = () => {
+                if (this.ws !== ws) return;
+                this.logConnection('socket_error');
+                this.retryConnection();
             };
 
-            this.ws.onclose = (_event) => {
-                this.serverSynced = false;
-                this.stopPing();
-                if (!this.isExplicitlyClosed) {
-                    store.setConnectionState('disconnected', '连接已断开，正在准备重连...');
-                    this.scheduleReconnect();
-                } else {
-                    store.setConnectionState('disconnected', null);
-                }
+            ws.onclose = () => {
+                if (this.ws !== ws) return;
+                this.logConnection('socket_close');
+                this.retryConnection();
             };
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -450,13 +551,10 @@ export class AssistantClient {
      */
     public disconnect(): void {
         this.isExplicitlyClosed = true;
+        this.connectionRequest += 1;
         this.activeUrl = null;
         this.activeToken = null;
-        this.stopPing();
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
+        this.clearReconnectTimer();
         this.cleanUpWs();
         useAssistantStore.getState().setConnectionState('disconnected');
     }
@@ -464,7 +562,8 @@ export class AssistantClient {
     private cleanUpWs(): void {
         this.serverSynced = false;
         this.awaitingFullSnapshot = false;
-        this.clearPongTimeout();
+        this.clearPhaseTimeout();
+        this.stopPing();
         if (this.ws) {
             try {
                 this.ws.onopen = null;
@@ -478,7 +577,7 @@ export class AssistantClient {
     }
 
     private scheduleReconnect(): void {
-        if (this.isExplicitlyClosed || this.reconnectTimer) return;
+        if (this.isExplicitlyClosed || this.reconnectTimer || this.networkState?.isConnected === false) return;
 
         this.reconnectAttempts += 1;
         const store = useAssistantStore.getState();
@@ -510,6 +609,7 @@ export class AssistantClient {
 
     private startPing(): void {
         this.stopPing();
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
         // 前台心跳设为 10 秒，更早发现假死链路
         this.pingTimer = setInterval(() => {
             this.sendPingWithTimeout();
@@ -517,16 +617,16 @@ export class AssistantClient {
     }
 
     private sendPingWithTimeout(): void {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.serverSynced || this.pongTimeoutTimer) return;
 
-        this.clearPongTimeout();
+        const ws = this.ws;
         this.sendRaw({ type: 'ping' });
 
         // 挂载 3500ms 假死熔断保护：若 3.5 秒内无任何下行数据，判定当前网络为假死黑洞，立即推倒重连
         this.pongTimeoutTimer = setTimeout(() => {
-            console.warn('[AssistantClient] 心跳应答超时（3.5s），判定当前网络为假死链路，立即重建连接');
-            this.cleanUpWs();
-            this.scheduleReconnect();
+            if (this.ws !== ws) return;
+            this.logConnection('heartbeat_timeout');
+            this.retryConnection();
         }, 3500);
     }
 
@@ -622,7 +722,8 @@ export class AssistantClient {
      */
     public async flushPendingSendQueue(): Promise<void> {
         const store = useAssistantStore.getState();
-        if (store.isServerUpgrading) {
+        const sendingSocket = this.ws;
+        if (store.connectionState !== 'connected' || store.isServerUpgrading) {
             return;
         }
         // 若当前有任务正在执行中，等待其终态收尾后再推进队列下一条
@@ -692,6 +793,7 @@ export class AssistantClient {
         // 异步 I/O 完成后二次校验：核验该项是否仍处于待发队列中且无活跃冲突
         const currentStore = useAssistantStore.getState();
         if (
+            this.ws !== sendingSocket || currentStore.connectionState !== 'connected' ||
             currentStore.isServerUpgrading ||
             currentStore.taskState === 'processing' ||
             currentStore.taskState === 'awaiting_approval'
@@ -908,6 +1010,8 @@ export class AssistantClient {
         switch (msg.type) {
             case 'auth_result': {
                 if (msg.success) {
+                    this.logConnection('authenticated');
+                    if (this.ws) this.startPhaseTimeout(this.ws, 'sync', SYNC_TIMEOUT_MS);
                     // 仅在鉴权真正成功后才重置重连尝试计数，防止闪断网络进入 1s 高频重试死循环
                     this.reconnectAttempts = 0;
                     this.fetchSkills().catch(() => {});
@@ -932,6 +1036,8 @@ export class AssistantClient {
             }
 
             case 'sync_result': {
+                this.logConnection('sync_received');
+                this.clearPhaseTimeout();
                 this.serverSynced = true;
                 store.markChatAuthoritative();
                 const replaceCache = this.awaitingFullSnapshot;
@@ -1007,6 +1113,10 @@ export class AssistantClient {
                     .map(({ message }) => message);
                 const unsequenced = merged.filter((m) => !(typeof m.seq === 'number' && m.seq > 0));
                 store.setMessages([...sequenced, ...unsequenced]);
+
+                this.logConnection('sync_applied');
+                store.setConnectionState('connected');
+                this.startPing();
 
                 // 对账完成后，自动静默补发待撤销队列与待发队列
                 this.flushPendingCancelQueue();
