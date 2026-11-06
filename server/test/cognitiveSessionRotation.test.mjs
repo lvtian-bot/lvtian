@@ -399,7 +399,7 @@ test('AcpEngineManager 心流温热期持续复用底层 DSH 会话（不切断�
         assert.strictEqual(tracker.createdSessions.length, 1);
         assert.strictEqual(tracker.prompts.length, 2);
         // 普通 Prompt 保持简洁格式
-        assert.ok(tracker.prompts[1].text.includes('[系统人设与主人记忆背景]'));
+        assert.equal(tracker.prompts[1].text, '我们继续刚才的话题');
         assert.ok(!tracker.prompts[1].text.includes('[前序交流心智接力提要'));
 
         await engine.stopAll();
@@ -1090,7 +1090,7 @@ test('提前窗口内回来且旧会话被替换：保留预生成提要并注�
     }
 });
 
-test('工作区记忆文件每轮重读：MEMORY.md 修改后下一轮 prompt 立即生效', async () => {
+test('档案不再拼入 ACP 用户输入，普通回复不会机械写入每日记忆', async () => {
     const tmpDir = createTempDir('lvtian-memory-refresh-');
     try {
         const mm = new MemoryManager(tmpDir);
@@ -1106,7 +1106,7 @@ test('工作区记忆文件每轮重读：MEMORY.md 修改后下一轮 prompt �
             onToolCall: () => {},
             onStatusChange: () => {},
         });
-        assert.ok(tracker.prompts[0].text.includes('当前暗号：青竹'));
+        assert.equal(tracker.prompts[0].text, '第一轮');
 
         // 引擎进程不重启，模拟用户在会话进行中修改记忆文件
         fs.writeFileSync(path.join(tmpDir, 'MEMORY.md'), '# 新记忆\n- 当前暗号：赤松\n', 'utf8');
@@ -1115,11 +1115,39 @@ test('工作区记忆文件每轮重读：MEMORY.md 修改后下一轮 prompt �
             onToolCall: () => {},
             onStatusChange: () => {},
         });
-        assert.ok(tracker.prompts[1].text.includes('当前暗号：赤松'), '下一轮应加载最新记忆');
-        assert.ok(!tracker.prompts[1].text.includes('当前暗号：青竹'), '不应继续使用旧副本');
+        assert.equal(tracker.prompts[1].text, '第二轮');
+        assert.deepEqual(fs.readdirSync(path.join(tmpDir, 'memory')), []);
 
         await engine.stopAll();
     } finally {
         cleanupTempDir(tmpDir);
+    }
+});
+
+test('旧上下文绑定首次迁移一次并持久化，新会话接力不包含档案前缀', async () => {
+    const root = createTempDir('lvtian-context-migration-');
+    let engine;
+    try {
+        const mm = new MemoryManager(root);
+        let sm = new SessionManager(root);
+        sm.setDshSessionId('main', 'legacy-engine', 0);
+        sm.addMessage('main', { id: 'old-user', role: 'user', content: '继续核对上次未完成的清单', timestamp: Date.now() });
+        sm = new SessionManager(root);
+        const tracker = {};
+        engine = new AcpEngineManager(root, mm, sm, { connectEngine: connectMockEngine(createMockEngine(tracker)) });
+        const callbacks = { onDelta() {}, onToolCall() {}, onStatusChange() {} };
+        await engine.execute('main', 'migration-1', '继续', callbacks);
+        assert.equal(tracker.resumedSessions.length, 0);
+        assert.equal(tracker.createdSessions.length, 1);
+        assert.ok(tracker.prompts[0].text.includes('继续核对上次未完成的清单'));
+        assert.ok(!tracker.prompts[0].text.includes('[系统背景与主人长期档案]'));
+        await engine.execute('main', 'migration-2', '接着做', callbacks);
+        assert.equal(tracker.createdSessions.length, 1);
+        assert.equal(tracker.prompts[1].text, '接着做');
+        const restored = new SessionManager(root);
+        assert.equal(restored.getOrCreateSession('main').workspaceContextVersion, 1);
+    } finally {
+        await engine?.stopAll();
+        cleanupTempDir(root);
     }
 });

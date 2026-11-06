@@ -147,19 +147,10 @@ test('MemoryManager loads context from workspace directory and preserves existin
     const mm = new MemoryManager(tmpDir);
     assert.equal(mm.getBaseDir(), tmpDir);
 
-    const ctx = mm.loadContext();
-    assert.equal(ctx.soul, '# 自定义灵魂准则\n忠诚敏锐');
-    assert.equal(ctx.memory, '# 自定义长期记忆\n偏好中文交流');
-    assert.equal(ctx.user, '# 主人档案\n称呼：先生');
-
-    // 验证追加流水日志写入 workspace/memory/
-    mm.appendDailyLog('测试标题', '测试内容流水');
-    const today = new Date().toISOString().slice(0, 10);
-    const dailyFile = path.join(tmpDir, 'memory', `${today}.md`);
-    assert.ok(fs.existsSync(dailyFile));
-    const dailyContent = fs.readFileSync(dailyFile, 'utf8');
-    assert.ok(dailyContent.includes('测试标题'));
-    assert.ok(dailyContent.includes('测试内容流水'));
+    assert.equal(fs.readFileSync(path.join(tmpDir, 'SOUL.md'), 'utf8'), '# 自定义灵魂准则\n忠诚敏锐');
+    assert.equal(fs.readFileSync(path.join(tmpDir, 'MEMORY.md'), 'utf8'), '# 自定义长期记忆\n偏好中文交流');
+    assert.equal(fs.readFileSync(path.join(tmpDir, 'USER.md'), 'utf8'), '# 主人档案\n称呼：先生');
+    assert.deepEqual(fs.readdirSync(path.join(tmpDir, 'memory')), []);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -175,13 +166,12 @@ test('MemoryManager preserves existing Git-cloned workspace files and normalizes
     fs.writeFileSync(memoryPath, '# 历史沉淀长期记忆\n偏好自然语言', { mode: 0o644 });
     fs.writeFileSync(userPath, '# 历史主人档案\n称呼：先生', { mode: 0o644 });
 
-    const mm = new MemoryManager(tmpDir);
-    const ctx = mm.loadContext();
+    new MemoryManager(tmpDir);
 
     // 验证完全直接使用 Git 检出的老机器人记忆，未被默认模板覆盖
-    assert.equal(ctx.soul, '# 历史积累灵魂\n忠诚果断');
-    assert.equal(ctx.memory, '# 历史沉淀长期记忆\n偏好自然语言');
-    assert.equal(ctx.user, '# 历史主人档案\n称呼：先生');
+    assert.equal(fs.readFileSync(soulPath, 'utf8'), '# 历史积累灵魂\n忠诚果断');
+    assert.equal(fs.readFileSync(memoryPath, 'utf8'), '# 历史沉淀长期记忆\n偏好自然语言');
+    assert.equal(fs.readFileSync(userPath, 'utf8'), '# 历史主人档案\n称呼：先生');
 
     // 验证权限已安全收紧为 0600（Windows 不支持 POSIX 三段权限位，做跨平台兼容判断）
     if (process.platform !== 'win32') {

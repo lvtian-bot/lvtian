@@ -9,6 +9,7 @@ import { FileManager } from './fileManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
 import { getDshPermissionMode } from './dshConfigManager.js';
 import { LvtianServer } from './server.js';
+import { prepareWorkspaceContextOverlay } from './workspaceContextConfig.js';
 
 function parseArgs(): Partial<ServerConfig> {
     const args = process.argv.slice(2);
@@ -85,11 +86,12 @@ async function main() {
         },
     }) : undefined;
     const taskOverlay = await nativeTasks?.prepareAcpOverlay();
+    const contextOverlay = await prepareWorkspaceContextOverlay(config.dataDir, config.workspace);
     const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager, {
         contextConsolidator,
         dshProfileDir: config.dshProfileDir,
+        additionalPatches: [contextOverlay, ...(taskOverlay ? [taskOverlay] : [])],
         ...(taskOverlay ? {
-            additionalPatches: [taskOverlay],
             privateEnvironment: {
                 LVTIAN_TASK_API_ORIGIN: `http://${taskApiHost}:${config.port}`,
                 LVTIAN_TASK_API_TOKEN: config.token,

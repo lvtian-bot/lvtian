@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AssistantMessage, TaskExecutionState, ApprovalRequest, ToolCallState } from './protocol.js';
+import { WORKSPACE_CONTEXT_VERSION } from './workspaceContext.js';
 
 export interface SessionData {
     /** 事件日志结构版本：2 起快照携带完整 state，新增字段无需再逐个补进快照拼装 */
@@ -12,6 +13,8 @@ export interface SessionData {
     /** 待审批队列：协议允许同一会话并发多个工具各自请求审批，按登记顺序展示与应答 */
     pendingApprovals: ApprovalRequest[];
     dshSessionId?: string;
+    /** 底层会话采用的工作区上下文版本；旧日志缺失时首次请求迁移。 */
+    workspaceContextVersion?: number;
     updatedAt: number;
     /** 上次真实交互完成的时间戳，用于心流超时判定 */
     lastActiveAt?: number;
@@ -64,7 +67,7 @@ type SessionLogEvent =
     | { t: 'msg'; at: number; seq: number; m: AssistantMessage }
     | { t: 'delta'; at: number; seq: number; id: string; d: string }
     | { t: 'state'; at: number; seq: number; taskState: TaskExecutionState; approvals?: ApprovalRequest[] }
-    | { t: 'dsh'; at: number; dshSessionId: string }
+    | { t: 'dsh'; at: number; dshSessionId: string; workspaceContextVersion?: number }
     | { t: 'seq'; at: number; seq: number }
     | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
     | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number }
@@ -358,6 +361,7 @@ export class SessionManager {
                     session.taskState = ev.taskState;
                     session.pendingApprovals = this.normalizeApprovals(ev);
                     session.dshSessionId = ev.dshSessionId;
+                    session.workspaceContextVersion = undefined;
                     session.updatedAt = ev.at;
                     session.lastActiveAt = ev.lastActiveAt;
                     session.contextTokens = ev.contextTokens;
@@ -397,6 +401,7 @@ export class SessionManager {
                 break;
             case 'dsh':
                 session.dshSessionId = ev.dshSessionId;
+                session.workspaceContextVersion = ev.workspaceContextVersion;
                 session.updatedAt = ev.at;
                 break;
             case 'seq':
@@ -823,11 +828,12 @@ export class SessionManager {
         });
     }
 
-    public setDshSessionId(sessionId: string, dshSessionId: string): void {
+    public setDshSessionId(sessionId: string, dshSessionId: string, workspaceContextVersion = WORKSPACE_CONTEXT_VERSION): void {
         const session = this.getOrCreateSession(sessionId);
         session.dshSessionId = dshSessionId;
+        session.workspaceContextVersion = workspaceContextVersion;
         session.updatedAt = Date.now();
-        this.appendEvent(sessionId, { t: 'dsh', at: Date.now(), dshSessionId });
+        this.appendEvent(sessionId, { t: 'dsh', at: Date.now(), dshSessionId, workspaceContextVersion });
     }
 
     public getDshSessionId(sessionId: string): string | undefined {
