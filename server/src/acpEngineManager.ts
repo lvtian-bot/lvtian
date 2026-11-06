@@ -10,6 +10,7 @@ import { SessionManager } from './sessionManager.js';
 import { ToolCallState, ApprovalRequest, ChatAttachment } from './protocol.js';
 import type { ContextConsolidator } from './contextConsolidator.js';
 import { getDshPermissionMode } from './dshConfigManager.js';
+import { WORKSPACE_CONTEXT_VERSION } from './workspaceContext.js';
 
 /**
  * 引擎模块用户可见消息的错误码：客户端按码本地化渲染（i18n），码值是持久化与流式的稳定契约。
@@ -58,7 +59,7 @@ export interface AcpEngineManagerOptions {
     /** 判定容量门禁（上下文窗口占比），默认 0.2 (20%) */
     minCapacityRatio?: number;
     /** 引擎连接工厂，默认 spawn dsh --profile acp；测试注入进程内模拟连接 */
-    connectEngine?: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+    connectEngine?: (app: acp.ClientApp) => Promise<EngineConnection>;
     /** 上下文提炼整合器（用于主动交接、权限切换时即时提炼心智备忘录） */
     contextConsolidator?: ContextConsolidator;
     /** DSH 配置文件自定义目录 (~/.dsh/profiles/acp)，用于测试隔离或非标准安装路径对齐 */
@@ -295,14 +296,13 @@ export function extractToolOutput(content?: unknown): string | undefined {
 
 export class AcpEngineManager {
     private workspace: string;
-    private memoryManager: MemoryManager;
     private sessionManager: SessionManager;
     private approvalTimeoutMs: number;
     private stopTimeoutMs: number;
     private taskTimeoutMs: number;
     private idleTimeoutMs: number;
     private minCapacityRatio: number;
-    private connectEngineImpl: (app: acp.ClientApp, systemPrompt: string) => Promise<EngineConnection>;
+    private connectEngineImpl: (app: acp.ClientApp) => Promise<EngineConnection>;
     private contextConsolidator: ContextConsolidator | null = null;
     private dshProfileDir?: string;
     private additionalPatches: readonly string[];
@@ -311,7 +311,6 @@ export class AcpEngineManager {
     private connection: EngineConnection | null = null;
     private engineStarting: Promise<void> | null = null;
     private engineDead = false;
-    private engineSystemPrompt = '';
 
     /** 已受理（含引擎启动、建会话窗口）的会话 → 对应助理消息 ID：execute 入口同步登记，用于并发去重与停止时消息终态化 */
     private activeSessions: Map<string, string> = new Map();
@@ -336,12 +335,11 @@ export class AcpEngineManager {
 
     constructor(
         workspace: string,
-        memoryManager: MemoryManager,
+        _memoryManager: MemoryManager,
         sessionManager: SessionManager,
         options?: AcpEngineManagerOptions
     ) {
         this.workspace = workspace;
-        this.memoryManager = memoryManager;
         this.sessionManager = sessionManager;
         const envTimeout = Number.parseInt(process.env.LVTIAN_APPROVAL_TIMEOUT_MS ?? '', 10);
         this.approvalTimeoutMs = options?.approvalTimeoutMs
@@ -676,9 +674,11 @@ export class AcpEngineManager {
 
             const context = this.connection.context;
 
-            // 每轮开跑前重读工作区记忆文件：用户随时可能改 SOUL/MEMORY/USER，不能沿用引擎启动时的旧副本
-            if (this.rebuildSystemPrompt()) {
-                console.log('[AcpEngine] 检测到工作区记忆文件变更，本轮已重新加载最新上下文');
+            // 旧版把档案全文写进用户历史；首次升级另建底层会话，通过既有接力机制保留工作连续性。
+            const previous = this.sessionManager.getOrCreateSession(sessionId);
+            if (previous.dshSessionId && (previous.workspaceContextVersion ?? 0) < WORKSPACE_CONTEXT_VERSION) {
+                this.sessionManager.setHandoffPending(sessionId, true);
+                this.sessionManager.setDshSessionId(sessionId, '', WORKSPACE_CONTEXT_VERSION);
             }
 
             // 检查基于人脑记忆模型的底层会话轮换门禁：只有「满 3h AND 容量 20%」才换会话
@@ -758,9 +758,7 @@ export class AcpEngineManager {
                 const verbatim = this.sessionManager.getVerbatimExcerpts(sessionId, 8, 1800, {
                     excludePrompt: userPrompt,
                 });
-                const sections: string[] = [
-                    `[系统背景与主人长期档案]\n${this.engineSystemPrompt}`,
-                ];
+                const sections: string[] = [];
                 if (pendingBackground) {
                     sections.push(`[前序交流心智接力提要 (上次静默期归档)]\n${pendingBackground}`);
                 }
@@ -770,7 +768,7 @@ export class AcpEngineManager {
                 sections.push(`[${source === 'user' ? '主人当前提问与指令' : '后台任务结果交付（非用户指令）'}]\n${userPrompt}`);
                 fullPrompt = sections.join('\n\n');
             } else {
-                fullPrompt = `[系统人设与主人记忆背景]\n${this.engineSystemPrompt}\n\n[${source === 'user' ? '主人当前提问与指令' : '后台任务结果交付（非用户指令）'}]\n${userPrompt}`;
+                fullPrompt = source === 'user' ? userPrompt : `[后台任务结果交付（非用户指令）]\n${userPrompt}`;
             }
 
             let attachmentContext = '';
@@ -898,26 +896,7 @@ export class AcpEngineManager {
         await this.engineStarting;
     }
 
-    /**
-     * 从工作区重新读取 SOUL/MEMORY/USER 并重建每轮 prompt 前缀。
-     * 这些文件是「请求期数据」而不是「进程期配置」：引擎进程常驻期间用户会持续修改它们，
-     * 冻结在启动时会导致改了记忆却一直不生效。返回是否发生变化，便于记日志。
-     */
-    private rebuildSystemPrompt(): boolean {
-        const memoryContext = this.memoryManager.loadContext();
-        const systemSections = [
-            memoryContext.soul ? `[系统背景]\n${memoryContext.soul}` : '',
-            memoryContext.memory ? `[主人记忆]\n${memoryContext.memory}` : '',
-            memoryContext.user ? `[主人档案]\n${memoryContext.user}` : '',
-        ].filter(Boolean).join('\n\n');
-        const changed = systemSections !== this.engineSystemPrompt;
-        this.engineSystemPrompt = systemSections;
-        return changed;
-    }
-
     private async startEngine(): Promise<void> {
-        // 引擎启动时先加载一次（进程环境变量注入只作兼容兜底，真正生效的是每轮 prompt 前缀）
-        this.rebuildSystemPrompt();
         this.engineDead = false;
 
         const app = acp.client({ name: 'lvtian-server' });
@@ -939,7 +918,7 @@ export class AcpEngineManager {
         );
 
         console.log(`[AcpEngine] 启动引擎 (工作区: ${this.workspace})...`);
-        const connection = await this.connectEngineImpl(app, this.engineSystemPrompt);
+        const connection = await this.connectEngineImpl(app);
         this.connection = connection;
         console.log('[AcpEngine] 引擎连接已建立');
 
@@ -957,7 +936,7 @@ export class AcpEngineManager {
         });
     }
 
-    private async spawnDshEngine(app: acp.ClientApp, systemPrompt: string): Promise<EngineConnection> {
+    private async spawnDshEngine(app: acp.ClientApp): Promise<EngineConnection> {
         const { command, argsPrefix } = resolveDshInvocation();
         const envExtra: Record<string, string> = {};
         if (this.dshProfileDir) {
@@ -977,8 +956,6 @@ export class AcpEngineManager {
                 ...envExtra,
                 ...this.privateEnvironment,
                 DSH_WORKSPACE: this.workspace,
-                DSH_SYSTEM_PROMPT: systemPrompt,
-                DEEPSEEK_SYSTEM_PROMPT: systemPrompt,
             },
             shell: false,
         });
@@ -1272,12 +1249,6 @@ export class AcpEngineManager {
         this.sessionManager.setTaskState(sessionId, 'completed');
         // 唯真实交互推进主聊天活跃时间
         if (source === 'user') this.sessionManager.recordActivity(sessionId);
-        try {
-            const recordedAnswer = runtime.committedText.trim().slice(0, 300);
-            this.memoryManager.appendDailyLog('对话与任务完成', `答：${recordedAnswer}...`);
-        } catch (logErr: unknown) {
-            console.warn(`[AcpEngine] 写入每日流水失败 (非致命): ${logErr instanceof Error ? logErr.message : String(logErr)}`);
-        }
     }
 
     // ------------------------------------------------------------------

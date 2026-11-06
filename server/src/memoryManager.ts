@@ -2,12 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-export interface MemoryContext {
-    soul: string;
-    memory: string;
-    user: string;
-}
-
 export class MemoryManager {
     private baseDir: string;
     private memoryDir: string;
@@ -76,36 +70,6 @@ export class MemoryManager {
             } catch {
                 // ignore
             }
-        }
-    }
-
-    public loadContext(): MemoryContext {
-        const soulFile = path.join(this.baseDir, 'SOUL.md');
-        const memoryFile = path.join(this.baseDir, 'MEMORY.md');
-        const userFile = path.join(this.baseDir, 'USER.md');
-
-        const soul = fs.existsSync(soulFile) ? fs.readFileSync(soulFile, 'utf8') : '';
-        const memory = fs.existsSync(memoryFile) ? fs.readFileSync(memoryFile, 'utf8') : '';
-        const user = fs.existsSync(userFile) ? fs.readFileSync(userFile, 'utf8') : '';
-
-        return { soul, memory, user };
-    }
-
-    public appendDailyLog(title: string, content: string): void {
-        try {
-            const today = new Date().toISOString().slice(0, 10);
-            const dailyFile = path.join(this.memoryDir, `${today}.md`);
-            const time = new Date().toLocaleTimeString();
-
-            const logEntry = `\n### [${time}] ${title}\n${content}\n`;
-            fs.appendFileSync(dailyFile, logEntry, { encoding: 'utf8', mode: 0o600 });
-            try {
-                fs.chmodSync(dailyFile, 0o600);
-            } catch {
-                // ignore
-            }
-        } catch (err) {
-            console.warn(`[MemoryManager] 记录流水日志失败 (非致命): ${err}`);
         }
     }
 }
