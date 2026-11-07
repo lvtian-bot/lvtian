@@ -54,6 +54,7 @@ export const ServerFileScreen = () => {
 
     const { serverUrl, serverToken } = useAssistantStore();
     const isConfigured = !!serverUrl && serverUrl.trim().length > 0;
+    const serviceIdentity = `${serverUrl}|${serverToken}`;
 
     const [currentPath, setCurrentPath] = useState<string>('');
     const [parentPath, setParentPath] = useState<string | null>(null);
@@ -68,13 +69,12 @@ export const ServerFileScreen = () => {
     const currentPathRef = useRef<string>('');
     const parentPathRef = useRef<string | null>(null);
     const hasLoadedInitialRef = useRef<boolean>(false);
-    const prevServiceIdentityRef = useRef(`${serverUrl}|${serverToken}`);
+    const prevServiceIdentityRef = useRef(serviceIdentity);
     const requestIdRef = useRef<number>(0);
     const systemInfoRef = useRef<FileSystemInfo | null>(null);
 
     useEffect(() => {
         // 同地址换 Token 也视为切换了服务实例（重装、反代按 Token 选后端），需整体重置浏览状态
-        const serviceIdentity = `${serverUrl}|${serverToken}`;
         if (prevServiceIdentityRef.current !== serviceIdentity) {
             prevServiceIdentityRef.current = serviceIdentity;
             requestIdRef.current++;
@@ -87,8 +87,11 @@ export const ServerFileScreen = () => {
             setSystemInfo(null);
             setItems([]);
             setListingTruncated(false);
+            setErrorMessage(null);
+            setLoading(false);
+            setRefreshing(false);
         }
-    }, [serverUrl, serverToken]);
+    }, [serviceIdentity]);
 
     /**
      * 加载指定目录或初始化主目录
@@ -101,6 +104,8 @@ export const ServerFileScreen = () => {
             }
 
             const requestId = ++requestIdRef.current;
+            const isCurrentRequest = () => requestId === requestIdRef.current
+                && serviceIdentity === prevServiceIdentityRef.current;
 
             if (isRefresh) {
                 setRefreshing(true);
@@ -114,7 +119,7 @@ export const ServerFileScreen = () => {
                 let currentSysInfo = systemInfoRef.current;
                 if (!currentSysInfo) {
                     currentSysInfo = await serverFileService.getSystemInfo();
-                    if (requestId !== requestIdRef.current) return;
+                    if (!isCurrentRequest()) return;
                     systemInfoRef.current = currentSysInfo;
                     setSystemInfo(currentSysInfo);
                 }
@@ -122,7 +127,7 @@ export const ServerFileScreen = () => {
                 // 首次进入默认打开主目录
                 const pathToLoad = targetPath !== undefined ? targetPath : (currentPathRef.current || currentSysInfo.homeDir);
                 const listing = await serverFileService.listDirectory(pathToLoad);
-                if (requestId !== requestIdRef.current) return;
+                if (!isCurrentRequest()) return;
 
                 setCurrentPath(listing.currentPath);
                 setParentPath(listing.parentPath);
@@ -132,7 +137,7 @@ export const ServerFileScreen = () => {
                 setItems(listing.items);
                 setListingTruncated(!!listing.truncated);
             } catch (err: unknown) {
-                if (requestId !== requestIdRef.current) return;
+                if (!isCurrentRequest()) return;
                 const serverErr = err as { code?: string; message?: string };
                 const code = serverErr.code;
                 let message = (err as Error).message || '读取目录失败';
@@ -141,13 +146,13 @@ export const ServerFileScreen = () => {
                 }
                 setErrorMessage(message);
             } finally {
-                if (requestId === requestIdRef.current) {
+                if (isCurrentRequest()) {
                     setLoading(false);
                     setRefreshing(false);
                 }
             }
         },
-        [isConfigured, t]
+        [isConfigured, serviceIdentity, t]
     );
 
     useFocusEffect(
