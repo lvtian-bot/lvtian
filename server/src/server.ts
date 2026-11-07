@@ -684,13 +684,16 @@ export class LvtianServer {
                         });
                     }
                 }
+                // 已因无进展超时的执行仍可能处于取消宽限期；手动 stop 不能广播另一种失败原因。
+                const latestAssistant = [...session.messages].reverse().find(m => m.role === 'assistant');
+                const timedOut = session.taskState === 'error' && latestAssistant?.errorMessage === 'task_timeout';
                 const seq = this.sessionManager.nextSeq(sessionId);
                 this.broadcastSession(sessionId, {
                     type: 'task_status',
                     seq,
                     sessionId,
-                    state: 'stopped',
-                    error: stopped ? 'task_stopped' : undefined,
+                    state: timedOut ? 'error' : 'stopped',
+                    error: timedOut ? 'task_timeout' : stopped ? 'task_stopped' : undefined,
                 });
                 break;
             }

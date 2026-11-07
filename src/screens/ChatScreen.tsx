@@ -70,6 +70,7 @@ const ERROR_CODE_I18N_KEYS: Record<string, string> = {
     approval_timeout: 'assistant.errorApprovalTimeout',
     engine_refusal: 'assistant.errorEngineRefusal',
     engine_error: 'assistant.errorEngineError',
+    task_timeout: 'assistant.errorEngineError',
     service_upgrading: 'assistant.errorServiceUpgrading',
     task_cancelled: 'assistant.errorTaskCancelled',
     service_restarted: 'assistant.errorServiceRestarted',

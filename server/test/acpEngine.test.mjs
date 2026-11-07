@@ -33,7 +33,8 @@ function createMockEngineApp(options = {}) {
             agentCapabilities: {},
         }))
         .onRequest(acp.methods.agent.authenticate, () => ({}))
-        .onRequest(acp.methods.agent.session.new, () => {
+        .onRequest(acp.methods.agent.session.new, async () => {
+            if (options.sessionNeverEnds) await new Promise(() => {});
             const sessionId = globalThis.crypto.randomUUID();
             knownSessions.add(sessionId);
             activeOnConnection.add(sessionId);
@@ -54,6 +55,7 @@ function createMockEngineApp(options = {}) {
             options.promptLog?.push(sessionId);
             const notify = (update) =>
                 c.client.notify(acp.methods.client.session.update, { sessionId, update });
+            if (options.promptBehavior) return options.promptBehavior(c, notify);
             if (options.emitFailedTool) {
                 await notify({
                     sessionUpdate: 'tool_call',
@@ -190,7 +192,7 @@ function createMockEngineApp(options = {}) {
             }
             return { stopReason: options.stopReason ?? 'end_turn' };
         })
-        .onNotification(acp.methods.agent.session.cancel, () => {});
+        .onNotification(acp.methods.agent.session.cancel, (c) => { options.onCancel?.(c.params.sessionId); });
 }
 
 /**
@@ -205,10 +207,10 @@ function buildManager(agentOptions = {}, managerOptions = {}) {
 
     let connectionCount = 0;
     const connectEngine = async (app) => {
-        if (agentOptions.engineStartDelayMs) {
+        connectionCount++;
+        if (agentOptions.engineStartDelayMs && (!agentOptions.engineStartDelayOnce || connectionCount === 1)) {
             await delay(agentOptions.engineStartDelayMs);
         }
-        connectionCount++;
         const engineOptions = { ...agentOptions, sessionStore };
         // promptNeverEnds / hangOnPermissionTimeout 只让首个引擎卡死（复现无响应），
         // 懒重启后的新引擎须正常应答（含跳过审批路径）以验证会话可恢复
@@ -231,6 +233,7 @@ function buildManager(agentOptions = {}, managerOptions = {}) {
             context: await contextReady,
             closed,
             close: async () => {
+                agentOptions.closeLog?.push(connectionCount);
                 resolveStop();
                 await closed;
             },
@@ -679,11 +682,11 @@ test('并发审批其一超时：其余审批一并取消，任务停止后不�
     assert.ok(stoppedEvent, '超时审批应广播 stopped 终态');
 });
 
-test('任务占用看门狗：占用超时强制回收连接，任务以错误终态释放会话', { timeout: 3000 }, async (t) => {
+test('无进展看门狗：静默挂死先取消再回收，任务以 task_timeout 释放会话', { timeout: 3000 }, async (t) => {
     keepEventLoopAlive(t);
     const { manager, sessionManager } = buildManager(
         { promptNeverEnds: true },
-        { taskTimeoutMs: 100 }
+        { taskTimeoutMs: 100, stopTimeoutMs: 100 }
     );
     const events = [];
     sessionManager.addMessage('main', { id: 'asst-1', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
@@ -692,11 +695,131 @@ test('任务占用看门狗：占用超时强制回收连接，任务以错误�
     assert.strictEqual(manager.isRunning('main'), false, '看门狗回收后必须释放会话占用');
     assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'error');
     assert.strictEqual(lastStatus(events), 'error', '占用超时应以错误终态收尾而非永久占用');
+    assert.strictEqual(events.find(e => e.status === 'error').payload.code, 'task_timeout');
+    assert.strictEqual(sessionManager.getOrCreateSession('main').messages.find(m => m.id === 'asst-1').errorMessage, 'task_timeout');
 
     // 引擎随下次请求懒重启，会话可继续使用
     const events2 = [];
     await manager.execute('main', 'asst-2', '回收后的新任务', collectCallbacks(events2));
     assert.strictEqual(lastStatus(events2), 'done', '看门狗回收后应能重建引擎并继续执行');
+});
+
+test('实质文本/思考/工具进展允许任务超过原总时长期限', { timeout: 3000 }, async () => {
+    const closeLog = [];
+    const { manager } = buildManager({ closeLog, promptBehavior: async (_c, notify) => {
+        const updates = [
+            { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } },
+            { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'reasoning' } },
+            { sessionUpdate: 'tool_call', toolCallId: 'tool', title: 'run', status: 'pending' },
+            { sessionUpdate: 'tool_call_update', toolCallId: 'tool', status: 'in_progress' },
+            { sessionUpdate: 'tool_call_update', toolCallId: 'tool', content: [{ type: 'content', content: { type: 'text', text: 'result' } }] },
+            { sessionUpdate: 'tool_call_update', toolCallId: 'tool', status: 'completed' },
+        ];
+        for (const update of updates) { await delay(40); await notify(update); }
+        return { stopReason: 'end_turn' };
+    } }, { taskTimeoutMs: 100, stopTimeoutMs: 50 });
+    const events = [];
+    await manager.execute('main', 'progress', 'long job', collectCallbacks(events));
+    assert.strictEqual(lastStatus(events), 'done');
+    assert.deepStrictEqual(closeLog, []);
+    await manager.stopAll();
+});
+
+for (const stopReason of ['cancelled', 'end_turn']) {
+    test(`超时取消应答 ${stopReason} 保留正文和原因、不关闭共享连接及误杀下一轮`, { timeout: 3000 }, async () => {
+        let finish;
+        let round = 0;
+        const closeLog = [];
+        const { manager, sessionManager, tmp } = buildManager({
+            closeLog,
+            onCancel: () => finish({ stopReason }),
+            promptBehavior: async (_c, notify) => {
+                if (++round === 1) {
+                    await notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'preserved' } });
+                    return new Promise(resolve => { finish = resolve; });
+                }
+                for (let i = 0; i < 8; i++) {
+                    await delay(35);
+                    await notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'next' } });
+                }
+                return { stopReason: 'end_turn' };
+            },
+        }, { taskTimeoutMs: 100, stopTimeoutMs: 120 });
+        sessionManager.addMessage('main', { id: 'timed', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+        const events = [];
+        const cb = collectCallbacks(events);
+        cb.onDelta = text => sessionManager.appendDelta('main', 'timed', text);
+        await manager.execute('main', 'timed', 'silent', cb);
+        manager.stop('main'); // 不得覆盖既有超时原因
+        const msg = sessionManager.getOrCreateSession('main').messages.find(m => m.id === 'timed');
+        assert.strictEqual(msg.content, 'preserved');
+        assert.strictEqual(msg.errorMessage, 'task_timeout');
+        assert.strictEqual(lastStatus(events), 'error');
+        const next = [];
+        await manager.execute('main', 'next', 'continue', collectCallbacks(next));
+        assert.strictEqual(lastStatus(next), 'done');
+        assert.deepStrictEqual(closeLog, []);
+        const reloaded = new SessionManager(path.join(tmp, 'data'));
+        const persisted = reloaded.getOrCreateSession('main').messages.find(m => m.id === 'timed');
+        assert.strictEqual(persisted.content, 'preserved');
+        assert.strictEqual(persisted.errorMessage, 'task_timeout');
+        const synced = reloaded.getReconcileData('main', 0).messages.find(m => m.id === 'timed');
+        assert.strictEqual(synced.errorMessage, 'task_timeout');
+        assert.strictEqual(synced.content, 'preserved');
+        await manager.stopAll();
+    });
+}
+
+for (const noise of ['usage_update', 'tool_call_update', 'agent_thought_chunk']) {
+    test(`噪声 ${noise} 不刷新期限，工具 pending 不能无限续命`, { timeout: 3000 }, async () => {
+        let finish;
+        const { manager } = buildManager({
+            onCancel: () => finish({ stopReason: 'cancelled' }),
+            promptBehavior: async (_c, notify) => {
+                await notify({ sessionUpdate: 'tool_call', toolCallId: 'pending', title: 'Waiting for external service', status: 'pending' });
+                const timer = setInterval(() => { void notify(noise === 'tool_call_update'
+                    ? { sessionUpdate: noise, toolCallId: 'pending', status: 'pending' }
+                    : noise === 'usage_update' ? { sessionUpdate: noise, used: 123, size: 1000 }
+                    : { sessionUpdate: noise, content: { type: 'text', text: '' } }).catch(() => {}); }, 20);
+                try { return await new Promise(resolve => { finish = resolve; }); }
+                finally { clearInterval(timer); }
+            },
+        }, { taskTimeoutMs: 100, stopTimeoutMs: 100 });
+        const events = [];
+        await manager.execute('main', noise, 'wait', collectCallbacks(events));
+        assert.strictEqual(events.find(e => e.status === 'error')?.payload.code, 'task_timeout');
+        await manager.stopAll();
+    });
+}
+
+test('启动工厂超时有界：迟到连接关闭、不覆盖新执行', { timeout: 3000 }, async (t) => {
+    keepEventLoopAlive(t);
+    const closeLog = [];
+    const { manager } = buildManager({ engineStartDelayMs: 200, engineStartDelayOnce: true, closeLog }, { taskTimeoutMs: 80, stopTimeoutMs: 50 });
+    const events = [];
+    await manager.execute('main', 'start-hang', 'hello', collectCallbacks(events));
+    assert.strictEqual(manager.isRunning('main'), false);
+    assert.strictEqual(events.find(e => e.status === 'error')?.payload.code, 'task_timeout');
+    const next = [];
+    await manager.execute('main', 'next', 'hello', collectCallbacks(next));
+    assert.strictEqual(lastStatus(next), 'done');
+    await delay(250);
+    assert.strictEqual(closeLog.length, 1, '仅关闭迟到的连接');
+    const third = [];
+    await manager.execute('main', 'third', 'hello', collectCallbacks(third));
+    assert.strictEqual(lastStatus(third), 'done');
+    await manager.stopAll();
+});
+
+test('建会话静默挂死：看门狗覆盖 prompt 之前窗口', { timeout: 3000 }, async (t) => {
+    keepEventLoopAlive(t);
+    const closeLog = [];
+    const { manager } = buildManager({ sessionNeverEnds: true, closeLog }, { taskTimeoutMs: 100, stopTimeoutMs: 50 });
+    const events = [];
+    await manager.execute('main', 'new-hang', 'hello', collectCallbacks(events));
+    assert.strictEqual(manager.isRunning('main'), false);
+    assert.strictEqual(events.find(e => e.status === 'error')?.payload.code, 'task_timeout');
+    assert.strictEqual(closeLog.length, 1);
 });
 
 test('审批超时且引擎无响应：停止回收兜底释放会话占用', { timeout: 3000 }, async (t) => {
