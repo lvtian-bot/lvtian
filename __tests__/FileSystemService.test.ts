@@ -2,7 +2,7 @@ import { File, Directory } from 'expo-file-system';
 import { fsService } from '../src/services/FileSystemService';
 
 jest.mock('expo-file-system', () => ({
-  Paths: { document: 'file:///documents' },
+  Paths: { document: { uri: 'file:///documents' }, cache: { uri: 'file:///cache' } },
   Directory: jest.fn().mockImplementation((..._args) => ({
     uri: 'file:///documents/lvtian_docs',
     exists: true,
@@ -117,5 +117,44 @@ describe('本地文件异步写入', () => {
     expect(subFileMove).toHaveBeenCalled();
     expect(subDirDelete).toHaveBeenCalled();
     expect(oldRootDirDelete).toHaveBeenCalled();
+  });
+});
+
+describe('新版附件读取', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('按附件类型读取文本和二进制内容', async () => {
+    const text = jest.fn().mockResolvedValue('中文内容');
+    const base64 = jest.fn().mockResolvedValue('AAEC');
+    mockFile.mockImplementation(() => ({ exists: true, size: 8, text, base64 }) as unknown as File);
+    await expect(fsService.readAttachment('content://external/note', 20, 'text/plain', 'note.txt'))
+      .resolves.toEqual({ content: '中文内容', data: undefined, size: 8 });
+    await expect(fsService.readAttachment('content://external/document', 20, 'application/pdf', 'document.pdf'))
+      .resolves.toEqual({ content: undefined, data: 'AAEC', size: 8 });
+  });
+
+  it('超过上限时不读取附件', async () => {
+    const base64 = jest.fn();
+    mockFile.mockImplementation(() => ({ exists: true, size: 21, base64 }) as unknown as File);
+    await expect(fsService.readAttachment('file:///large.pdf', 20, 'application/pdf')).rejects.toThrow('ATTACHMENT_TOO_LARGE');
+    expect(base64).not.toHaveBeenCalled();
+  });
+
+  it('文本读取失败时保留二进制回退', async () => {
+    const text = jest.fn().mockRejectedValue(new Error('decode'));
+    const base64 = jest.fn().mockResolvedValue('AAEC');
+    mockFile.mockImplementation(() => ({ exists: true, size: 3, text, base64 }) as unknown as File);
+    await expect(fsService.readAttachment('file:///note.txt', 20, 'text/plain'))
+      .resolves.toEqual({ content: undefined, data: 'AAEC', size: 3 });
+  });
+});
+
+
+describe('预览缓存信息', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('返回毫秒时间，供预览判断七天缓存有效期', () => {
+    mockFile.mockImplementation(() => ({ exists: true, modificationTime: 1700000000123 }) as unknown as File);
+    expect(fsService.getCacheFileInfo('file:///cache/image')).toEqual({ exists: true, modificationTime: 1700000000123 });
   });
 });

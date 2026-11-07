@@ -1,5 +1,4 @@
 import { Paths, File, Directory } from 'expo-file-system';
-import * as FileSystem from 'expo-file-system/legacy';
 export interface FileItem {
     name: string;
     path: string;
@@ -403,6 +402,16 @@ class FileSystemService {
         return false;
     }
 
+    /** 获取沙盒缓存文件路径及其缓存时效所需的文件信息。 */
+    getCacheFileUri(filename: string): string {
+        return new File(Paths.cache, filename).uri;
+    }
+
+    getCacheFileInfo(uri: string): { exists: boolean; modificationTime: number | null } {
+        const file = new File(uri);
+        return { exists: file.exists, modificationTime: file.modificationTime };
+    }
+
     /**
      * 读取外部/临时附件文件（用于主聊天图片或文档附件上传）
      * 区分纯文本与二进制文档（PDF、Office、压缩包等），避免强行解码为损坏的 UTF-8 文本
@@ -417,12 +426,12 @@ class FileSystemService {
         mimeType?: string,
         fileName?: string
     ): Promise<{ content?: string; data?: string; size: number }> {
-        const info = await FileSystem.getInfoAsync(uri);
-        if (!info.exists || info.isDirectory) {
+        const file = new File(uri);
+        if (!file.exists) {
             throw new Error('ATTACHMENT_NOT_FOUND');
         }
 
-        const size = info.size ?? 0;
+        const size = file.size;
         if (size > maxSize) {
             throw new Error('ATTACHMENT_TOO_LARGE');
         }
@@ -433,14 +442,10 @@ class FileSystemService {
 
         if (isText) {
             try {
-                content = await FileSystem.readAsStringAsync(uri, {
-                    encoding: FileSystem.EncodingType.UTF8,
-                });
+                content = await file.text();
             } catch {
                 try {
-                    data = await FileSystem.readAsStringAsync(uri, {
-                        encoding: FileSystem.EncodingType.Base64,
-                    });
+                    data = await file.base64();
                 } catch (err) {
                     console.error('[FileSystemService] 读取附件内容失败:', err);
                     throw new Error('ATTACHMENT_READ_FAILED');
@@ -448,9 +453,7 @@ class FileSystemService {
             }
         } else {
             try {
-                data = await FileSystem.readAsStringAsync(uri, {
-                    encoding: FileSystem.EncodingType.Base64,
-                });
+                data = await file.base64();
             } catch (err) {
                 console.error('[FileSystemService] 读取二进制附件失败:', err);
                 throw new Error('ATTACHMENT_READ_FAILED');
@@ -469,11 +472,8 @@ class FileSystemService {
      */
     async persistAvatar(sourceUri: string): Promise<string> {
         const filename = `avatar-${Date.now()}.jpg`;
-        const targetPath = `${FileSystem.documentDirectory ?? ''}${filename}`;
-        await FileSystem.copyAsync({
-            from: sourceUri,
-            to: targetPath,
-        });
+        const targetPath = new File(Paths.document, filename);
+        await new File(sourceUri).copy(targetPath);
         return filename;
     }
 
@@ -482,10 +482,11 @@ class FileSystemService {
      */
     async deleteAvatar(filename?: string | null): Promise<void> {
         const uri = this.resolveAvatarUri(filename);
-        const docDir = FileSystem.documentDirectory ?? '';
+        const docDir = `${Paths.document.uri.replace(/\/+$/, '')}/`;
         if (uri && docDir && uri.startsWith(docDir)) {
             try {
-                await FileSystem.deleteAsync(uri, { idempotent: true });
+                const file = new File(uri);
+                if (file.exists) file.delete();
             } catch {
                 // ignore cleanup error
             }
@@ -498,7 +499,7 @@ class FileSystemService {
     resolveAvatarUri(filename?: string | null): string | undefined {
         if (!filename) return undefined;
         if (filename.includes('://')) return filename;
-        return `${FileSystem.documentDirectory ?? ''}${filename}`;
+        return `${Paths.document.uri.replace(/\/+$/, '')}/${filename}`;
     }
 }
 

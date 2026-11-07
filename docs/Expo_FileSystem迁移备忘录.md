@@ -1,35 +1,18 @@
-# Expo_FileSystem 迁移备忘录
+# Expo FileSystem 文件读写说明
 
-> 本文档规范项目内部 `expo-file-system` API 的混用规则、Scoped Storage 适配底线及统一迁移路径。
+移动端文件系统统一使用 `expo-file-system` 新版 API；依赖版本由 `package-lock.json` 锁定，迁移没有更换依赖。
 
----
+## 实现与边界
 
-## 1. 核心现状与原则
+- `FileSystemService` 使用 `File`、`Directory` 和 `Paths`，负责本地文件、聊天附件、头像和缓存文件路径；页面通过服务获取缓存路径及信息。
+- `ShadowFileService` 保留 `document/.shadows/` 下原有的路径哈希及文件名，不迁移、重命名或清空旧影子副本。写入完成后才报告成功。
+- `NativeDownloadService` 使用新版原生下载任务，服务端与 WebDAV 下载共用；任务先写入同目录临时文件，成功后替换目标。覆盖前备份原文件，替换失败尝试恢复；同一目标的替换过程串行，防止并发回滚覆盖成功结果。原生任务取消后，等待其停止再清理残留，避免写入与清理竞态。
+- 系统文件下载使用 30 秒无进展超时，WebDAV 下载使用 30 秒总超时。新版下载任务不直接提供结构化 HTTP 状态码；系统文件下载失败使用通用提示，超时仍单独提示。
 
-1. **唯一 IO 入口铁律**：应用内所有文件读写、创建、删除、目录枚举操作，**严禁直接调用第三方库（如 react-native-fs）或在 UI 组件中随意调用文件 API**，必须统一通过 `src/services/FileSystemService.ts` 进行下沉封装。
-2. **新老 API 混用状态**：
-   - Expo SDK 演进过程中，`expo-file-system` 推出了基于现代化对象式的文件系统新 API（如 `File`, `Directory` 等），同时保留了经典的静态异步方法（如 `FileSystem.readAsStringAsync`, `FileSystem.writeAsStringAsync`, `FileSystem.getInfoAsync`）。
-   - 当前应用处于混合过渡期。业务逻辑核心依赖成熟的静态异步方法，辅以部分新语法。
-3. **安全防护规则**：
-   - 禁止在未确认生产环境兼容性和单元测试覆盖的情况下，贸然重构 `FileSystemService.ts`。
-   - 所有文件操作必须处理 Android Scoped Storage（分区存储）的沙盒路径限制，统一使用 `FileSystem.documentDirectory` 作为安全根路径。
+## 必须保持的约束
 
----
-
-## 2. 关键接口与实现对照
-
-| 功能场景 | 现行稳定调用（FileSystemService 内部） | 新版 API 目标调用 | 注意事项 |
-|---------|------------------------------------|-------------------|---------|
-| 检查文件存在性 | `FileSystem.getInfoAsync(uri)` | `new File(uri).exists` | 需判断 `exists` 字段及 `isDirectory` |
-| 读取文本内容 | `FileSystem.readAsStringAsync(uri, { encoding: UTF8 })` | `new File(uri).text()` | 必须保证 UTF-8 编码，防止中文乱码 |
-| 写入文本内容 | `FileSystemService.writeFile()` 内部使用 `await file.write(content)` | `await new File(uri).write(content)` | SDK 58 的 `File.write()` 返回 Promise；必须等待写入完成才可报告成功或开始同步，异步失败由服务层捕获并向调用方抛出；写入前确保父级目录已递归建立 |
-| 删除文件/目录 | `FileSystem.deleteAsync(uri, { idempotent: true })` | `new File(uri).delete()` | 开启幂等，文件不存在时不抛异常 |
-| 递归创建目录 | `FileSystem.makeDirectoryAsync(uri, { intermediates: true })` | `new Directory(uri).create({ intermediates: true })` | 必须开启 `intermediates: true` |
-
----
-
-## 3. 影子文件系统与特殊路径
-
-- **影子副本存储**：位于 `${FileSystem.documentDirectory}.shadows/`，用于三路合并基准比对。
-- **临时构建/下载路径**：位于 `${FileSystem.cacheDirectory}`，用于流式下载中转与图片预览缓存。
-- **清理约束**：缓存目录允许随系统清理，但 `.shadows/` 与主文档目录严禁被随意清空。
+- 私有文档目录存放用户数据和影子副本；系统缓存目录可被系统清理，不能混用。
+- 图片缓存时间新版 API 以毫秒表示，旧版以秒表示，不能重复乘以 1000。
+- 附件可能来自 Android 的 `content://` 地址；文本和二进制读取、文件大小限制与头像复制需在设备上验证。
+- 影子副本影响同步三路合并；必须保持文件位置和内容，并等待异步写入完成。
+- 修改应用文件读写时优先经 `FileSystemService` 封装；业务专用的影子副本和原生下载由各自服务负责，不在页面直接新增文件读写逻辑。

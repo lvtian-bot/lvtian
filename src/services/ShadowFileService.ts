@@ -1,5 +1,5 @@
 /* eslint-disable no-bitwise */
-import * as FileSystem from 'expo-file-system/legacy';
+import { Directory, File, Paths } from 'expo-file-system';
 import { normalizePath } from '../utils/pathUtils';
 
 class ShadowFileService {
@@ -18,45 +18,44 @@ class ShadowFileService {
         }
         const safeHash = Math.abs(hash).toString(16);
 
-        const docDir = FileSystem.documentDirectory?.replace(/\/+$/, '') || '';
+        const docDir = Paths.document.uri.replace(/\/+$/, '');
         return `${docDir}/.shadows/${safeHash}_${filename}`;
     }
 
     async init(): Promise<void> {
-        const docDir = FileSystem.documentDirectory?.replace(/\/+$/, '') || '';
+        const docDir = Paths.document.uri.replace(/\/+$/, '');
         const shadowDir = `${docDir}/.shadows`;
-        const info = await FileSystem.getInfoAsync(shadowDir);
-        if (!info.exists) {
-            await FileSystem.makeDirectoryAsync(shadowDir, { intermediates: true });
+        const directory = new Directory(shadowDir);
+        if (!directory.exists) {
+            directory.create({ intermediates: true, idempotent: true });
         }
     }
 
     async saveShadow(filePath: string, content: string): Promise<void> {
         await this.init();
         const shadowPath = this.getShadowPath(filePath);
-        await FileSystem.writeAsStringAsync(shadowPath, content, { encoding: FileSystem.EncodingType.UTF8 });
+        await new File(shadowPath).write(content);
     }
 
     async getShadow(filePath: string): Promise<string | null> {
         const shadowPath = this.getShadowPath(filePath);
-        const info = await FileSystem.getInfoAsync(shadowPath);
-        if (info.exists) {
-            return await FileSystem.readAsStringAsync(shadowPath, { encoding: FileSystem.EncodingType.UTF8 });
+        const file = new File(shadowPath);
+        if (file.exists) {
+            return await file.text();
         }
         return null;
     }
 
     async hasShadow(filePath: string): Promise<boolean> {
         const shadowPath = this.getShadowPath(filePath);
-        const info = await FileSystem.getInfoAsync(shadowPath);
-        return info.exists;
+        return new File(shadowPath).exists;
     }
 
     async deleteShadow(filePath: string): Promise<void> {
         const shadowPath = this.getShadowPath(filePath);
-        const info = await FileSystem.getInfoAsync(shadowPath);
-        if (info.exists) {
-            await FileSystem.deleteAsync(shadowPath);
+        const file = new File(shadowPath);
+        if (file.exists) {
+            file.delete();
         }
     }
 }
