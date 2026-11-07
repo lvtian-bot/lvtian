@@ -552,6 +552,8 @@ export class AcpEngineManager {
                     m.status = 'error';
                     m.errorMessage = 'task_stopped';
                 });
+                // new/resume 也可能挂起；停止后不能只等待 execute 的检查点。
+                this.scheduleStopRecovery(sessionId, messageId);
             }
             this.sessionManager.setTaskState(sessionId, 'stopped');
             return true;

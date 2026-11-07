@@ -34,13 +34,15 @@ function createMockEngineApp(options = {}) {
         }))
         .onRequest(acp.methods.agent.authenticate, () => ({}))
         .onRequest(acp.methods.agent.session.new, async () => {
+            await options.sessionResolutionHook?.('new');
             if (options.sessionNeverEnds) await new Promise(() => {});
             const sessionId = globalThis.crypto.randomUUID();
             knownSessions.add(sessionId);
             activeOnConnection.add(sessionId);
             return { sessionId };
         })
-        .onRequest(acp.methods.agent.session.resume, (c) => {
+        .onRequest(acp.methods.agent.session.resume, async (c) => {
+            await options.sessionResolutionHook?.('resume');
             if (!knownSessions.has(c.params.sessionId)) {
                 throw new acp.RequestError(-32002, 'session not found');
             }
@@ -810,6 +812,72 @@ test('启动工厂超时有界：迟到连接关闭、不覆盖新执行', { tim
     assert.strictEqual(lastStatus(third), 'done');
     await manager.stopAll();
 });
+
+test('启动工厂尚未返回时手动停止：启动限时释放占用且迟到连接仅关闭自身', { timeout: 3000 }, async (t) => {
+    keepEventLoopAlive(t);
+    const closeLog = [];
+    const { manager, sessionManager } = buildManager({ engineStartDelayMs: 200, engineStartDelayOnce: true, closeLog }, { taskTimeoutMs: 80, stopTimeoutMs: 30 });
+    sessionManager.addMessage('main', { id: 'stopped-start', role: 'assistant', content: '', timestamp: Date.now(), status: 'processing' });
+    const events = [];
+    const executing = manager.execute('main', 'stopped-start', 'hello', collectCallbacks(events));
+    assert.strictEqual(manager.stop('main'), true);
+    await executing;
+    assert.strictEqual(manager.isRunning('main'), false);
+    assert.strictEqual(sessionManager.getOrCreateSession('main').messages.find(m => m.id === 'stopped-start').errorMessage, 'task_stopped');
+    assert.ok(!events.some(e => e.payload?.code === 'task_timeout'));
+    const next = [];
+    await manager.execute('main', 'next-start', 'hello', collectCallbacks(next));
+    assert.strictEqual(lastStatus(next), 'done');
+    await delay(250);
+    assert.strictEqual(closeLog.length, 1);
+    const afterLateClose = [];
+    await manager.execute('main', 'after-late-close', 'hello', collectCallbacks(afterLateClose));
+    assert.strictEqual(lastStatus(afterLateClose), 'done');
+    await manager.stopAll();
+});
+
+for (const method of ['new', 'resume']) {
+    test(`手动停止挂起的 session/${method}：回收释放原执行、保留停止原因且下一轮可用`, { timeout: 3000 }, async (t) => {
+        keepEventLoopAlive(t);
+        let hang = method === 'new';
+        let entered;
+        const enteredResolution = new Promise(resolve => { entered = resolve; });
+        const closeLog = [];
+        const { manager, sessionManager } = buildManager({
+            closeLog,
+            sessionResolutionHook: async (operation) => {
+                if (hang && operation === method) {
+                    hang = false;
+                    entered();
+                    await new Promise(() => {});
+                }
+            },
+        }, { taskTimeoutMs: 80, stopTimeoutMs: 120 });
+        if (method === 'resume') {
+            await manager.execute('main', 'warmup', 'seed session', collectCallbacks([]));
+            await manager.stopAll();
+            closeLog.length = 0;
+            hang = true;
+        }
+        sessionManager.addMessage('main', { id: 'stopped-resolution', role: 'assistant', content: 'preserved', timestamp: Date.now(), status: 'processing' });
+        const events = [];
+        const executing = manager.execute('main', 'stopped-resolution', 'resolve session', collectCallbacks(events));
+        await enteredResolution;
+        assert.strictEqual(manager.stop('main'), true);
+        await executing; // 回收宽限期超过无进展阈值：看门狗跳过已停止任务仍不能导致永久占用。
+        assert.strictEqual(manager.isRunning('main'), false);
+        assert.strictEqual(closeLog.length, 1);
+        const stopped = sessionManager.getOrCreateSession('main').messages.find(m => m.id === 'stopped-resolution');
+        assert.strictEqual(stopped.errorMessage, 'task_stopped');
+        assert.strictEqual(stopped.content, 'preserved');
+        assert.strictEqual(sessionManager.getOrCreateSession('main').taskState, 'stopped');
+        assert.ok(!events.some(e => e.payload?.code === 'task_timeout'));
+        const next = [];
+        await manager.execute('main', 'next-resolution', 'next', collectCallbacks(next));
+        assert.strictEqual(lastStatus(next), 'done');
+        await manager.stopAll();
+    });
+}
 
 test('建会话静默挂死：看门狗覆盖 prompt 之前窗口', { timeout: 3000 }, async (t) => {
     keepEventLoopAlive(t);
