@@ -712,6 +712,7 @@ function createMockEngine(options = {}) {
             const sessionId = c.params.sessionId;
             const notify = (update) =>
                 c.client.notify(acp.methods.client.session.update, { sessionId, update });
+            if (options.promptBehavior) return options.promptBehavior(c, notify);
             for (let i = 0; i < (options.chunkCount ?? 1); i++) {
                 if (options.chunkDelayMs) await delay(options.chunkDelayMs);
                 await notify({
@@ -863,6 +864,61 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
     ws.close();
     await server.stop();
     fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('超时取消宽限期收到手动 stop：广播和持久化不改写为 task_stopped', { timeout: 4000 }, async (t) => {
+    const { server, sessionManager, port } = await buildWiredServer({ promptBehavior: async (_c, notify) => {
+        await notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
+        await new Promise(() => {});
+    } }, { taskTimeoutMs: 100, stopTimeoutMs: 200 });
+    t.after(async () => { await server.stop(); });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+    t.after(() => ws.close());
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'user', content: 'first' }));
+    await waitForMsg(received, m => m.type === 'event_chunk' && m.delta === 'partial', 'partial');
+    await waitForMsg([sessionManager.getOrCreateSession('main')], s => s.taskState === 'error', 'persisted timeout');
+    ws.send(JSON.stringify({ type: 'stop', sessionId: 'main' }));
+    const error = await waitForMsg(received, m => m.type === 'task_status' && m.state === 'error', 'stop preserves timeout');
+    assert.equal(error.error, 'task_timeout');
+    await delay(250);
+    assert.ok(!received.some(m => m.type === 'task_status' && (m.state === 'stopped' || m.error === 'task_stopped')));
+    assert.equal(sessionManager.getOrCreateSession('main').messages.find(m => m.role === 'assistant').errorMessage, 'task_timeout');
+});
+
+test('任务无进展超时：实时/重连/重启保留原因正文，回收后唤醒既有队列', { timeout: 4000 }, async (t) => {
+    let round = 0;
+    const { server, sessionManager, tmp, port } = await buildWiredServer({ promptBehavior: async (_c, notify) => {
+        await notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: ++round === 1 ? 'partial work' : 'next reply' } });
+        if (round === 1) await new Promise(() => {});
+        return { stopReason: 'end_turn' };
+    } }, { taskTimeoutMs: 100, stopTimeoutMs: 120 });
+    t.after(async () => { await server.stop(); });
+    const received = [];
+    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+    t.after(() => ws.close());
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'timeout-user', content: 'first' }));
+    await waitForMsg(received, m => m.type === 'event_chunk' && m.delta === 'partial work', 'partial work');
+    ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'queued-user', content: 'second' }));
+    await waitForMsg(received, m => m.type === 'message_ack' && m.messageId === 'queued-user' && m.status === 'queued', 'queued');
+    const failed = await waitForMsg(received, m => m.type === 'task_status' && m.state === 'error', 'timeout');
+    assert.equal(failed.error, 'task_timeout');
+    await waitForMsg(received, m => m.type === 'task_status' && m.state === 'completed', 'queue resumed');
+    const original = sessionManager.getOrCreateSession('main').messages.find(m => m.replyTo === 'timeout-user');
+    assert.equal(original.content, 'partial work');
+    assert.equal(original.errorMessage, 'task_timeout');
+    assert.equal(original.status, 'error');
+    assert.equal(original.completedAt, undefined);
+    const replay = [];
+    const reconnected = await openAuthenticatedClient(port, 'test-token-wired-12345', replay);
+    t.after(() => reconnected.close());
+    reconnected.send(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: 0 }));
+    const sync = await waitForMsg(replay, m => m.type === 'sync_result', 'reconnect sync');
+    assert.equal(sync.messages.find(m => m.id === original.id).errorMessage, 'task_timeout');
+    assert.equal(sync.messages.find(m => m.id === original.id).content, 'partial work');
+    const cold = new SessionManager(tmp).getOrCreateSession('main').messages.find(m => m.id === original.id);
+    assert.equal(cold.errorMessage, 'task_timeout');
+    assert.equal(cold.content, 'partial work');
 });
 
 test('审批卡下发与应答：approval_request 转发、允许后任务恢复执行并完成', async () => {

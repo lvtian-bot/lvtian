@@ -4,6 +4,7 @@ import { FlatList, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
+import i18n from '../src/i18n';
 
 const mockSetOptions = jest.fn();
 const mockNavigate = jest.fn();
@@ -220,6 +221,27 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(currentRenderer).toBeDefined();
 
         expect(mockSetOptions).not.toHaveBeenCalled();
+    });
+
+    it('任务超时沿用本地化错误提示，不向用户显示内部错误码', async () => {
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({
+                taskState: 'error',
+                messages: [{
+                    id: 'timeout-message',
+                    seq: 1,
+                    role: 'assistant',
+                    content: '',
+                    timestamp: Date.now(),
+                    status: 'error',
+                    errorMessage: 'task_timeout',
+                }],
+            });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const texts = currentRenderer!.root.findAllByType(Text).map((node) => node.props.children);
+        expect(texts).not.toContain('task_timeout');
+        expect(texts).toContain(i18n.t('assistant.errorEngineError'));
     });
 
     it('正确渲染消息气泡中的图片和文件附件', async () => {

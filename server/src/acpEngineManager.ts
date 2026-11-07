@@ -19,6 +19,7 @@ import { WORKSPACE_CONTEXT_VERSION } from './workspaceContext.js';
 export type EngineMessageCode =
     | 'task_stopped' // 任务被用户手动终止
     | 'approval_timeout' // 审批超时未应答，任务已终止
+    | 'task_timeout' // 连续无实质进展超时，当前轮已取消
     | 'engine_refusal' // 模型拒绝了本次请求
     | 'engine_error'; // 引擎执行异常，detail 透传技术原因
 
@@ -52,7 +53,7 @@ export interface AcpEngineManagerOptions {
     approvalTimeoutMs?: number;
     /** 停止后引擎无响应的强制回收超时（毫秒），默认 2000，对齐旧 headless 执行器的停止保障水位 */
     stopTimeoutMs?: number;
-    /** 单次任务执行的总占用看门狗（毫秒）：会话占用（含引擎启动、执行、审批全程）超过该时长视为卡死，强制回收引擎连接；默认 30 分钟，设为 0 或负数禁用 */
+    /** 连续无实质进展的限时（含启动/建会话）；默认 30 分钟，先取消当前轮，无响应再回收共享连接。<= 0 禁用。 */
     taskTimeoutMs?: number;
     /** 判定空闲超时门禁（毫秒），默认 3 小时 */
     idleTimeoutMs?: number;
@@ -77,6 +78,7 @@ interface SessionRuntime {
     /** 进行中的工具（按 toolCallId 追踪）：协议允许工具重叠执行，各自从自己的终态更新收尾 */
     outstandingTools: Map<string, ToolCallState>;
     toolSeq: number;
+    toolProgress: Map<string, Record<string, unknown>>;
     committedText: string;
 }
 
@@ -324,6 +326,8 @@ export class AcpEngineManager {
     /** 挂起中的审批（键为 approvalId）：同一会话可并发多个审批，各自独立应答与超时 */
     private pendingPermissions: Map<string, PendingPermission> = new Map();
     private stoppedSessions: Set<string> = new Set();
+    /** 保留超时原因直到原执行彻底退出，不被 cancelled/end_turn 或手动 stop 覆盖。 */
+    private timedOutSessions: Set<string> = new Set();
     /** 审批 ID 序号：Date.now() 毫秒精度不足，并发审批需序列号保证唯一 */
     private approvalSeq = 0;
     /** 停止回收计时器（键为会话 ID）：执行结束即取消，防止误杀同会话的后续请求 */
@@ -520,6 +524,7 @@ export class AcpEngineManager {
 
     /** 手动停止：通知引擎取消当前轮次，并就地终态化消息状态（引擎侧 cancelled 响应到达后跳过重复终态） */
     public stop(sessionId: string): boolean {
+        if (this.timedOutSessions.has(sessionId)) return true;
         const runtime = this.runtimes.get(sessionId);
         if (runtime) {
             this.stoppedSessions.add(sessionId);
@@ -547,6 +552,8 @@ export class AcpEngineManager {
                     m.status = 'error';
                     m.errorMessage = 'task_stopped';
                 });
+                // new/resume 也可能挂起；停止后不能只等待 execute 的检查点。
+                this.scheduleStopRecovery(sessionId, messageId);
             }
             this.sessionManager.setTaskState(sessionId, 'stopped');
             return true;
@@ -568,21 +575,18 @@ export class AcpEngineManager {
                 return; // 被停止的执行已结束（同会话新请求占用或空闲），不属于本次回收范围
             }
             console.warn(`[AcpEngine] 停止后 ${this.stopTimeoutMs}ms 引擎仍未结束，强制回收引擎连接`);
-            this.reclaimConnection();
+            this.reclaimConnection({ sessionId, assistantMessageId }).catch((err: unknown) => {
+                console.warn(`[AcpEngine] 回收引擎连接失败: ${err instanceof Error ? err.message : String(err)}`);
+            });
         }, this.stopTimeoutMs);
         // 计时器不得阻止进程退出（Node Timeout 专属能力，其他环境安全跳过）
         timer.unref?.();
         this.stopRecoveryTimers.set(sessionId, timer);
     }
 
-    /**
-     * 任务占用看门狗：单次任务受理起的总占用时长（含引擎启动、执行、审批全程）超过阈值即视为
-     * 病态卡死，强制回收引擎连接——挂起的启动/执行请求随连接断开走各自错误终态，覆盖
-     * 手动停止与审批超时未覆盖到的路径（如任务执行中引擎静默挂死且用户不在场）。
-     * 正常长任务不受影响：执行收尾即取消计时器。
-     */
+    /** 实质进展重置无进展期限；工具 pending 本身、usage 与重复状态不是活性证明。 */
     private scheduleTaskWatchdog(sessionId: string, assistantMessageId: string): void {
-        if (this.taskTimeoutMs <= 0) {
+        if (this.taskTimeoutMs <= 0 || this.stoppedSessions.has(sessionId) || this.timedOutSessions.has(sessionId)) {
             return;
         }
         clearTimeout(this.taskWatchdogTimers.get(sessionId));
@@ -591,18 +595,33 @@ export class AcpEngineManager {
             if (this.activeSessions.get(sessionId) !== assistantMessageId) {
                 return; // 该执行已结束，不属于本次回收范围
             }
-            console.warn(`[AcpEngine] 会话 ${sessionId} 任务占用超过 ${this.taskTimeoutMs}ms，看门狗强制回收引擎连接`);
-            this.reclaimConnection();
+            if (this.stoppedSessions.has(sessionId)) return;
+            console.warn(`[AcpEngine] 会话 ${sessionId} 连续 ${this.taskTimeoutMs}ms 无实质进展，取消当前轮`);
+            this.timedOutSessions.add(sessionId);
+            this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
+                m.status = 'error';
+                m.errorMessage = 'task_timeout';
+            });
+            this.sessionManager.setTaskState(sessionId, 'error');
+            this.rejectPendingPermission(sessionId, 'task_timeout');
+            const runtime = this.runtimes.get(sessionId);
+            if (runtime) {
+                this.finalizeTools(runtime, 'failed');
+                this.connection?.context.notify('session/cancel', { sessionId: runtime.engineSessionId }).catch(() => undefined);
+            }
+            // 没有可取消的底层会话（启动/解析挂起）也走同一回收宽限期。
+            this.scheduleStopRecovery(sessionId, assistantMessageId);
         }, this.taskTimeoutMs);
         timer.unref?.();
         this.taskWatchdogTimers.set(sessionId, timer);
     }
 
     /** 强制回收引擎连接：若有在途启动中的引擎先等待就位，同步置空连接并清理映射再异步关闭，防止下一个请求抢在清理前复用已关闭的死连接 */
-    private async reclaimConnection(): Promise<void> {
+    private async reclaimConnection(expected?: { sessionId: string; assistantMessageId: string }): Promise<void> {
         if (this.engineStarting) {
             await this.engineStarting.catch(() => undefined);
         }
+        if (expected && this.activeSessions.get(expected.sessionId) !== expected.assistantMessageId) return;
         const conn = this.connection;
         this.connection = null;
         this.engineSessionIndex.clear();
@@ -659,6 +678,7 @@ export class AcpEngineManager {
             callbacks.onStatusChange('thinking');
 
             await this.ensureEngine();
+            if (this.timedOutSessions.has(sessionId)) return;
             if (!this.connection) {
                 throw new Error('引擎连接不可用（启动失败或已退出）');
             }
@@ -708,6 +728,7 @@ export class AcpEngineManager {
             }
 
             const resolved = await this.resolveEngineSession(sessionId);
+            if (this.timedOutSessions.has(sessionId)) return;
             const engineSessionId = resolved.id;
             if (resolved.replaced) {
                 // 底层 resume 拿回的是另一个会话（例如旧日志损坏被替换）：按「断档」处理，
@@ -740,6 +761,7 @@ export class AcpEngineManager {
                 callbacks,
                 outstandingTools: new Map(),
                 toolSeq: 0,
+                toolProgress: new Map(),
                 committedText: '',
             };
             this.runtimes.set(sessionId, runtime);
@@ -818,6 +840,8 @@ export class AcpEngineManager {
                 }
             );
 
+            if (this.timedOutSessions.has(sessionId)) return;
+
             // 检查在此轮 prompt 执行期间是否已被中断停止（例如收到手动取消或交接流程中断）
             if (this.stoppedSessions.has(sessionId)) {
                 this.stoppedSessions.delete(sessionId);
@@ -853,6 +877,7 @@ export class AcpEngineManager {
             this.runtimes.delete(sessionId);
             this.rejectPendingPermission(sessionId, 'engine_error');
 
+            if (this.timedOutSessions.has(sessionId)) return;
             if (this.stoppedSessions.has(sessionId)) {
                 this.stoppedSessions.delete(sessionId);
                 this.sessionManager.setTaskState(sessionId, 'stopped');
@@ -862,6 +887,8 @@ export class AcpEngineManager {
             callbacks.onStatusChange('error', { code: 'engine_error', detail: message });
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
+            const timedOut = this.timedOutSessions.delete(sessionId);
+            this.runtimes.delete(sessionId);
             this.activeSessions.delete(sessionId);
             this.activeExecutions.delete(sessionId);
             resolveDone();
@@ -877,6 +904,8 @@ export class AcpEngineManager {
                 clearTimeout(watchdogTimer);
                 this.taskWatchdogTimers.delete(sessionId);
             }
+            // 释放执行后才广播终态，让既有排队唤醒逻辑不会在取消宽限期内提前耗尽。
+            if (timedOut) callbacks.onStatusChange('error', { code: 'task_timeout' });
         }
     }
 
@@ -918,7 +947,23 @@ export class AcpEngineManager {
         );
 
         console.log(`[AcpEngine] 启动引擎 (工作区: ${this.workspace})...`);
-        const connection = await this.connectEngineImpl(app);
+        // 连接工厂也必须有界（不仅是生产握手）；迟到的成功连接不可泄漏或覆盖下一次启动。
+        let abandoned = false;
+        const connecting = this.connectEngineImpl(app).then(async connection => {
+            if (abandoned) {
+                await connection.close();
+                throw new Error('引擎启动已超时');
+            }
+            return connection;
+        });
+        let connection: EngineConnection;
+        try {
+            const startupTimeout = this.taskTimeoutMs > 0 ? Math.min(ENGINE_START_TIMEOUT_MS, this.taskTimeoutMs) : ENGINE_START_TIMEOUT_MS;
+            connection = await withTimeout(connecting, startupTimeout, '引擎连接');
+        } catch (err) {
+            abandoned = true;
+            throw err;
+        }
         this.connection = connection;
         console.log('[AcpEngine] 引擎连接已建立');
 
@@ -1121,24 +1166,39 @@ export class AcpEngineManager {
         }
 
         // 用户已停止：引擎取消收尾期间的迟到事件不得把消息与任务改回处理中
-        if (this.stoppedSessions.has(sessionId)) {
+        if (this.stoppedSessions.has(sessionId) || this.timedOutSessions.has(sessionId)) {
             return;
         }
 
+        const progress = () => this.scheduleTaskWatchdog(sessionId, runtime.assistantMessageId);
+        const toolProgress = (id: string, value: object) => {
+            const previous = runtime.toolProgress.get(id);
+            const next = { ...previous };
+            for (const [key, val] of Object.entries(value)) {
+                if (['status', 'title', 'rawInput', 'rawOutput', 'content'].includes(key)
+                    && val !== undefined && val !== null && val !== '') next[key] = val;
+            }
+            if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) progress();
+            runtime.toolProgress.set(id, next);
+        };
         switch (update.sessionUpdate) {
             case 'agent_message_chunk': {
                 const content = (update as { content?: { type?: string; text?: string } }).content;
                 const text = content?.type === 'text' && typeof content.text === 'string' ? content.text : '';
                 if (text) {
+                    if (text.trim()) progress();
                     // 文本不隐式终结进行中的工具：工具只从自己的终态更新收尾（协议允许重叠），未终结的由任务收尾兜底
                     runtime.committedText += text;
                     runtime.callbacks.onDelta(text);
                 }
                 break;
             }
-            case 'agent_thought_chunk':
+            case 'agent_thought_chunk': {
+                const content = (update as { content?: { type?: string; text?: string } }).content;
+                if (content?.type === 'text' && content.text?.trim()) progress();
                 runtime.callbacks.onStatusChange('thinking');
                 break;
+            }
             case 'tool_call': {
                 const t = update as {
                     toolCallId?: string;
@@ -1149,6 +1209,7 @@ export class AcpEngineManager {
                     content?: unknown;
                 };
                 runtime.toolSeq++;
+                if (t.toolCallId) toolProgress(t.toolCallId, t);
                 // 初始通知可能直接携带终态（completed/failed）：按终态广播且不入进行中集合，
                 // 否则出生即失败的工具会被收尾兜底改写为成功
                 const terminal = t.status === 'completed' ? 'done' : t.status === 'failed' ? 'failed' : null;
@@ -1180,6 +1241,7 @@ export class AcpEngineManager {
                 if (!tool) {
                     break;
                 }
+                toolProgress(tool.id, t);
                 const newOutput = extractToolOutput(t.content);
                 if (newOutput) {
                     tool.output = newOutput;
@@ -1263,7 +1325,7 @@ export class AcpEngineManager {
         }
 
         // 用户已停止：迟到的审批请求不注册不广播，直接拒绝，防止任务被改回等待审批
-        if (this.stoppedSessions.has(sessionId)) {
+        if (this.stoppedSessions.has(sessionId) || this.timedOutSessions.has(sessionId)) {
             return { outcome: { outcome: 'cancelled' } };
         }
 
@@ -1304,7 +1366,7 @@ export class AcpEngineManager {
         }
 
         // 任务已被停止（手动终止或并发审批超时终止）：应答作废，不向引擎传递授权选择
-        if (this.stoppedSessions.has(sessionId)) {
+        if (this.stoppedSessions.has(sessionId) || this.timedOutSessions.has(sessionId)) {
             return { outcome: { outcome: 'cancelled' } };
         }
 
