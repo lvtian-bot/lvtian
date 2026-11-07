@@ -3,7 +3,7 @@ import {
     FileSystemInfo,
     ServerDirectoryListing,
 } from '../types/assistantProtocol';
-import * as FileSystem from 'expo-file-system/legacy';
+import { downloadToFile, DownloadTimeoutError } from './NativeDownloadService';
 
 export class ServerFileError extends Error {
     public code?: string;
@@ -177,47 +177,17 @@ export class ServerFileService {
         const { baseUrl, token } = await this.getHttpEndpoint();
         const url = `${baseUrl}/api/files/download?path=${encodeURIComponent(remotePath)}`;
 
-        let lastProgressAt = Date.now();
-        const resumable = FileSystem.createDownloadResumable(url, localDestUri, {
-            headers: {
-                Authorization: `Bearer ${token}`,
-            },
-        }, () => {
-            lastProgressAt = Date.now();
-        });
-
-        let watchdog: ReturnType<typeof setInterval> | null = null;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            watchdog = setInterval(() => {
-                if (Date.now() - lastProgressAt > 30000) {
-                    reject(new ServerFileError('文件下载超时（30 秒无进展），请检查网络或稍后重试', 'DOWNLOAD_TIMEOUT', 408));
-                }
-            }, 5000);
-        });
-
         try {
-            const downloadResult = await Promise.race([resumable.downloadAsync(), timeoutPromise]);
-            if (downloadResult?.status !== 200) {
-                const status = downloadResult?.status ?? 500;
-                // 仅 401 是鉴权失败；403 可能是文件权限或符号链接边界拒绝，不能误报为令牌问题
-                if (status === 401) {
-                    throw new ServerFileError('鉴权失败，请检查服务端令牌配置', 'UNAUTHORIZED', status);
-                }
-                throw new ServerFileError(`下载失败，服务端返回状态码: ${status}`, 'DOWNLOAD_FAILED', status);
+            return await downloadToFile(url, localDestUri, { Authorization: `Bearer ${token}` }, {
+                timeoutMs: 30000,
+                timeoutMode: 'idle',
+            });
+        } catch (error: unknown) {
+            if (error instanceof DownloadTimeoutError) {
+                throw new ServerFileError('文件下载超时（30 秒无进展），请检查网络或稍后重试', 'DOWNLOAD_TIMEOUT', 408);
             }
-
-            return downloadResult.uri;
-        } catch (err: unknown) {
-            // 中断仍在传输的下载并清理残留的部分文件，避免继续占用带宽与缓存空间
-            resumable.pauseAsync().catch(() => undefined);
-            try {
-                await FileSystem.deleteAsync(localDestUri, { idempotent: true });
-            } catch {
-                // ignore
-            }
-            throw err;
-        } finally {
-            if (watchdog) clearInterval(watchdog);
+            console.warn('[ServerFileService] Download failed:', error);
+            throw new ServerFileError('文件下载失败，请稍后重试', 'DOWNLOAD_FAILED');
         }
     }
 }

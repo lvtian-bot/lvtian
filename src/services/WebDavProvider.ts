@@ -1,6 +1,6 @@
 import { ICloudProvider, CloudFileItem } from './CloudService';
 import { fsService } from './FileSystemService';
-import * as FileSystem from 'expo-file-system/legacy';
+import { downloadToFile, DownloadTimeoutError } from './NativeDownloadService';
 import CryptoJS from 'crypto-js';
 
 export interface WebDavConfig {
@@ -259,51 +259,22 @@ export class WebDavProvider implements ICloudProvider {
     }
 
     async downloadFile(key: string, downloadPath: string): Promise<{ etag: string; lastModified: string }> {
-        let destPath: string;
-        if (downloadPath.startsWith('file://')) {
-            // 绝对 URI（如缓存目录）：直接写入目标位置，避免被清洗重定向到文档根导致下载与引用位置不一致
-            destPath = downloadPath;
-            const dir = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
-            try {
-                await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-            } catch {
-                // 目录已存在时忽略，其余情况交由下载自身报错
-            }
-        } else {
-            // Create parent directory
-            const dir = downloadPath.substring(0, downloadPath.lastIndexOf('/'));
-            if (dir) {
-                await fsService.createDirectory(dir);
-            }
-            destPath = fsService.getAbsolutePath(downloadPath);
-        }
-
+        const destPath = downloadPath.startsWith('file://')
+            ? downloadPath
+            : fsService.getAbsolutePath(downloadPath);
         const url = this.getUrl(key);
-
-        // downloadAsync 不支持中断，用超时竞速放弃等待，防止服务端停滞时调用方无限挂起
-        const downloadPromise = FileSystem.downloadAsync(url, destPath, {
-            headers: {
-                'Authorization': this.authHeader
-            }
-        });
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-                const timeoutErr: any = new Error('网盘请求超时，请检查网络连接');
-                timeoutErr.code = 'TIMEOUT';
-                reject(timeoutErr);
-            }, 30000);
-        });
-
-        let downloadResult;
         try {
-            downloadResult = await Promise.race([downloadPromise, timeoutPromise]);
-        } finally {
-            if (timer) clearTimeout(timer);
-        }
-
-        if (downloadResult.status !== 200) {
-            throw new Error(`WebDav Download failed: ${downloadResult.status}`);
+            await downloadToFile(url, destPath, { Authorization: this.authHeader }, {
+                timeoutMs: 30000,
+                timeoutMode: 'total',
+            });
+        } catch (error: unknown) {
+            if (error instanceof DownloadTimeoutError) {
+                const timeoutError = new Error('网盘请求超时，请检查网络连接') as Error & { code: string };
+                timeoutError.code = 'TIMEOUT';
+                throw timeoutError;
+            }
+            throw error;
         }
 
         const metadata = await this.headFile(key);

@@ -20,7 +20,6 @@ import { StatusBannerContainer } from '../components/StatusBannerContainer';
 import { previewHtml } from '../preview-web/previewHtml';
 import { serverFileService } from '../services/ServerFileService';
 import { getFontSizeMetrics } from '../utils/fontSize';
-import * as FileSystem from 'expo-file-system/legacy';
 
 type PreviewScreenRouteProp = RouteProp<RootStackParamList, 'Preview'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -72,8 +71,8 @@ export const PreviewScreen = () => {
 
         // 在线图片缓存有效期：过期后重新下载，避免云端图片原地更新后长期显示陈旧内容
         const IMAGE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-        const isCacheUsable = (info: FileSystem.FileInfo) =>
-            info.exists && Date.now() - info.modificationTime * 1000 < IMAGE_CACHE_TTL_MS;
+        const isCacheUsable = (info: { exists: boolean; modificationTime: number | null }) =>
+            info.exists && info.modificationTime !== null && Date.now() - info.modificationTime < IMAGE_CACHE_TTL_MS;
 
         let result = rawText;
         for (const item of matches) {
@@ -125,9 +124,8 @@ export const PreviewScreen = () => {
                     // 缓存键含助理服务地址维度，切换服务端后不复用旧服务的同名路径缓存
                     const { serverUrl } = useAssistantStore.getState();
                     const digest = stableHash(`${serverUrl || ''}|${resolvedRemoteOrLocalPath}`);
-                    const cacheDir = FileSystem.cacheDirectory || '';
-                    const localUri = `${cacheDir}img_server_${digest}`;
-                    let cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    const localUri = fsService.getCacheFileUri(`img_server_${digest}`);
+                    let cacheInfo = fsService.getCacheFileInfo(localUri);
                     if (!isCacheUsable(cacheInfo)) {
                         try {
                             await serverFileService.downloadFile(resolvedRemoteOrLocalPath, localUri);
@@ -135,7 +133,7 @@ export const PreviewScreen = () => {
                             console.warn('Failed to download server image:', resolvedRemoteOrLocalPath, e);
                         }
                     }
-                    cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    cacheInfo = fsService.getCacheFileInfo(localUri);
                     if (cacheInfo.exists) {
                         result = result.replace(full, full.replace(rawSrc, localUri));
                     }
@@ -150,9 +148,8 @@ export const PreviewScreen = () => {
                     const { webDavConfig } = useSettingsStore.getState();
                     const accountDigest = stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`);
                     const digest = stableHash(`${accountDigest}|${cleanKey}`);
-                    const cacheDir = FileSystem.cacheDirectory || '';
-                    const localUri = `${cacheDir}img_webdav_${digest}`;
-                    let cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    const localUri = fsService.getCacheFileUri(`img_webdav_${digest}`);
+                    let cacheInfo = fsService.getCacheFileInfo(localUri);
                     if (!isCacheUsable(cacheInfo)) {
                         try {
                             await cloudService.downloadFile(cleanKey, localUri);
@@ -160,7 +157,7 @@ export const PreviewScreen = () => {
                             console.warn('Failed to download webdav image:', cleanKey, e);
                         }
                     }
-                    cacheInfo = await FileSystem.getInfoAsync(localUri);
+                    cacheInfo = fsService.getCacheFileInfo(localUri);
                     if (cacheInfo.exists) {
                         result = result.replace(full, full.replace(rawSrc, localUri));
                     }
