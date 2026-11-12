@@ -22,6 +22,40 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 生产环境部署安全门禁（核验提交来源）
+        env:
+          COMMITS_JSON: ${{ toJson(github.event.commits) }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$ACTOR" != "lvtian-bot" ]; then
+              echo "❌ 拒绝非仓库拥有者手动触发生产部署！"
+              exit 1
+            fi
+            echo "✅ 手动触发部署通过身份核验 ($ACTOR)"
+            exit 0
+          fi
+
+          node -e '
+            const commits = JSON.parse(process.env.COMMITS_JSON || "[]");
+            const trustedEmails = ["xingzhisuozhi@gmail.com", "noreply@github.com"];
+            const trustedAuthors = ["lvtian-bot", "兴之所志"];
+            for (const c of commits) {
+              const email = (c.author && c.author.email) || "";
+              const name = (c.author && c.author.name) || "";
+              const isTrusted = trustedEmails.some(e => email.toLowerCase().includes(e.toLowerCase())) ||
+                                trustedAuthors.includes(name);
+              if (!isTrusted) {
+                console.error(`❌ 安全拦截：检测到非白名单作者的提交 [${name} <${email}>]！`);
+                console.error("出于对生产 VPS 服务器的安全防护，已自动终止自动部署。");
+                console.error("请人工审查代码后，在 Actions 页面手动触发 workflow_dispatch 部署。");
+                process.exit(1);
+              }
+            }
+            console.log(`✅ 提交安全核验通过，共核对 ${commits.length} 个提交，均来自白名单作者。`);
+          '
+
       - name: 配置 SSH 专用通道
         env:
           SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
