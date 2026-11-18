@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { NativeTaskServiceError, type NativeTaskService, type NativeTaskResult } from './nativeTaskService.js';
 
 type Row = { id: string; taskId: string; title: string; result: string; state: string; attempts: number; retryAt: number; reply: string | null };
+const MAX_REPORT_ATTEMPTS = 3;
+const PROVIDER_HOLD_KEY = 'reportProviderHold';
 interface Statement {
     run(...args: (string | number | null)[]): unknown;
     get(...args: (string | number)[]): unknown;
@@ -34,6 +36,21 @@ export class TaskReportStore {
             CREATE TABLE IF NOT EXISTS reports (
                 id TEXT PRIMARY KEY, taskId TEXT NOT NULL, title TEXT NOT NULL, result TEXT NOT NULL,
                 state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, retryAt INTEGER NOT NULL DEFAULT 0, reply TEXT);
+            CREATE TABLE IF NOT EXISTS report_submissions (
+                reportId TEXT NOT NULL, engineSessionId TEXT NOT NULL,
+                retryable INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (reportId, engineSessionId)
+            );
+            CREATE TABLE IF NOT EXISTS report_recovery (
+                reportId TEXT PRIMARY KEY, engineSessionId TEXT NOT NULL,
+                prepared INTEGER NOT NULL DEFAULT 0
+            );
+            BEGIN IMMEDIATE;
+            UPDATE reports SET state='paused', retryAt=0
+            WHERE state='pending' AND attempts>0
+                AND NOT EXISTS (SELECT 1 FROM metadata WHERE key='reportSubmissionGuardEnabled');
+            INSERT OR IGNORE INTO metadata VALUES ('reportSubmissionGuardEnabled', 1);
+            COMMIT;
         `);
         this.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?, ?)').run('enabledAt', now);
         this.enabledAt = (this.db.prepare('SELECT value FROM metadata WHERE key = ?').get('enabledAt') as { value: number }).value;
@@ -51,9 +68,10 @@ export class TaskReportStore {
     }
     observing(): TaskReport[] { return this.rows("SELECT * FROM reports WHERE state = 'observed' ORDER BY rowid"); }
     next(now = Date.now()): TaskReport | undefined {
-        // Strict FIFO: a retrying head does not let later reports leapfrog it.
-        const row = this.db.prepare("SELECT * FROM reports WHERE state IN ('pending','generated') ORDER BY json_extract(result, '$.delivery.deliveredAt'), rowid LIMIT 1").get() as Row | undefined;
-        return row && row.retryAt <= now ? this.decode(row) : undefined;
+        const row = this.db.prepare(`SELECT * FROM reports WHERE retryAt <= ? AND (
+            state='generated' OR (state='pending' AND NOT EXISTS (SELECT 1 FROM metadata WHERE key=?))
+            ) ORDER BY json_extract(result, '$.delivery.deliveredAt'), rowid LIMIT 1`).get(now, PROVIDER_HOLD_KEY) as Row | undefined;
+        return row ? this.decode(row) : undefined;
     }
     unavailable(id: string): void {
         const row = this.db.prepare('SELECT * FROM reports WHERE id=?').get(id) as Row | undefined;
@@ -65,10 +83,61 @@ export class TaskReportStore {
             .run(`evidence-unavailable:${id}`, row.taskId, row.title, JSON.stringify({ ...result, evidenceIssue: 'delivery_unavailable' }));
     }
     accepted(id: string): void { this.db.prepare('UPDATE reports SET attempts=attempts+1 WHERE id=?').run(id); }
+    /** Persist before writing ACP input. An uncertain outcome still consumes this session's claim. */
+    claimSubmission(id: string, engineSessionId: string): boolean {
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+            const inserted = this.db.prepare(`INSERT OR IGNORE INTO report_submissions (reportId, engineSessionId)
+                SELECT id, ? FROM reports WHERE id=? AND state='pending' AND attempts<?
+                AND NOT EXISTS (SELECT 1 FROM report_submissions WHERE reportId=reports.id AND retryable=0)`)
+                .run(engineSessionId, id, MAX_REPORT_ATTEMPTS) as { changes: number };
+            if (inserted.changes === 1) this.accepted(id);
+            this.db.exec('COMMIT');
+            return inserted.changes === 1;
+        } catch (err) {
+            this.db.exec('ROLLBACK');
+            throw err;
+        }
+    }
+    markSubmissionRetryable(id: string, engineSessionId: string): void {
+        this.db.prepare('UPDATE report_submissions SET retryable=1 WHERE reportId=? AND engineSessionId=?')
+            .run(id, engineSessionId);
+    }
+    reserveRecovery(id: string, engineSessionId: string): boolean {
+        this.db.prepare(`INSERT OR IGNORE INTO report_recovery (reportId, engineSessionId)
+            SELECT id, ? FROM reports WHERE id=? AND state='pending' AND attempts<?
+            AND EXISTS (SELECT 1 FROM report_submissions WHERE reportId=reports.id AND engineSessionId=? AND retryable=1)`)
+            .run(engineSessionId, id, MAX_REPORT_ATTEMPTS, engineSessionId);
+        return this.db.prepare(`SELECT 1 FROM report_recovery JOIN reports ON reports.id=reportId
+            WHERE reportId=? AND engineSessionId=? AND state='pending' AND attempts<? AND prepared=0
+            AND NOT EXISTS (SELECT 1 FROM report_submissions WHERE reportId=reports.id AND retryable=0)`)
+            .get(id, engineSessionId, MAX_REPORT_ATTEMPTS) !== undefined;
+    }
+    markRecoveryPrepared(id: string, engineSessionId: string): void {
+        this.db.prepare('UPDATE report_recovery SET prepared=1 WHERE reportId=? AND engineSessionId=?')
+            .run(id, engineSessionId);
+    }
+    pause(id: string): void {
+        this.db.prepare("UPDATE reports SET state='paused',retryAt=0 WHERE id=? AND state IN ('pending','generated')").run(id);
+    }
+    holdProvider(reason: 'authentication' | 'quota'): void {
+        this.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?, ?)').run(PROVIDER_HOLD_KEY, reason === 'authentication' ? 1 : 2);
+    }
+    confirmProviderAvailable(): void {
+        this.db.prepare('DELETE FROM metadata WHERE key=?').run(PROVIDER_HOLD_KEY);
+    }
     generated(id: string, reply: string): void { this.db.prepare("UPDATE reports SET state='generated',reply=?,retryAt=0 WHERE id=?").run(reply, id); }
-    delivered(id: string): void { this.db.prepare("UPDATE reports SET state='delivered',result='{}',reply=NULL WHERE id=?").run(id); }
+    delivered(id: string): void {
+        this.db.prepare("UPDATE reports SET state='delivered',result='{}',reply=NULL WHERE id=?").run(id);
+        this.db.prepare('DELETE FROM report_submissions WHERE reportId=?').run(id);
+        this.db.prepare('DELETE FROM report_recovery WHERE reportId=?').run(id);
+    }
     failed(id: string, now = Date.now()): void {
-        const row = this.db.prepare('SELECT attempts FROM reports WHERE id=?').get(id) as { attempts: number };
+        const row = this.db.prepare('SELECT attempts, state FROM reports WHERE id=?').get(id) as Pick<Row, 'attempts' | 'state'>;
+        if (row.state === 'pending' && row.attempts >= MAX_REPORT_ATTEMPTS) {
+            this.pause(id);
+            return;
+        }
         this.db.prepare('UPDATE reports SET retryAt=? WHERE id=?').run(now + Math.min(300000, 1000 * 2 ** Math.min(row.attempts, 9)), id);
     }
     private decode(row: Row): TaskReport { return { id: row.id, taskId: row.taskId, title: row.title, result: JSON.parse(row.result) as NativeTaskResult, attempts: row.attempts, ...(row.reply !== null ? { reply: row.reply } : {}) }; }
@@ -148,9 +217,12 @@ export class NativeTaskReporting {
         }
     }
     private async drain(): Promise<void> {
-        while (!this.closed) {
-            const next = this.options.store.next();
-            if (!next || !await this.options.report(next)) break;
+        let next = this.options.store.next();
+        while (next && !this.closed) {
+            const progressed = await this.options.report(next);
+            const ready = this.options.store.next();
+            if (!progressed && ready?.id === next.id) break;
+            next = ready;
         }
     }
     async reconcile(): Promise<void> {

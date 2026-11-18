@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { TaskReportStore, reportMessageId, taskReportPrompt } from '../dist/nativeTaskReporting.js';
 
 const enabledAt = Date.parse('2026-10-27T00:00:00Z');
@@ -125,17 +126,87 @@ test('SQLite committed evidence survives a writer killed without close', { skip:
     }
 });
 
-test('retrying FIFO head blocks later ready reports and backoff survives restart', (t) => {
+test('later eligible reports can pass a deferred head and backoff survives restart', (t) => {
     const f = fixture(t);
     f.store.observe('schedule-1', '先到', result('first'));
     f.store.observe('schedule-1', '后到', result('second'));
     f.store.accepted('first');
     f.store.failed('first', enabledAt);
-    assert.equal(f.store.next(enabledAt + 1999), undefined);
-    assert.equal(f.reopen().next(enabledAt + 1999), undefined);
+    assert.equal(f.store.next(enabledAt + 1999).id, 'second');
+    assert.equal(f.reopen().next(enabledAt + 1999).id, 'second');
     assert.equal(f.store.next(enabledAt + 2000).id, 'first');
     f.store.delivered('first');
     assert.equal(f.store.next(enabledAt + 2000).id, 'second');
+});
+
+test('submission claims survive a restart and uncertain input blocks both old and fresh sessions', (t) => {
+    const f = fixture(t);
+    f.store.observe('task', '结果', result('report'));
+    assert.equal(f.store.claimSubmission('report', 'old'), true);
+    f.reopen();
+    assert.equal(f.store.claimSubmission('report', 'old'), false);
+    assert.equal(f.store.claimSubmission('report', 'new'), false);
+    assert.equal(f.store.reserveRecovery('report', 'old'), false);
+    assert.equal(f.store.next().attempts, 1);
+    f.store.markSubmissionRetryable('report', 'old');
+    assert.equal(f.store.claimSubmission('report', 'old'), false);
+    assert.equal(f.store.reserveRecovery('report', 'old'), true);
+    assert.equal(f.reopen().reserveRecovery('report', 'old'), true, 'unfinished handoff can be completed after restart');
+    f.store.markRecoveryPrepared('report', 'old');
+    assert.equal(f.store.reserveRecovery('report', 'old'), false);
+    assert.equal(f.store.claimSubmission('report', 'new'), true);
+    f.store.markSubmissionRetryable('report', 'new');
+    assert.equal(f.store.reserveRecovery('report', 'new'), false);
+});
+
+test('unavailable provider holds pending work across restart and lets saved replies publish', (t) => {
+    const f = fixture(t);
+    f.store.observe('task', '依赖模型', result('pending'));
+    f.store.observe('task', '已生成', result('generated'));
+    f.store.generated('generated', '保存的回复');
+    f.store.holdProvider('authentication');
+    f.reopen();
+    assert.equal(f.store.next().id, 'generated');
+    f.store.delivered('generated');
+    assert.equal(f.store.next(enabledAt + 3 * 86400000), undefined);
+    f.store.confirmProviderAvailable();
+    assert.equal(f.store.next().id, 'pending');
+});
+
+test('three generation failures pause the report without losing source data or blocking another report', (t) => {
+    const f = fixture(t);
+    const original = result('first');
+    f.store.observe('task', '失败结果', original);
+    f.store.observe('task', '后续结果', result('second'));
+    for (let i = 0; i < 3; i++) {
+        f.store.accepted('first');
+        f.store.failed('first', enabledAt + i * 10000);
+    }
+    assert.equal(f.reopen().next(enabledAt + 86400000).id, 'second');
+    const db = new DatabaseSync(f.filename, { readOnly: true });
+    try {
+        const paused = db.prepare('SELECT state, attempts, result FROM reports WHERE id=?').get('first');
+        assert.equal(paused.state, 'paused');
+        assert.equal(paused.attempts, 3);
+        assert.deepEqual(JSON.parse(paused.result), original);
+    } finally { db.close(); }
+});
+
+test('upgrade pauses previously submitted rows including operator-held reports and retains all source bytes', (t) => {
+    const f = fixture(t);
+    f.store.observe('task', '操作暂停', result('legacy'));
+    f.store.observe('task', '未发送', result('ready'));
+    const db = new DatabaseSync(f.filename);
+    try {
+        db.exec("DELETE FROM metadata WHERE key='reportSubmissionGuardEnabled'");
+        db.prepare('UPDATE reports SET attempts=674,retryAt=? WHERE id=?').run(253402300799000, 'legacy');
+        const original = db.prepare('SELECT result FROM reports WHERE id=?').get('legacy').result;
+        assert.equal(f.reopen().next().id, 'ready');
+        const migrated = db.prepare('SELECT state, attempts, result FROM reports WHERE id=?').get('legacy');
+        assert.equal(migrated.state, 'paused');
+        assert.equal(migrated.attempts, 674);
+        assert.equal(migrated.result, original);
+    } finally { db.close(); }
 });
 
 test('retry backoff is capped without dropping generated content', (t) => {

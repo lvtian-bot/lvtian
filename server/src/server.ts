@@ -8,7 +8,7 @@ import type { WebSocketServer } from 'ws';
 import { ServerConfig } from './config.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
-import { AcpEngineManager, EngineStatusPayload } from './acpEngineManager.js';
+import { AcpEngineManager, EngineStatusPayload, type EngineFailure } from './acpEngineManager.js';
 import { FileManager, FileManagerError } from './fileManager.js';
 import { SkillManager } from './skillManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
@@ -907,6 +907,7 @@ export class LvtianServer {
             state: 'processing',
         });
 
+        let receivedModelText = false;
         // 4. 调用 ACP 引擎管理器驱动底层任务 (捕获异步异常，避免 unhandled rejection 导致主进程崩溃)
         this.acpEngine.execute(
             sessionId,
@@ -914,6 +915,7 @@ export class LvtianServer {
             content,
             {
             onDelta: (delta: string) => {
+                receivedModelText ||= delta.trim().length > 0;
                 const updated = this.sessionManager.appendDelta(sessionId, assistantMessageId, delta);
                 if (updated) {
                     this.broadcastSession(sessionId, {
@@ -972,6 +974,14 @@ export class LvtianServer {
                 }
 
                 const completedAt = status === 'done' ? Date.now() : undefined;
+                if (sessionId === 'main' && this.taskReportStore) {
+                    try {
+                        if (completedAt && receivedModelText) this.taskReportStore.confirmProviderAvailable();
+                        if (payload?.failure === 'authentication' || payload?.failure === 'quota') {
+                            this.taskReportStore.holdProvider(payload.failure);
+                        }
+                    } catch { console.warn('[TaskReporting] Could not update model availability'); }
+                }
                 this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
                     m.status = status === 'done' ? 'done' : 'error';
                     if (completedAt) m.completedAt = completedAt;
@@ -1063,24 +1073,48 @@ export class LvtianServer {
         const session = this.sessionManager.getOrCreateSession(sessionId);
         if (session.messages.some(m => m.role === 'user' && m.status === 'queued') || session.pendingApprovals.length) return false;
         const messageId = reportMessageId(report.id);
+        let identityConflict = false;
+        let generationFailed = false;
+        let engineSessionId: string | undefined;
+        let submitted = false;
+        let toolsUsed = false;
+        let failure: EngineFailure | undefined;
+        let promptSettled = false;
         try {
             const existing = session.messages.find(m => m.id === messageId);
             if (existing && (existing.role !== 'assistant' || existing.source !== 'native_task_report'
                 || existing.reportDeliveryId !== (report.result.delivery?.messageId ?? report.id))) {
+                identityConflict = true;
                 throw new Error('task_report_message_identity_conflict');
             }
             if (!existing && report.reply === undefined) {
-                store.accepted(report.id);
                 let text = '';
                 let completed = false;
-                let toolsUsed = false;
+                generationFailed = true;
                 await this.acpEngine.execute(sessionId, messageId, taskReportPrompt(report), {
+                    beforePrompt: id => {
+                        engineSessionId = id;
+                        submitted = store.claimSubmission(report.id, id);
+                        return submitted;
+                    },
                     onDelta: delta => { text += delta; },
                     onToolCall: () => { toolsUsed = true; this.acpEngine.stop(sessionId); },
-                    onApprovalRequest: request => { toolsUsed = true; this.acpEngine.handleApproval(sessionId, request.approvalId, false); },
-                    onStatusChange: (status, payload) => { if (status === 'done' && payload?.stopReason === 'end_turn') completed = true; },
+                    onApprovalRequest: request => {
+                        toolsUsed = true;
+                        this.acpEngine.handleApproval(sessionId, request.approvalId, false);
+                    },
+                    onStatusChange: (status, payload) => {
+                        if (status === 'done' && payload?.stopReason === 'end_turn') completed = true;
+                        if (status === 'error') {
+                            failure = payload?.failure ?? (payload?.code === 'task_timeout' ? 'transient' : undefined);
+                            promptSettled = payload?.promptSettled === true;
+                        }
+                    },
                 }, undefined, 'task_report');
-                if (!completed || toolsUsed || !text.trim()) throw new Error('task_report_agent_incomplete');
+                if (!completed || toolsUsed || !text.trim()) {
+                    throw new Error('task_report_agent_incomplete');
+                }
+                generationFailed = false;
                 store.generated(report.id, text);
                 report.reply = text;
             }
@@ -1105,8 +1139,37 @@ export class LvtianServer {
             this.scheduleProcessQueue(sessionId);
             return true;
         } catch {
-            store.failed(report.id);
-            console.warn('[TaskReporting] Main agent report deferred after failure');
+            if (identityConflict) {
+                store.pause(report.id);
+            } else if (generationFailed) {
+                const providerBlocked = failure === 'authentication' || failure === 'quota';
+                const retryable = !toolsUsed && promptSettled && (providerBlocked || failure === 'context_overflow' || failure === 'transient');
+                if (engineSessionId && submitted && retryable) store.markSubmissionRetryable(report.id, engineSessionId);
+                if (!this.isDraining && engineSessionId && !toolsUsed && (!submitted || failure === 'context_overflow')
+                    && store.reserveRecovery(report.id, engineSessionId)) {
+                    try {
+                        await this.acpEngine.prepareContextHandoff(sessionId, engineSessionId);
+                        store.markRecoveryPrepared(report.id, engineSessionId);
+                        this.scheduleProcessQueue(sessionId);
+                        return true;
+                    } catch {
+                        console.error('[TaskReporting] Could not persist the report session handoff');
+                    }
+                }
+                if (!engineSessionId) store.accepted(report.id);
+                if (failure === 'authentication' || failure === 'quota') {
+                    store.holdProvider(failure);
+                    if (submitted && !retryable) store.pause(report.id);
+                    else store.failed(report.id);
+                } else if (engineSessionId && (!submitted || !retryable || failure === 'context_overflow')) {
+                    store.pause(report.id);
+                } else {
+                    store.failed(report.id);
+                }
+            } else {
+                store.failed(report.id);
+            }
+            console.warn(`[TaskReporting] Main agent report deferred after failure (${failure ?? 'incomplete'})`);
             // A reconnect may have observed the buffered round's processing state.
             // Publish current authoritative status only (never buffered text), without
             // overwriting a newer user/queue execution that may already own main.
