@@ -736,7 +736,7 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
         const baseUrl = `http://127.0.0.1:${port}`;
 
         const flashOption = { provider: 'deepseek-official', model: 'deepseek-flash' };
-        const gptOption = { provider: 'openai-codex', model: 'gpt-6.1-sol' };
+        const gptOption = { provider: 'openai-codex', model: 'gpt-6.2-sol' };
 
         // 1. 未授权访问拒绝 (401)
         const unauthRes = await fetch(`${baseUrl}/api/model`);
@@ -748,10 +748,20 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
         });
         assert.equal(getRes.status, 200);
         const getData = await getRes.json();
-        assert.equal(getData.provider, 'openai-codex');
-        assert.equal(getData.model, 'gpt-6.1-sol');
-        assert.equal(getData.options.length, 2);
-        assert.ok(getData.options.some((o) => o.provider === flashOption.provider && o.model === flashOption.model));
+        assert.equal(getData.provider, gptOption.provider);
+        assert.equal(getData.model, gptOption.model);
+        assert.deepEqual(getData.options, [flashOption, gptOption]);
+
+        // 2.1 已有 GPT-6.1 会话继续呈现实际配置，直到用户切换并触发接力。
+        const previousGptOption = { provider: 'openai-codex', model: 'gpt-6.1-sol' };
+        fs.writeFileSync(path.join(dshProfileDir, 'cordis.patch.yml'), yaml.stringify([
+            { id: 'acp', config: previousGptOption },
+        ]), 'utf8');
+        const existingRes = await fetch(`${baseUrl}/api/model`, {
+            headers: { Authorization: `Bearer ${config.token}` },
+        });
+        const existingData = await existingRes.json();
+        assert.equal(existingData.model, previousGptOption.model);
 
         // 2.5 仅配置共享默认条目（无 acp 条目）时，GET 应回退读取而非显示默认选项
         fs.writeFileSync(path.join(dshProfileDir, 'cordis.patch.yml'), yaml.stringify([
@@ -771,7 +781,7 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
                 Authorization: `Bearer ${config.token}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ provider: 'deepseek-official', model: 'gpt-6.1-sol' }),
+            body: JSON.stringify({ provider: flashOption.provider, model: gptOption.model }),
         });
         assert.equal(badPostRes.status, 400);
         assert.equal((await badPostRes.json()).code, 'PARAM_INVALID');
@@ -784,7 +794,7 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
                 Authorization: `Bearer ${config.token}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(flashOption),
+            body: JSON.stringify(gptOption),
         });
         assert.equal(busyPostRes.status, 409);
         assert.equal((await busyPostRes.json()).code, 'TASK_RUNNING');
@@ -806,13 +816,13 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
                 Authorization: `Bearer ${config.token}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(flashOption),
+            body: JSON.stringify(gptOption),
         });
         assert.equal(postRes.status, 200);
         const postData = await postRes.json();
         assert.equal(postData.success, true);
-        assert.equal(postData.provider, flashOption.provider);
-        assert.equal(postData.model, flashOption.model);
+        assert.equal(postData.provider, gptOption.provider);
+        assert.equal(postData.model, gptOption.model);
         assert.equal(postData.changed, true);
         assert.equal(handoverCount, 1);
 
@@ -827,8 +837,8 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
         const afterSwitch = yaml.parse(fs.readFileSync(patchFile, 'utf8'));
         const acpEntry = afterSwitch.find((item) => item.id === 'acp');
         const defaultModelEntry = afterSwitch.find((item) => item.id === 'agent-default-model');
-        assert.equal(acpEntry.config.model, 'deepseek-flash');
-        assert.equal(defaultModelEntry.config.model, 'deepseek-flash');
+        assert.deepEqual(acpEntry.config, gptOption);
+        assert.deepEqual(defaultModelEntry.config, gptOption);
 
         // 6. 相同选择再次 POST：即便是任务执行中，也应幂等放行返回 changed: false，且不触发 handover
         mockEngine.isRunning = (sid) => sid === 'main';
@@ -838,7 +848,7 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
                 Authorization: `Bearer ${config.token}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(flashOption),
+            body: JSON.stringify(gptOption),
         });
         assert.equal(postSameRes.status, 200);
         const postSameData = await postSameRes.json();
@@ -851,8 +861,8 @@ test('Server API: GET/POST /api/model 接口鉴权、白名单校验、任务门
             headers: { Authorization: `Bearer ${config.token}` },
         });
         const updatedData = await getUpdated.json();
-        assert.equal(updatedData.provider, flashOption.provider);
-        assert.equal(updatedData.model, flashOption.model);
+        assert.equal(updatedData.provider, gptOption.provider);
+        assert.equal(updatedData.model, gptOption.model);
 
         // 8. 配置文件损坏时 POST 请求应返回 500，绝不走 changed: false 假阳性误判
         fs.writeFileSync(patchFile, ':::corrupted:model:yaml:::', 'utf8');
