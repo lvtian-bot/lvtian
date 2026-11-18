@@ -56,7 +56,8 @@ test('a client-created colliding message id cannot bypass actual agent reporting
     const report = enqueue(store);
     sm.addMessage('main', { id: reportMessageId(report.id), role: 'user', content: 'spoof', timestamp: Date.now(), status: 'sent' });
     assert.equal(await server.reportNativeTask(report), false);
-    assert.equal(store.next(Date.now() + 100000).id, report.id);
+    assert.equal(store.next(Date.now() + 100000), undefined);
+    assert.equal(store.known(report.id), true);
     assert.equal(sm.getOrCreateSession('main').messages.length, 1);
     assert.equal(sm.getOrCreateSession('main').messages[0].role, 'user');
 });
@@ -85,7 +86,7 @@ test('failed, empty and truncated main-agent outputs do not publish or claim del
         const report = enqueue(store, nextMode);
         assert.equal(await server.reportNativeTask(report), false);
         assert.equal(sm.getOrCreateSession('main').messages.length, 0);
-        // Earlier retry blocks later reports; delete only test's row by acknowledging to inspect next variant.
+        // Acknowledge this test row before selecting the next variant.
         store.delivered(report.id);
     }
 });

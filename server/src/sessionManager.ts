@@ -67,7 +67,7 @@ type SessionLogEvent =
     | { t: 'msg'; at: number; seq: number; m: AssistantMessage }
     | { t: 'delta'; at: number; seq: number; id: string; d: string }
     | { t: 'state'; at: number; seq: number; taskState: TaskExecutionState; approvals?: ApprovalRequest[] }
-    | { t: 'dsh'; at: number; dshSessionId: string; workspaceContextVersion?: number }
+    | { t: 'dsh'; at: number; dshSessionId: string; workspaceContextVersion?: number; handoffPending?: boolean }
     | { t: 'seq'; at: number; seq: number }
     | { t: 'activity'; at: number; lastActiveAt: number; contextTokens?: number; contextWindowSize?: number }
     | { t: 'usage'; at: number; contextTokens?: number; contextWindowSize?: number; activeSessionStartSeq?: number }
@@ -402,6 +402,7 @@ export class SessionManager {
             case 'dsh':
                 session.dshSessionId = ev.dshSessionId;
                 session.workspaceContextVersion = ev.workspaceContextVersion;
+                if (ev.handoffPending !== undefined) session.handoffPending = ev.handoffPending;
                 session.updatedAt = ev.at;
                 break;
             case 'seq':
@@ -839,6 +840,18 @@ export class SessionManager {
     public getDshSessionId(sessionId: string): string | undefined {
         const session = this.getOrCreateSession(sessionId);
         return session.dshSessionId;
+    }
+
+    /** Record both changes together so reopening cannot lose the pending handoff. */
+    public resetBindingForHandoff(sessionId: string): void {
+        const session = this.getOrCreateSession(sessionId);
+        const at = Date.now();
+        const previous = { dshSessionId: session.dshSessionId, handoffPending: session.handoffPending, updatedAt: session.updatedAt };
+        Object.assign(session, { dshSessionId: '', handoffPending: true, updatedAt: at });
+        if (!this.appendEvent(sessionId, { t: 'dsh', at, dshSessionId: '', workspaceContextVersion: session.workspaceContextVersion, handoffPending: true })) {
+            Object.assign(session, previous);
+            throw new Error('session_handoff_not_persisted');
+        }
     }
 
     public getReconcileData(

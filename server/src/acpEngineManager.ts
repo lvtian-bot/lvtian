@@ -28,6 +28,26 @@ export interface EngineStatusPayload {
     code?: EngineMessageCode;
     detail?: string;
     stopReason?: string;
+    failure?: EngineFailure;
+    promptSettled?: boolean;
+}
+
+export type EngineFailure = 'authentication' | 'quota' | 'context_overflow' | 'transient' | 'attachment_too_large' | 'unknown';
+
+function classifyEngineFailure(message: string): EngineFailure {
+    // The installed ACP bridge flattens typed DSH failures into the JSON-RPC error message.
+    if (/detected context overflow|context[_ ]window[_ ]exceeded|context[_ ]length[_ ]exceeded|exceeds the context window/i.test(message)) {
+        return 'context_overflow';
+    }
+    if (/\b413\b|request (?:body )?(?:is )?too large|payload too large/i.test(message)) return 'attachment_too_large';
+    if (/usage limit has been reached|quota[_ ]exceeded|insufficient_quota/i.test(message)) return 'quota';
+    if (/authentication token has expired|invalid[_ ]credential|invalid[_ ]api[_ ]key|\b401\b|unauthorized/i.test(message)) {
+        return 'authentication';
+    }
+    if (/\b(?:429|502|503|504)\b|rate.?limit|timed?\s*out|timeout|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b|(?:connection|stream) (?:closed|ended)/i.test(message)) {
+        return 'transient';
+    }
+    return 'unknown';
 }
 
 export interface EngineCallbacks {
@@ -35,6 +55,8 @@ export interface EngineCallbacks {
     onFinalText?: (fullText: string) => void;
     onToolCall: (toolCall: ToolCallState) => void;
     onApprovalRequest?: (request: ApprovalRequest) => void;
+    /** Reports must claim the actual DSH session before a prompt can be written. */
+    beforePrompt?: (engineSessionId: string) => boolean;
     /** stopped 为模块内部终态（如审批超时自动拒绝），无对应客户端报文触发，须主动广播 */
     onStatusChange: (status: 'thinking' | 'running_tool' | 'done' | 'error' | 'stopped', payload?: EngineStatusPayload) => void;
 }
@@ -462,6 +484,24 @@ export class AcpEngineManager {
         return this.activeSessions.has(sessionId) || this.handoffInProgressSessions.has(sessionId);
     }
 
+    /** Retire only this binding. Other sessions sharing the engine can keep running. */
+    public async prepareContextHandoff(sessionId: string, engineSessionId: string): Promise<void> {
+        if (this.sessionManager.getDshSessionId(sessionId) !== engineSessionId || this.handoffInProgressSessions.has(sessionId)) return;
+        this.handoffInProgressSessions.add(sessionId);
+        try {
+            this.sessionManager.resetBindingForHandoff(sessionId);
+            this.engineSessionIndex.delete(engineSessionId);
+            console.log(`[AcpEngine] 会话 ${sessionId} 已安排上下文接力`);
+            try {
+                await this.contextConsolidator?.consolidateNow(sessionId);
+            } catch {
+                console.warn('[AcpEngine] 上下文接力提炼失败，将使用已有提要和近期对话');
+            }
+        } finally {
+            this.handoffInProgressSessions.delete(sessionId);
+        }
+    }
+
     public isHandoffInProgress(sessionId: string): boolean {
         return this.handoffInProgressSessions.has(sessionId);
     }
@@ -666,6 +706,7 @@ export class AcpEngineManager {
 
         let pendingBackground: string | null = null;
         let shouldRotate = false;
+        let promptedEngineSession: string | undefined;
 
         try {
             // Freeze legacy/new-session fallback before background state/usage writes move updatedAt.
@@ -674,6 +715,7 @@ export class AcpEngineManager {
             }
             // 初始状态更新须在预留的释放范围内：落盘或回调抛错时 finally 仍会释放预留，
             // 否则失败的请求会把会话永久锁在「进行中」，后续消息全部被静默拒绝
+            const previousTaskState = this.sessionManager.getOrCreateSession(sessionId).taskState;
             this.sessionManager.setTaskState(sessionId, 'processing');
             callbacks.onStatusChange('thinking');
 
@@ -832,6 +874,11 @@ export class AcpEngineManager {
             const promptText = attachmentContext ? `${fullPrompt}\n${attachmentContext}` : fullPrompt;
             promptBlocks.unshift({ type: 'text', text: promptText });
 
+            if (callbacks.beforePrompt && !callbacks.beforePrompt(engineSessionId)) {
+                this.sessionManager.setTaskState(sessionId, previousTaskState);
+                return;
+            }
+            promptedEngineSession = engineSessionId;
             const response = await context.request<{ stopReason?: string }>(
                 'session/prompt',
                 {
@@ -883,8 +930,23 @@ export class AcpEngineManager {
                 this.sessionManager.setTaskState(sessionId, 'stopped');
                 return;
             }
+            const failure = classifyEngineFailure(message);
+            if (source === 'user' && failure === 'context_overflow' && promptedEngineSession) {
+                // Earlier steps of a user turn may already have acted. Only a future turn uses the new binding.
+                this.clearTaskWatchdog(sessionId);
+                try { await this.prepareContextHandoff(sessionId, promptedEngineSession); }
+                catch { console.error('[AcpEngine] 未能保存上下文接力状态'); }
+                if (this.stoppedSessions.delete(sessionId)) {
+                    this.sessionManager.setTaskState(sessionId, 'stopped');
+                    return;
+                }
+            }
             console.error(`[AcpEngine] 执行任务异常: ${message}`);
-            callbacks.onStatusChange('error', { code: 'engine_error', detail: message });
+            callbacks.onStatusChange('error', {
+                code: 'engine_error', detail: message, failure,
+                promptSettled: promptedEngineSession !== undefined && err instanceof acp.RequestError
+                    && message.startsWith('Internal error: turn failed:'),
+            });
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
             const timedOut = this.timedOutSessions.delete(sessionId);
@@ -899,14 +961,16 @@ export class AcpEngineManager {
                 clearTimeout(recoveryTimer);
                 this.stopRecoveryTimers.delete(sessionId);
             }
-            const watchdogTimer = this.taskWatchdogTimers.get(sessionId);
-            if (watchdogTimer) {
-                clearTimeout(watchdogTimer);
-                this.taskWatchdogTimers.delete(sessionId);
-            }
+            this.clearTaskWatchdog(sessionId);
             // 释放执行后才广播终态，让既有排队唤醒逻辑不会在取消宽限期内提前耗尽。
             if (timedOut) callbacks.onStatusChange('error', { code: 'task_timeout' });
         }
+    }
+
+    private clearTaskWatchdog(sessionId: string): void {
+        const timer = this.taskWatchdogTimers.get(sessionId);
+        if (timer) clearTimeout(timer);
+        this.taskWatchdogTimers.delete(sessionId);
     }
 
     // ------------------------------------------------------------------

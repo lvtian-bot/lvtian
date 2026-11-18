@@ -16,12 +16,13 @@ function fixture(t, onPrompt) {
     const sm = new SessionManager(path.join(root, 'data'));
     const mm = new MemoryManager(root);
     const store = new TaskReportStore(path.join(root, 'reports.sqlite'), 0);
+    let newSessions = 0;
     const engine = new AcpEngineManager(root, mm, sm, {
         connectEngine: async app => {
             const mock = acp.agent({ name: 'report-contract-test' })
                 .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: {} }))
                 .onRequest(acp.methods.agent.authenticate, () => ({}))
-                .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'mock-report-session' }))
+                .onRequest(acp.methods.agent.session.new, () => ({ sessionId: `mock-report-session-${++newSessions}` }))
                 .onRequest(acp.methods.agent.session.resume, c => ({ sessionId: c.params.sessionId }))
                 .onRequest(acp.methods.agent.session.prompt, async c => {
                     const stopReason = await onPrompt(c, sm);
@@ -96,7 +97,8 @@ for (const reason of ['cancelled', 'max_turn_requests', 'max_tokens', 'refusal']
         assert.equal(terminal.payload.stopReason, reason);
         assert.equal(sm.getOrCreateSession('main').messages.length, 0);
         assert.equal(sm.getOrCreateSession('main').taskState, 'error');
-        assert.equal(store.next(Date.now() + 600000).reply, undefined);
+        assert.equal(store.next(Date.now() + 600000), undefined, 'the failed report is held without resubmitting');
+        assert.equal(store.known('delivery-ten-repos'), true);
     });
 }
 
@@ -159,4 +161,97 @@ test('background initialization exceptions release the main ACP reservation for 
     await engine.execute('main', 'next-background', '后台报告', { onDelta: d => { text += d; }, onToolCall: () => {}, onStatusChange: () => {} }, undefined, 'task_report');
     assert.equal(text, '后续请求可正常完成');
     assert.equal(engine.isRunning('main'), false);
+});
+
+function engineError(message) {
+    return acp.RequestError.internalError(undefined, `turn failed: ${message}`);
+}
+
+test('context overflow retires the old report session and delivers once with preserved chat history', async t => {
+    const sessions = [];
+    const { sm, store, server } = fixture(t, async c => {
+        sessions.push(c.params.sessionId);
+        if (sessions.length === 1) throw engineError('pi-ai detected context overflow for model "gpt-6.1-sol"');
+        assert.match(JSON.stringify(c.params.prompt), /上次聊天原文/);
+        await emit(c, '收到完整后台结果');
+    });
+    sm.addMessage('main', { id: 'previous', role: 'user', content: '上次聊天原文', timestamp: Date.now(), status: 'sent' });
+    sm.setUsage('main', 21945, 500000);
+    const report = enqueue(store, '完整后台结果');
+    assert.equal(await server.reportNativeTask(report), true, 'overflow advances the queue after scheduling one handoff');
+    assert.equal(sm.isHandoffPending('main'), true);
+    const cold = new SessionManager(server.config.dataDir);
+    assert.equal(cold.getDshSessionId('main'), '');
+    assert.equal(cold.isHandoffPending('main'), true);
+    assert.equal(await server.reportNativeTask(store.next()), true);
+    assert.equal(await server.reportNativeTask(report), true);
+    assert.equal(new Set(sessions).size, 2);
+    assert.equal(sessions.length, 2);
+    assert.equal(sm.isHandoffPending('main'), false);
+    assert.deepEqual(sm.getOrCreateSession('main').messages.map(m => m.content), ['上次聊天原文', '收到完整后台结果']);
+    assert.equal(store.next(), undefined);
+});
+
+test('a second context overflow pauses the report and leaves later reports eligible', async t => {
+    const sessions = [];
+    const { store, server } = fixture(t, c => {
+        sessions.push(c.params.sessionId);
+        throw engineError('pi-ai detected context overflow for model "gpt-6.1-sol"');
+    });
+    const report = enqueue(store, '过大的结果');
+    assert.equal(await server.reportNativeTask(report), true);
+    assert.equal(await server.reportNativeTask(store.next()), false);
+    const receipt = { messageId: 'later', deliveredAt: new Date().toISOString() };
+    store.observe('task', '后续结果', { status: 'ended', assistantText: ['其他结果'], delivery: receipt });
+    assert.equal(store.next(Date.now() + 86400000).id, 'later');
+    assert.equal(new Set(sessions).size, 2);
+});
+
+for (const issue of ['Your authentication token has expired. Please try refreshing it.', 'Codex error: The usage limit has been reached']) {
+    test(`report wait persists through ${issue} and recovery does not append twice to the old session`, async t => {
+        const reportSessions = [];
+        let userDone;
+        const userFinished = new Promise(resolve => { userDone = resolve; });
+        const { sm, store, server } = fixture(t, async c => {
+            if (c.params.prompt.some(block => block.text === '检查主聊天')) {
+                await emit(c, '主聊天已恢复');
+                return;
+            }
+            reportSessions.push(c.params.sessionId);
+            if (reportSessions.length === 1) throw engineError(issue);
+            await emit(c, '后台报告补送成功');
+        });
+        server.broadcastSession = (_id, message) => {
+            if (message.type === 'task_status' && message.state === 'completed') userDone();
+        };
+        assert.equal(await server.reportNativeTask(enqueue(store, '原始结果')), false);
+        const later = Date.now() + 3 * 86400000;
+        for (let days = 1; days <= 3; days++) assert.equal(store.next(Date.now() + days * 86400000), undefined);
+        assert.equal(reportSessions.length, 1);
+        server.executeAssistantPrompt('main', '检查主聊天');
+        await userFinished;
+        assert.equal(await server.reportNativeTask(store.next(later)), true, 'retire the old session without sending');
+        assert.equal(reportSessions.length, 1);
+        assert.equal(await server.reportNativeTask(store.next(later)), true);
+        assert.equal(new Set(reportSessions).size, 2);
+        assert.deepEqual(sm.getOrCreateSession('main').messages.map(m => m.content), ['主聊天已恢复', '后台报告补送成功']);
+    });
+}
+
+test('user overflow prepares a new session without replaying the failed user request', async t => {
+    const sessions = [];
+    const { sm, engine } = fixture(t, async c => {
+        sessions.push(c.params.sessionId);
+        if (sessions.length === 1) throw engineError('Your input exceeds the context window of this model');
+        await emit(c, '新会话成功');
+    });
+    let failure;
+    const callbacks = { onDelta: () => {}, onToolCall: () => {}, onStatusChange: (_status, payload) => { failure = payload?.failure; } };
+    await engine.execute('main', 'user-first', '之前的任务', callbacks);
+    assert.equal(failure, 'context_overflow');
+    assert.equal(sm.getDshSessionId('main'), '');
+    assert.equal(sessions.length, 1);
+    await engine.execute('main', 'user-next', '下一次用户请求', callbacks);
+    assert.equal(new Set(sessions).size, 2);
+    assert.equal(sm.isHandoffPending('main'), false);
 });
