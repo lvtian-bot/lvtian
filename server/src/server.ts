@@ -47,7 +47,7 @@ const SAVE_BODY_MAX_BYTES = 5 * 1024 * 1024 * 6 + 2 * 1024 * 1024;
  */
 const MODEL_OPTIONS: ReadonlyArray<DshModelSelection> = [
     { provider: 'deepseek-official', model: 'deepseek-flash' },
-    { provider: 'openai-codex', model: 'gpt-6.1-sol' },
+    { provider: 'openai-codex', model: 'gpt-6.2-sol' },
 ];
 
 /** 从未做过端侧选择（DSH 补丁无模型条目）时对外呈现的默认模型选项 */
