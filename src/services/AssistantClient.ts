@@ -3,6 +3,7 @@ import * as Network from 'expo-network';
 import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
+import { classifySocketError, recordConnectionEvent, type ConnectionEventDetails } from './connectionDiagnostics';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import {
     ClientMessage,
@@ -190,13 +191,15 @@ export class AssistantClient {
     }
 
     /** Diagnostic fields are fixed labels and durations; never include URLs, tokens or message data. */
-    private logConnection(event: string): void {
-        console.info('[AssistantClient:connection]', JSON.stringify({
+    private logConnection(event: string, details: ConnectionEventDetails = {}): void {
+        recordConnectionEvent({
+            time: new Date().toISOString(), network: this.networkState?.type ?? 'unknown',
+            retryAttempt: this.reconnectAttempts, ...details,
             event, connectionId: this.connectionId, phase: this.connectionPhase,
             elapsedMs: this.connectionStartedAt ? Date.now() - this.connectionStartedAt : 0,
             phaseElapsedMs: this.connectionPhase ? Date.now() - this.phaseStartedAt : 0,
             appState: this.currentAppState,
-        }));
+        });
     }
 
     /**
@@ -455,6 +458,7 @@ export class AssistantClient {
                 // Storage errors are distinct from an absent configuration. The store
                 // retains the safe error code and existing credentials for an explicit retry.
                 if (request === this.connectionRequest && !this.isExplicitlyClosed) {
+                    this.logConnection('credentials_read_failed');
                     store.setConnectionState('disconnected', useAssistantStore.getState().credentialsError);
                 }
                 return;
@@ -473,6 +477,7 @@ export class AssistantClient {
         const token = store.serverToken;
 
         if (!url) {
+            this.logConnection('server_not_configured');
             store.setConnectionState('disconnected', null);
             return;
         }
@@ -522,24 +527,27 @@ export class AssistantClient {
                 if (this.ws !== ws) return;
                 try {
                     const data = JSON.parse(event.data as string) as ServerMessage;
-                    this.handleServerMessage(data);
+                    this.handleServerMessage(data, typeof event.data === 'string' ? event.data.length : undefined);
                 } catch (err) {
+                    this.logConnection('message_processing_failed');
                     console.warn('[AssistantClient] 解析下发数据失败:', err);
                 }
             };
 
-            ws.onerror = () => {
+            ws.onerror = (socketEvent) => {
                 if (this.ws !== ws) return;
-                this.logConnection('socket_error');
+                const message = socketEvent && 'message' in socketEvent ? socketEvent.message : undefined;
+                this.logConnection('socket_error', { errorCategory: classifySocketError(message) });
                 this.retryConnection();
             };
 
-            ws.onclose = () => {
+            ws.onclose = (closeEvent) => {
                 if (this.ws !== ws) return;
-                this.logConnection('socket_close');
+                this.logConnection('socket_close', { closeCode: closeEvent?.code });
                 this.retryConnection();
             };
         } catch (err: unknown) {
+            this.logConnection('socket_setup_failed');
             const msg = err instanceof Error ? err.message : String(err);
             store.setConnectionState('error', msg);
             this.scheduleReconnect();
@@ -601,6 +609,7 @@ export class AssistantClient {
             delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
         }
 
+        this.logConnection('retry_scheduled', { retryDelayMs: delay });
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
             this.connect();
@@ -1001,7 +1010,7 @@ export class AssistantClient {
     /**
      * 处理服务端下发的事件报文
      */
-    private handleServerMessage(msg: ServerMessage): void {
+    private handleServerMessage(msg: ServerMessage, payloadChars?: number): void {
         // 收到服务端任何下行数据包均表明链路活跃，立即清除假死熔断定时器
         this.clearPongTimeout();
 
@@ -1016,6 +1025,7 @@ export class AssistantClient {
                     this.reconnectAttempts = 0;
                     this.fetchSkills().catch(() => {});
                 } else {
+                    this.logConnection('authentication_failed');
                     store.setConnectionState('error', msg.error || '认证失败，请检查访问令牌');
                     this.isExplicitlyClosed = true;
                     this.stopPing();
@@ -1036,7 +1046,7 @@ export class AssistantClient {
             }
 
             case 'sync_result': {
-                this.logConnection('sync_received');
+                this.logConnection('sync_received', { messageCount: msg.messages.length, payloadChars });
                 this.clearPhaseTimeout();
                 this.serverSynced = true;
                 store.markChatAuthoritative();

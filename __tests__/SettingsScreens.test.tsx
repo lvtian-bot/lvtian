@@ -2,10 +2,15 @@ import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import { Text, TouchableOpacity } from 'react-native';
 import i18n from '../src/i18n';
+import * as Sharing from 'expo-sharing';
+import { fsService } from '../src/services/FileSystemService';
+import { SettingsRow } from '../src/components/settings';
 import { MeScreen } from '../src/screens/MeScreen';
 import { AppSettingsScreen } from '../src/screens/AppSettingsScreen';
 import { useSettingsStore } from '../src/store/useSettingsStore';
 import { useAssistantStore } from '../src/store/useAssistantStore';
+
+jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(), shareAsync: jest.fn() }));
 
 const mockNavigate = jest.fn();
 
@@ -69,6 +74,27 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         // 验证缓存管理已被彻底移除
         expect(allTexts).not.toContain('本地缓存管理');
         expect(allTexts).not.toContain('缓存管理');
+    });
+
+    it('断线时仍可从关于下一行分享连接日志', async () => {
+        useAssistantStore.setState({ connectionState: 'disconnected', serverUrl: '' });
+        const uri = 'file:///cache/lvtian-connection.txt';
+        const snapshot = jest.spyOn(fsService, 'exportConnectionLog').mockResolvedValue(uri);
+        jest.mocked(Sharing.isAvailableAsync).mockResolvedValue(true);
+        try {
+            await ReactTestRenderer.act(async () => {
+                currentRenderer = ReactTestRenderer.create(<MeScreen />);
+            });
+            const rows = currentRenderer!.root.findAllByType(SettingsRow);
+            const about = rows.findIndex(row => row.props.title === '关于');
+            expect(about).toBeGreaterThanOrEqual(0);
+            const row = rows[about + 1];
+            expect(row.props.title).toBe('导出连接日志');
+            await ReactTestRenderer.act(async () => { await row.props.onPress(); });
+            expect(Sharing.shareAsync).toHaveBeenCalledWith(uri, expect.objectContaining({ mimeType: 'text/plain' }));
+        } finally {
+            snapshot.mockRestore();
+        }
     });
 
     it('MeScreen 点击各选项能正确导航至对应二级页面', async () => {
