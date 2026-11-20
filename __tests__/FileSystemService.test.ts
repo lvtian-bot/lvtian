@@ -158,3 +158,34 @@ describe('预览缓存信息', () => {
     expect(fsService.getCacheFileInfo('file:///cache/image')).toEqual({ exists: true, modificationTime: 1700000000123 });
   });
 });
+
+it('轮换后仍按时间导出两段连接记录，快照保存在缓存中', async () => {
+  const files = new Map<string, string>([
+    ['connection-events.previous.log', 'old\n'],
+    ['connection-events.log', 'recent\n'],
+  ]);
+  const directory = { create: jest.fn(), list: () => [] };
+  mockDirectory.mockImplementation(() => directory as unknown as Directory);
+  mockFile.mockImplementation((_root, filename) => {
+    const f = {
+      name: String(filename), uri: 'file:///cache/' + filename,
+      get exists() { return files.has(f.name); },
+      get size() { return 128 * 1024; },
+      move: (target: File) => {
+        const content = files.get(f.name)!;
+        files.delete(f.name);
+        f.name = target.name;
+        files.set(f.name, content);
+      },
+      delete: () => files.delete(f.name),
+      write: async (text: string, options?: { append?: boolean }) => {
+        files.set(f.name, (options?.append ? files.get(f.name) ?? '' : '') + text);
+      },
+      text: async () => files.get(f.name),
+    };
+    return f as unknown as File;
+  });
+  await fsService.appendConnectionLog('new');
+  const uri = await fsService.exportConnectionLog('status');
+  expect(files.get(uri.split('/').pop()!)).toBe('recent\nnew\nstatus\n');
+});

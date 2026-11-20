@@ -330,6 +330,8 @@
     "serverSubtitle": "配置服务地址与访问令牌以连接服务端",
     "agentConfig": "AI 智能体",
     "agentConfigSubtitle": "配置运行在服务端的 AI 代理权限与能力",
+    "exportConnectionLog": "导出连接日志",
+    "exportConnectionLogFailed": "连接日志导出失败，请重试",
     "appSettings": "App 设置",
     "fontSize": "字体大小",
     "fontSizes": {

@@ -54,6 +54,9 @@ const MODEL_OPTIONS: ReadonlyArray<DshModelSelection> = [
 const DEFAULT_MODEL_OPTION: DshModelSelection = MODEL_OPTIONS[MODEL_OPTIONS.length - 1];
 
 interface AuthenticatedSocket extends WebSocket {
+    connectionId?: number;
+    loggedAuthFailure?: boolean;
+    loggedSync?: boolean;
     isAuthenticated?: boolean;
     isAlive?: boolean;
     sessionId?: string;
@@ -71,6 +74,7 @@ export class LvtianServer {
     private wss: WebSocketServer;
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     private consolidationInterval: ReturnType<typeof setInterval> | null = null;
+    private nextConnectionId = 0;
     private isDraining = false;
     private taskReporting?: NativeTaskReporting;
     private taskReportStore?: TaskReportStore;
@@ -507,6 +511,9 @@ export class LvtianServer {
         });
 
         this.wss.on('connection', (ws: AuthenticatedSocket) => {
+            ws.connectionId = ++this.nextConnectionId;
+            const openedAt = Date.now();
+            console.info('[Server:connection]', ws.connectionId, 'open');
             ws.isAlive = true;
             ws.isAuthenticated = false;
             ws.sessionId = 'main';
@@ -531,8 +538,8 @@ export class LvtianServer {
                 }
             });
 
-            ws.on('close', () => {
-                console.log('[Server] 客户端连接断开');
+            ws.on('close', (code) => {
+                console.info('[Server:connection]', ws.connectionId, 'close', { code, elapsedMs: Date.now() - openedAt });
             });
         });
 
@@ -541,6 +548,7 @@ export class LvtianServer {
             this.wss.clients.forEach((client: WebSocket) => {
                 const ws = client as AuthenticatedSocket;
                 if (!ws.isAlive) {
+                    console.info('[Server:connection]', ws.connectionId, 'heartbeat_timeout');
                     return ws.terminate();
                 }
                 ws.isAlive = false;
@@ -552,6 +560,12 @@ export class LvtianServer {
     private async handleClientMessage(ws: AuthenticatedSocket, msg: ClientMessage): Promise<void> {
         // 收到客户端任何上行报文均标记连接存活，避免被心跳检测误杀
         ws.isAlive = true;
+
+        if (!ws.isAuthenticated && !ws.loggedAuthFailure &&
+            (msg.type !== 'auth' || msg.token !== this.config.token)) {
+            ws.loggedAuthFailure = true;
+            console.info('[Server:connection]', ws.connectionId, 'authentication_failed');
+        }
 
         // 未认证拦截
         if (!ws.isAuthenticated && msg.type !== 'auth') {
@@ -566,6 +580,7 @@ export class LvtianServer {
         switch (msg.type) {
             case 'auth': {
                 if (msg.token === this.config.token) {
+                    if (!ws.isAuthenticated) console.info('[Server:connection]', ws.connectionId, 'authenticated');
                     ws.isAuthenticated = true;
                     this.send(ws, {
                         type: 'auth_result',
@@ -1183,10 +1198,17 @@ export class LvtianServer {
         }
     }
 
-    private send(ws: WebSocket, msg: ServerMessage): void {
+    private send(ws: AuthenticatedSocket, msg: ServerMessage): void {
         if (ws.readyState === WS.OPEN) {
             try {
-                ws.send(JSON.stringify(msg), (err) => {
+                const payload = JSON.stringify(msg);
+                if (msg.type === 'sync_result' && !ws.loggedSync) {
+                    ws.loggedSync = true;
+                    console.info('[Server:connection]', ws.connectionId, 'sync_response_prepared', {
+                        messages: msg.messages.length, bytes: Buffer.byteLength(payload),
+                    });
+                }
+                ws.send(payload, (err) => {
                     if (err) {
                         console.warn(`[Server] 发送客户端消息失败: ${err.message}`);
                     }

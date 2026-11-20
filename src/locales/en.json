@@ -330,6 +330,8 @@
     "serverSubtitle": "Configure server address and token",
     "agentConfig": "AI Agent",
     "agentConfigSubtitle": "Configure AI agent permissions & capabilities",
+    "exportConnectionLog": "Export connection log",
+    "exportConnectionLogFailed": "Could not export the connection log. Please try again.",
     "appSettings": "App Settings",
     "fontSize": "Font Size",
     "fontSizes": {

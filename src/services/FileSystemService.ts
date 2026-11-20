@@ -402,6 +402,36 @@ class FileSystemService {
         return false;
     }
 
+    // Keep diagnostic files outside the synced notes tree. Callers serialize rotation and export.
+    async appendConnectionLog(line: string): Promise<void> {
+        const active = new File(Paths.document, 'connection-events.log');
+        if (active.exists && active.size >= 128 * 1024) {
+            const previous = new File(Paths.document, 'connection-events.previous.log');
+            if (previous.exists) previous.delete();
+            active.move(previous);
+        }
+        // move() changes the File object's URI.
+        await new File(Paths.document, 'connection-events.log').write(line + '\n', { append: true });
+    }
+
+    async exportConnectionLog(status: string): Promise<string> {
+        const parts: string[] = [];
+        for (const name of ['connection-events.previous.log', 'connection-events.log']) {
+            const file = new File(Paths.document, name);
+            if (file.exists) parts.push(await file.text());
+        }
+        parts.push(status + '\n');
+        const directory = new Directory(Paths.cache, 'connection-exports');
+        directory.create({ idempotent: true });
+        const snapshot = new File(directory, `lvtian-connection-${Date.now()}.txt`);
+        await snapshot.write(parts.join(''));
+        // A recipient may still be opening the previous share. Keep recent snapshots distinct.
+        const older = directory.list().filter(file => file instanceof File && file.uri !== snapshot.uri)
+            .sort((a, b) => b.name.localeCompare(a.name));
+        for (const file of older.slice(2)) file.delete();
+        return snapshot.uri;
+    }
+
     /** 获取沙盒缓存文件路径及其缓存时效所需的文件信息。 */
     getCacheFileUri(filename: string): string {
         return new File(Paths.cache, filename).uri;
