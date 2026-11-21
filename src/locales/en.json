@@ -295,6 +295,35 @@
     "loadMore": "Load More",
     "success": "Success"
   },
+  "connectors": {
+    "title": "Connectors",
+    "googleCalendar": "Google Calendar",
+    "connect": "Connect",
+    "reauthorize": "Reauthorize",
+    "disconnect": "Disconnect",
+    "disconnectTitle": "Disconnect Google Calendar?",
+    "disconnectDescription": "Lvtian will no longer have access to this Google Calendar. Your calendars and events won't be deleted.",
+    "status": {
+      "unavailable": "Not configured",
+      "unsupported": "Unavailable",
+      "disconnected": "Not connected",
+      "authorizing": "Authorizing",
+      "connected": "Connected",
+      "needs_reauth": "Reauthorization needed",
+      "unknown": "Unverified"
+    },
+    "notes": {
+      "unavailable": "The Google Calendar connection hasn't been configured.",
+      "unsupported": "This server doesn't provide a Google Calendar connection.",
+      "authorizing": "Finish Google authorization in your browser, then return to Lvtian."
+    },
+    "errors": {
+      "statusFailed": "Couldn't check the Google Calendar connection. Please try again.",
+      "connectFailed": "Couldn't start Google Calendar authorization. Please try again.",
+      "browserFailed": "Couldn't open the Google authorization page. Please start authorization again.",
+      "disconnectFailed": "Couldn't confirm the disconnect request. Check the current connection status."
+    }
+  },
   "settings": {
     "save": "Save",
     "saveAndValidate": "Validate and Save",

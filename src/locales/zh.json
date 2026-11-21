@@ -295,6 +295,35 @@
     "rename": "重命名",
     "move": "移动"
   },
+  "connectors": {
+    "title": "连接器",
+    "googleCalendar": "Google 日历",
+    "connect": "连接",
+    "reauthorize": "重新授权",
+    "disconnect": "断开",
+    "disconnectTitle": "断开 Google 日历？",
+    "disconnectDescription": "断开后，绿天将无法访问此 Google 日历。您的日历和日程不会被删除。",
+    "status": {
+      "unavailable": "未配置",
+      "unsupported": "不可用",
+      "disconnected": "未连接",
+      "authorizing": "授权中",
+      "connected": "已连接",
+      "needs_reauth": "需要重新授权",
+      "unknown": "未确认"
+    },
+    "notes": {
+      "unavailable": "Google 日历连接尚未配置。",
+      "unsupported": "当前服务端未提供 Google 日历连接。",
+      "authorizing": "请在浏览器中完成 Google 授权，然后返回绿天。"
+    },
+    "errors": {
+      "statusFailed": "无法读取 Google 日历连接状态，请重试。",
+      "connectFailed": "未能发起 Google 日历授权，请重试。",
+      "browserFailed": "未能打开 Google 授权页面，请重新发起授权。",
+      "disconnectFailed": "未能确认断开操作，请查看当前连接状态。"
+    }
+  },
   "settings": {
     "save": "保存",
     "saveAndValidate": "验证并保存配置",

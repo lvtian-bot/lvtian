@@ -14,6 +14,9 @@ import { SkillManager } from './skillManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
 import { handleNativeTaskHttp, isNativeTaskPath } from './nativeTaskHttp.js';
 import type { NativeTaskRuntime } from './nativeTaskRuntime.js';
+import { GOOGLE_CALENDAR_CALLBACK, loadGoogleCalendarConfig } from './googleCalendarConfig.js';
+import { GoogleCalendarConnector } from './googleCalendarConnector.js';
+import { handleGoogleCalendarApi, handleGoogleCalendarCallback, isGoogleCalendarApiPath } from './googleCalendarHttp.js';
 import {
     getDshPermissionMode,
     setDshPermissionMode,
@@ -78,6 +81,7 @@ export class LvtianServer {
     private isDraining = false;
     private taskReporting?: NativeTaskReporting;
     private taskReportStore?: TaskReportStore;
+    private readonly googleCalendar: GoogleCalendarConnector;
 
     constructor(
         config: ServerConfig,
@@ -87,7 +91,8 @@ export class LvtianServer {
         fileManager?: FileManager,
         contextConsolidator?: ContextConsolidator,
         private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'> & Partial<Pick<NativeTaskRuntime, 'watchChanges'>>,
-        skillManager?: SkillManager
+        skillManager?: SkillManager,
+        googleCalendar?: GoogleCalendarConnector
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
@@ -96,6 +101,10 @@ export class LvtianServer {
         this.fileManager = fileManager || new FileManager(config.workspace);
         this.skillManager = skillManager || new SkillManager(config.workspace);
         this.contextConsolidator = contextConsolidator || new ContextConsolidator(sessionManager);
+        const { allowedRoot, workspaceDir } = this.fileManager.getSystemInfo();
+        this.googleCalendar = googleCalendar ?? new GoogleCalendarConnector(loadGoogleCalendarConfig(
+            process.env.LVTIAN_GOOGLE_CALENDAR_DIR, [allowedRoot, workspaceDir, config.workspace],
+        ));
 
         const scanMs = Number.parseInt(process.env.LVTIAN_IDLE_SCAN_INTERVAL_MS ?? '', 10);
         const intervalMs = Number.isFinite(scanMs) && scanMs > 0 ? scanMs : 60_000;
@@ -186,6 +195,11 @@ export class LvtianServer {
 
         const pathname = urlObj.pathname;
 
+        if (pathname === GOOGLE_CALENDAR_CALLBACK) {
+            await handleGoogleCalendarCallback(req, res, this.googleCalendar, this.isDraining);
+            return;
+        }
+
         // 设置 CORS
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -217,6 +231,11 @@ export class LvtianServer {
                 res.end(JSON.stringify({ error: '无效的访问令牌（Unauthorized）' }));
                 return;
             }
+        }
+
+        if (isGoogleCalendarApiPath(pathname)) {
+            await handleGoogleCalendarApi(req, res, urlObj, this.googleCalendar, this.isDraining);
+            return;
         }
 
         if (isNativeTaskPath(pathname)) {

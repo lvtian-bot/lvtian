@@ -12,6 +12,7 @@ import { PermissionInfoScreen } from '../screens/PermissionInfoScreen';
 import { AssistantConfigScreen } from '../screens/AssistantConfigScreen';
 import { AgentConfigScreen } from '../screens/AgentConfigScreen';
 import { AppSettingsScreen } from '../screens/AppSettingsScreen';
+import { ConnectorsScreen } from '../screens/ConnectorsScreen';
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next';
 
@@ -105,6 +106,11 @@ export const AppNavigator = () => {
                     headerShown: true,
                     title: t('settings.agentConfig', 'AI 智能体配置')
                 }}
+            />
+            <Stack.Screen
+                name="Connectors"
+                component={ConnectorsScreen}
+                options={{ headerShown: true, title: t('connectors.title') }}
             />
         </Stack.Navigator>
     );
