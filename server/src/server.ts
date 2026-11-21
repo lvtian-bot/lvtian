@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { createHash } from 'node:crypto';
+import type { AutonomousJobReply } from './autonomousJobReplyBridge.js';
 import path from 'node:path';
 import { NativeTaskReporting, TaskReportStore, reportMessageId, taskReportPrompt, type TaskReport } from './nativeTaskReporting.js';
 import fs from 'node:fs';
@@ -64,6 +66,18 @@ interface AuthenticatedSocket extends WebSocket {
 
 export class LvtianServer {
     private config: ServerConfig;
+
+    private publishAutonomousJobReply(sessionId: string, reply: AutonomousJobReply): void {
+        const id = 'job-reply-' + createHash('sha256').update(`${reply.engineSessionId}:${reply.turn}`).digest('hex');
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        if (session.messages.some(message => message.id === id)) return;
+        const timestamp = Date.now();
+        this.sessionManager.addMessage(sessionId, {
+            id, role: 'assistant', content: reply.text, status: 'done', timestamp, completedAt: timestamp,
+        });
+        this.sessionManager.persistDurableMessage(sessionId, id);
+        this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
+    }
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;
     private acpEngine: AcpEngineManager;
@@ -93,6 +107,7 @@ export class LvtianServer {
         this.sessionManager = sessionManager;
         this.memoryManager = memoryManager;
         this.acpEngine = acpEngine;
+        this.acpEngine.onAutonomousJobReply = (sessionId, reply) => this.publishAutonomousJobReply(sessionId, reply);
         this.fileManager = fileManager || new FileManager(config.workspace);
         this.skillManager = skillManager || new SkillManager(config.workspace);
         this.contextConsolidator = contextConsolidator || new ContextConsolidator(sessionManager);
