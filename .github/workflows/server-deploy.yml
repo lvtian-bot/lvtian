@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'server/**'
-      - '.github/workflows/server-deploy.yml'
   workflow_dispatch:
 
 concurrency:
