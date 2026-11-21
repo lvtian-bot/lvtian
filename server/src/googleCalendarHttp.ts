@@ -1,6 +1,7 @@
 import type http from 'node:http';
 import { GOOGLE_CALENDAR_CALLBACK } from './googleCalendarConfig.js';
 import { GoogleCalendarConnector, GoogleCalendarError } from './googleCalendarConnector.js';
+import { calendarCallbackLocale } from './googleCalendarLocale.js';
 
 const BASE = '/api/connectors/google-calendar';
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -61,8 +62,11 @@ export async function handleGoogleCalendarCallback(req: http.IncomingMessage, re
         if (target === GOOGLE_CALENDAR_CALLBACK) {
             // The browser has left the Google callback URL; no code, account or result is rendered.
             res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            const { language, text } = calendarCallbackLocale(req.headers['accept-language']);
+            res.setHeader('Content-Language', language);
+            res.setHeader('Vary', 'Accept-Language');
             res.writeHead(200);
-            res.end('请返回绿天 App 查看连接状态。\nReturn to Lvtian to check the connection status.');
+            res.end(text);
             return;
         }
         if (!target.startsWith(`${GOOGLE_CALENDAR_CALLBACK}?`) || target.length > 8_192 || target.includes('#')) return end(400);
