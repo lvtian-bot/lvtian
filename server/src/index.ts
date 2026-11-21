@@ -11,6 +11,7 @@ import { getDshPermissionMode } from './dshConfigManager.js';
 import { LvtianServer } from './server.js';
 import { prepareWorkspaceContextOverlay } from './workspaceContextConfig.js';
 import { prepareSessionTitleOverlay } from './sessionTitleConfig.js';
+import { prepareAutonomousJobReplyOverlay } from './autonomousJobReplyOverlay.js';
 
 function parseArgs(): Partial<ServerConfig> {
     const args = process.argv.slice(2);
@@ -89,10 +90,12 @@ async function main() {
     const taskOverlay = await nativeTasks?.prepareAcpOverlay();
     const contextOverlay = await prepareWorkspaceContextOverlay(config.dataDir, config.workspace);
     const titleOverlay = await prepareSessionTitleOverlay(config.dataDir);
+    const replyOverlay = await prepareAutonomousJobReplyOverlay(config.dataDir);
     const acpEngine = new AcpEngineManager(config.workspace, memoryManager, sessionManager, {
         contextConsolidator,
         dshProfileDir: config.dshProfileDir,
-        additionalPatches: [contextOverlay, ...(taskOverlay ? [taskOverlay] : []), titleOverlay],
+        additionalPatches: [contextOverlay, ...(taskOverlay ? [taskOverlay] : []), replyOverlay, titleOverlay],
+        autonomousJobReplies: true,
         ...(taskOverlay ? {
             privateEnvironment: {
                 LVTIAN_TASK_API_ORIGIN: `http://${taskApiHost}:${config.port}`,

@@ -37,7 +37,7 @@ function entries(tree) {
 test('服务端启动将标题 overlay 作为最后的 ACP patch 挂载', async () => {
     const source = await fs.readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
     assert.match(source, /const titleOverlay = await prepareSessionTitleOverlay\(config\.dataDir\)/);
-    assert.match(source, /additionalPatches: \[contextOverlay, \.\.\.\(taskOverlay \? \[taskOverlay\] : \[\]\), titleOverlay\]/);
+    assert.match(source, /additionalPatches: \[[^\n]*, titleOverlay\],/);
 });
 
 test('真实 DSH 合成配置：显式启用上游标题、保留默认控制且不跟随主模型切换', async t => {

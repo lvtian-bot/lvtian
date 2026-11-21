@@ -125,6 +125,23 @@ describe('工作记录按轮聚合', () => {
         expect(turns[0].completedAt).toBe(3);
     });
 
+    test('后台作业结果不改写原任务或无关提问的工作记录', () => {
+        const turns = buildChatTurns([
+            message({ id: 'u1', role: 'user', content: '启动后台构建', timestamp: 1 }),
+            message({ id: 'a1', role: 'assistant', replyTo: 'u1', content: '构建已启动。', timestamp: 2, completedAt: 3 }),
+            message({ id: 'u2', role: 'user', content: '现在几点？', timestamp: 4 }),
+            message({ id: 'a2', role: 'assistant', replyTo: 'u2', content: '现在是九点。', timestamp: 5, completedAt: 6 }),
+            message({
+                id: 'job-reply', role: 'assistant', source: 'autonomous_job_reply',
+                content: '后台构建失败。', timestamp: 7, completedAt: 8,
+            }),
+        ]);
+        expect(turns).toMatchObject([
+            { id: 'u2', answer: '现在是九点。', summary: '现在是九点。', completedAt: 6 },
+            { id: 'u1', answer: '构建已启动。', summary: '构建已启动。', completedAt: 3 },
+        ]);
+    });
+
     test('标题取首个有效行并去掉 Markdown 标记', () => {
         expect(firstMeaningfulLine('\n## 清理 artifacts\n第二行', 28)).toBe('清理 artifacts');
         expect(firstMeaningfulLine('- 修复排序bug', 28)).toBe('修复排序bug');

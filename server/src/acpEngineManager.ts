@@ -11,6 +11,7 @@ import { ToolCallState, ApprovalRequest, ChatAttachment } from './protocol.js';
 import type { ContextConsolidator } from './contextConsolidator.js';
 import { getDshPermissionMode } from './dshConfigManager.js';
 import { WORKSPACE_CONTEXT_VERSION } from './workspaceContext.js';
+import { AutonomousJobReplyBridge, type AutonomousJobReply } from './autonomousJobReplyBridge.js';
 
 /**
  * 引擎模块用户可见消息的错误码：客户端按码本地化渲染（i18n），码值是持久化与流式的稳定契约。
@@ -90,6 +91,8 @@ export interface AcpEngineManagerOptions {
     /** Project-owned tool extensions, applied without rewriting the user's ACP profile. */
     additionalPatches?: readonly string[];
     privateEnvironment?: Readonly<Record<string, string>>;
+    /** Enable the private reply pipe when its matching overlay is mounted. */
+    autonomousJobReplies?: boolean;
 }
 
 /** 会话任务运行时状态：一次 prompt 执行期间的聚合上下文 */
@@ -330,6 +333,9 @@ export class AcpEngineManager {
     private contextConsolidator: ContextConsolidator | null = null;
     private dshProfileDir?: string;
     private additionalPatches: readonly string[];
+    private readonly autonomousJobReplies: boolean;
+    private replyBridge?: AutonomousJobReplyBridge;
+    onAutonomousJobReply?: (sessionId: string, reply: AutonomousJobReply) => void;
     private privateEnvironment: Readonly<Record<string, string>>;
 
     private connection: EngineConnection | null = null;
@@ -384,6 +390,7 @@ export class AcpEngineManager {
         this.contextConsolidator = options?.contextConsolidator ?? null;
         this.dshProfileDir = options?.dshProfileDir;
         this.additionalPatches = options?.additionalPatches ?? [];
+        this.autonomousJobReplies = options?.autonomousJobReplies === true;
         this.privateEnvironment = options?.privateEnvironment ?? {};
     }
 
@@ -707,6 +714,7 @@ export class AcpEngineManager {
         let pendingBackground: string | null = null;
         let shouldRotate = false;
         let promptedEngineSession: string | undefined;
+        let replyScope: { bridge: AutonomousJobReplyBridge; engineSessionId: string } | undefined;
 
         try {
             // Freeze legacy/new-session fallback before background state/usage writes move updatedAt.
@@ -806,6 +814,7 @@ export class AcpEngineManager {
                 toolProgress: new Map(),
                 committedText: '',
             };
+            if (this.replyBridge) replyScope = { bridge: this.replyBridge, engineSessionId };
             this.runtimes.set(sessionId, runtime);
 
             // 构建 Prompt：轮换或底层会话断档时注入预制背景提要与关键原文锚定，温热心流期沿用常规 Prompt
@@ -887,6 +896,7 @@ export class AcpEngineManager {
                 }
             );
 
+            await replyScope?.bridge.drain(engineSessionId);
             if (this.timedOutSessions.has(sessionId)) return;
 
             // 检查在此轮 prompt 执行期间是否已被中断停止（例如收到手动取消或交接流程中断）
@@ -949,6 +959,7 @@ export class AcpEngineManager {
             });
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
+            replyScope?.bridge.release(replyScope.engineSessionId);
             const timedOut = this.timedOutSessions.delete(sessionId);
             this.runtimes.delete(sessionId);
             this.activeSessions.delete(sessionId);
@@ -1003,10 +1014,23 @@ export class AcpEngineManager {
             'session/update',
             passthroughParser,
             (ctx) => {
-                const params = ctx.params as { sessionId?: string; update?: { sessionUpdate?: string } };
-                if (params.sessionId && params.update) {
-                    this.handleSessionUpdate(params.sessionId, params.update);
-                }
+                const params = ctx.params as { sessionId?: string; update?: { sessionUpdate?: string; messageId?: string; toolCallId?: string } };
+                const { sessionId: engineId, update } = params;
+                if (!engineId || !update) return;
+                const sessionId = this.engineSessionIndex.get(engineId);
+                const runtime = sessionId ? this.runtimes.get(sessionId) : undefined;
+                if (!sessionId || !runtime || runtime.engineSessionId !== engineId) return;
+                const apply = () => {
+                    if (this.runtimes.get(sessionId) === runtime) this.handleSessionUpdate(engineId, update);
+                };
+                if (this.replyBridge) {
+                    const type = update.sessionUpdate;
+                    const hasMessage = type === 'agent_message_chunk' || type === 'agent_thought_chunk';
+                    const hasTool = type === 'tool_call' || type === 'tool_call_update';
+                    const id = hasMessage ? update.messageId : hasTool ? update.toolCallId : undefined;
+                    if ((hasMessage || hasTool) && typeof id !== 'string') return;
+                    this.replyBridge.route(engineId, id, apply, () => Buffer.byteLength(JSON.stringify(update)));
+                } else apply();
             }
         );
 
@@ -1058,7 +1082,9 @@ export class AcpEngineManager {
         }
         envExtra.DSH_PERMISSION_MODE = getDshPermissionMode(this.dshProfileDir);
 
+        if (this.autonomousJobReplies) envExtra.LVTIAN_AUTONOMOUS_JOB_REPLY_FD = '3';
         const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp', ...this.additionalPatches.flatMap(patch => ['--patch', patch])], {
+            ...(this.autonomousJobReplies ? { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] as const } : {}),
             cwd: this.workspace,
             env: {
                 ...process.env,
@@ -1068,6 +1094,22 @@ export class AcpEngineManager {
             },
             shell: false,
         });
+        if (this.autonomousJobReplies) {
+            const pipe = child.stdio[3];
+            if (!(pipe instanceof Readable)) {
+                child.kill();
+                throw new Error('后台作业回复管道不可用');
+            }
+            const bridge = new AutonomousJobReplyBridge(reply => {
+                if (this.replyBridge !== bridge) return;
+                const sessionId = this.engineSessionIndex.get(reply.engineSessionId);
+                if (sessionId && this.sessionManager.getDshSessionId(sessionId) === reply.engineSessionId) {
+                    this.onAutonomousJobReply?.(sessionId, reply);
+                }
+            });
+            this.replyBridge = bridge;
+            bridge.attach(pipe);
+        }
         child.stdin?.on('error', (err: Error) => {
             console.warn(`[AcpEngine] stdin 管道异常 (子进程可能已退出): ${err.message}`);
         });
