@@ -3,8 +3,16 @@ import type { Readable } from 'node:stream';
 export interface AutonomousJobReply { engineSessionId: string; turn: number; text: string }
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 const MAX_OWNERS = 4096;
-const MAX_PENDING = 1024;
+const MAX_PENDING_BYTES = 2 * 1024 * 1024;
+const PENDING_ENTRY_BYTES = 256;
 const ID_LIMIT = 256;
+
+interface PendingUpdate { key?: string; bytes: number; apply: () => void }
+interface PendingSession {
+    updates: PendingUpdate[];
+    error?: Error;
+    settled?: (error?: Error) => void;
+}
 
 function validId(value: unknown): value is string {
     return typeof value === 'string' && value.length > 0 && value.length <= ID_LIMIT && !value.includes('\0');
@@ -13,8 +21,8 @@ function validId(value: unknown): value is string {
 /** The private engine pipe identifies the owner of otherwise unlabelled ACP updates. */
 export class AutonomousJobReplyBridge {
     private readonly owners = new Map<string, boolean>();
-    private readonly pending: { key?: string; apply: () => void }[] = [];
-    private readonly drainers = new Set<() => void>();
+    private readonly pending = new Map<string, PendingSession>();
+    private pendingBytes = 0;
     private broken = false;
 
     constructor(private readonly publish: (reply: AutonomousJobReply) => void) {}
@@ -46,7 +54,7 @@ export class AutonomousJobReplyBridge {
         if (kind === 'ownership' && validId(id) && typeof autonomous === 'boolean') {
             const key = this.key(engineSessionId, id);
             this.owners.set(key, autonomous);
-            this.flush();
+            this.flush(engineSessionId);
             if (this.owners.size > MAX_OWNERS) this.owners.delete(this.owners.keys().next().value!);
         } else if (kind === 'reply' && typeof turn === 'number' && Number.isSafeInteger(turn) && turn > 0
             && typeof text === 'string' && text.trim() && Buffer.byteLength(text) <= MAX_FRAME_BYTES) {
@@ -55,48 +63,85 @@ export class AutonomousJobReplyBridge {
         } else { this.fail(); }
     }
 
-    route(engineSessionId: string, id: string | undefined, apply: () => void): void {
+    route(engineSessionId: string, id: string | undefined, apply: () => void, payloadBytes: () => number): void {
         if (this.broken) return;
-        if (this.pending.length >= MAX_PENDING) { this.fail(); return; }
-        this.pending.push({ key: id ? this.key(engineSessionId, id) : undefined, apply });
-        this.flush();
+        const current = this.pending.get(engineSessionId);
+        if (current?.error) return;
+        const key = id ? this.key(engineSessionId, id) : undefined;
+        const owner = key ? this.owners.get(key) : false;
+        if (owner === true) return;
+        if (!current && owner === false) { apply(); return; }
+
+        // The two pipes may still be delivered out of order. Bound only this race window,
+        // by retained payload + per-entry cost, rather than counting the model's chunks.
+        const session = current ?? { updates: [] };
+        if (!current) this.pending.set(engineSessionId, session);
+        const bytes = PENDING_ENTRY_BYTES + payloadBytes();
+        if (this.pendingBytes + bytes > MAX_PENDING_BYTES) {
+            this.discard(session, new Error('ACP reply ownership queue overflow'));
+            return;
+        }
+        session.updates.push({ key, bytes, apply });
+        this.pendingBytes += bytes;
     }
 
-    async drain(): Promise<void> {
+    async drain(engineSessionId: string): Promise<void> {
         if (this.broken) throw new Error('ACP reply ownership stream unavailable');
-        if (!this.pending.length) return;
+        const session = this.pending.get(engineSessionId);
+        if (!session) return;
+        if (session.error) throw session.error;
         await new Promise<void>((resolve, reject) => {
-            const done = () => {
+            // After this prompt settled, its ACP updates have arrived and only the local pipe can lag.
+            const timer = setTimeout(() => this.discard(session, new Error('ACP reply ownership timed out')), 3_000);
+            session.settled = error => {
                 clearTimeout(timer);
-                if (this.broken) reject(new Error('ACP reply ownership stream unavailable'));
+                if (error) reject(error);
                 else resolve();
             };
-            // Both pipes are local and the prompt has already settled; a missing owner is a protocol failure.
-            const timer = setTimeout(() => this.fail(), 3_000);
-            this.drainers.add(done);
         });
     }
 
-    private flush(): void {
-        while (this.pending.length) {
-            const { key, apply } = this.pending[0];
-            if (key && !this.owners.has(key)) break;
-            this.pending.shift();
-            if (!key || this.owners.get(key) === false) apply();
+    /** Release a finished/failed prompt without affecting any other session or future prompt. */
+    release(engineSessionId: string): void {
+        const session = this.pending.get(engineSessionId);
+        if (!session) return;
+        this.discard(session, new Error('ACP reply ownership request ended'));
+        this.pending.delete(engineSessionId);
+    }
+
+    private flush(engineSessionId: string): void {
+        const session = this.pending.get(engineSessionId);
+        if (!session || session.error) return;
+        let ready = 0;
+        const forward: (() => void)[] = [];
+        for (const { key, bytes, apply } of session.updates) {
+            const owner = key ? this.owners.get(key) : false;
+            if (owner === undefined) break;
+            ready++;
+            this.pendingBytes -= bytes;
+            if (owner === false) forward.push(apply);
         }
-        if (!this.pending.length) this.notifyDrainers();
+        session.updates.splice(0, ready);
+        if (!session.updates.length) {
+            this.pending.delete(engineSessionId);
+            session.settled?.();
+        }
+        for (const apply of forward) apply();
+    }
+
+    private discard(session: PendingSession, error: Error): void {
+        for (const entry of session.updates) this.pendingBytes -= entry.bytes;
+        session.updates.length = 0;
+        session.error = error;
+        session.settled?.(error);
     }
 
     private fail(): void {
         this.broken = true;
-        this.pending.length = 0;
+        const error = new Error('ACP reply ownership stream unavailable');
+        for (const session of this.pending.values()) this.discard(session, error);
+        this.pending.clear();
         this.owners.clear();
-        this.notifyDrainers();
-    }
-
-    private notifyDrainers(): void {
-        for (const done of this.drainers) done();
-        this.drainers.clear();
     }
 
     private key(sessionId: string, id: string): string { return `${sessionId}\0${id}`; }

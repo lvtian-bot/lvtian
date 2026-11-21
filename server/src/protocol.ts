@@ -41,8 +41,8 @@ export interface AssistantMessage {
     id: string;
     seq: number;
     role: 'user' | 'assistant' | 'system';
-    /** Main-agent reply to a background result, never a user instruction. */
-    source?: 'native_task_report';
+    /** Background reply shown in chat but not associated with a user request. */
+    source?: 'native_task_report' | 'autonomous_job_reply';
     reportDeliveryId?: string;
     /** 本条助手回复所回答的用户消息 id；排队时据此把回答归回对应请求 */
     replyTo?: string;

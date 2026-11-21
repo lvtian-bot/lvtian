@@ -53,6 +53,8 @@ function applyWithOutput(ctx: Context, output: fs.WriteStream, isDisabled: () =>
         if (message.source.kind === 'tool-jobs' && message.source.form === 'notice') state.claimedNotice = true;
         else state.mixed = true;
     });
+    // DSH ACP queues committed message/tool updates from this same event. Publish ownership
+    // first; transient agent/assistant-stream events have attempt ids, not ACP message ids.
     const stopSession = ctx.on('session/event', (session, event) => {
         if (isDisabled() || !isRoot(session)) return;
         if (event.type === 'turn/start') {
@@ -91,7 +93,7 @@ function applyWithOutput(ctx: Context, output: fs.WriteStream, isDisabled: () =>
             if (event.data.reason.kind !== 'completed' || state.mixed || !finalText?.trim()) return;
             send({ kind: 'reply', engineSessionId: session.id, turn: state.turn, text: finalText });
         }
-    });
+    }, { prepend: true });
     return () => {
         stopClaimed();
         stopSession();

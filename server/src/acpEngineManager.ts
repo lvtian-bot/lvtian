@@ -714,6 +714,7 @@ export class AcpEngineManager {
         let pendingBackground: string | null = null;
         let shouldRotate = false;
         let promptedEngineSession: string | undefined;
+        let replyScope: { bridge: AutonomousJobReplyBridge; engineSessionId: string } | undefined;
 
         try {
             // Freeze legacy/new-session fallback before background state/usage writes move updatedAt.
@@ -813,6 +814,7 @@ export class AcpEngineManager {
                 toolProgress: new Map(),
                 committedText: '',
             };
+            if (this.replyBridge) replyScope = { bridge: this.replyBridge, engineSessionId };
             this.runtimes.set(sessionId, runtime);
 
             // 构建 Prompt：轮换或底层会话断档时注入预制背景提要与关键原文锚定，温热心流期沿用常规 Prompt
@@ -894,7 +896,7 @@ export class AcpEngineManager {
                 }
             );
 
-            await this.replyBridge?.drain();
+            await replyScope?.bridge.drain(engineSessionId);
             if (this.timedOutSessions.has(sessionId)) return;
 
             // 检查在此轮 prompt 执行期间是否已被中断停止（例如收到手动取消或交接流程中断）
@@ -957,6 +959,7 @@ export class AcpEngineManager {
             });
             this.sessionManager.setTaskState(sessionId, 'error');
         } finally {
+            replyScope?.bridge.release(replyScope.engineSessionId);
             const timedOut = this.timedOutSessions.delete(sessionId);
             this.runtimes.delete(sessionId);
             this.activeSessions.delete(sessionId);
@@ -1026,7 +1029,7 @@ export class AcpEngineManager {
                     const hasTool = type === 'tool_call' || type === 'tool_call_update';
                     const id = hasMessage ? update.messageId : hasTool ? update.toolCallId : undefined;
                     if ((hasMessage || hasTool) && typeof id !== 'string') return;
-                    this.replyBridge.route(engineId, id, apply);
+                    this.replyBridge.route(engineId, id, apply, () => Buffer.byteLength(JSON.stringify(update)));
                 } else apply();
             }
         );

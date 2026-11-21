@@ -65,8 +65,8 @@ export function buildChatTurns(messages: AssistantMessage[]): ChatTurn[] {
             turnsById.set(current.id, current);
             continue;
         }
-        // 定时任务的后台汇报不是对当前用户请求的回答，不能并进上一轮。
-        if (message.source === 'native_task_report') continue;
+        // 后台汇报独立显示在主聊天，不计入任何用户请求的工作记录。
+        if (message.source === 'native_task_report' || message.source === 'autonomous_job_reply') continue;
         if (message.role !== 'assistant') continue;
         const target = message.replyTo ? turnsById.get(message.replyTo) : current;
         if (!target) continue;

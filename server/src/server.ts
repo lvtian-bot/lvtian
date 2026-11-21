@@ -71,9 +71,10 @@ export class LvtianServer {
         const id = 'job-reply-' + createHash('sha256').update(`${reply.engineSessionId}:${reply.turn}`).digest('hex');
         const session = this.sessionManager.getOrCreateSession(sessionId);
         if (session.messages.some(message => message.id === id)) return;
+        this.appendPendingReport(sessionId, `[后台作业回复 ${id}]`, reply.text);
         const timestamp = Date.now();
         this.sessionManager.addMessage(sessionId, {
-            id, role: 'assistant', content: reply.text, status: 'done', timestamp, completedAt: timestamp,
+            id, role: 'assistant', source: 'autonomous_job_reply', content: reply.text, status: 'done', timestamp, completedAt: timestamp,
         });
         this.sessionManager.persistDurableMessage(sessionId, id);
         this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
@@ -1094,6 +1095,14 @@ export class LvtianServer {
         this.executeAssistantPrompt(sessionId, nextQueued.content, nextQueued.attachments, nextQueued.id);
     }
 
+    /** Preserve results that arrived after the handoff summary was prepared. */
+    private appendPendingReport(sessionId: string, marker: string, text: string): void {
+        const background = this.sessionManager.getPendingBackground(sessionId);
+        if (!background) return;
+        const updated = background.includes(marker) ? background : `${background}\n\n${marker}\n${text}`;
+        this.sessionManager.setPendingBackground(sessionId, updated, true);
+    }
+
     /** Deliver through the SAME main ACP agent, never as a synthetic user message.
      * Buffer model output until terminal success, then persist outbox before publishing a stable-ID message. */
     private async reportNativeTask(report: TaskReport): Promise<boolean> {
@@ -1155,12 +1164,7 @@ export class LvtianServer {
                 });
             }
             // A pre-generated handoff must not silently omit reports received after it was built.
-            const background = this.sessionManager.getPendingBackground(sessionId);
-            const marker = `[后台任务报告 ${report.id}]`;
-            if (background) {
-                const updated = background.includes(marker) ? background : `${background}\n\n${marker}\n${existing?.content ?? report.reply}`;
-                this.sessionManager.setPendingBackground(sessionId, updated, true);
-            }
+            this.appendPendingReport(sessionId, `[后台任务报告 ${report.id}]`, existing?.content ?? report.reply!);
             this.sessionManager.persistDurableMessage(sessionId, messageId);
             store.delivered(report.id);
             // Full state reconciles both currently-online and reconnecting clients. No internal input is exposed.

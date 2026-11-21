@@ -42,11 +42,14 @@ test('real ACP child publishes a job-notice reply after the user request closes,
     });
     assert.equal(terminal?.[0], 'done', JSON.stringify(terminal));
     assert.equal(text, '普通回复');
+    sessions.setPendingBackground('main', '已有摘要：作业仍在运行', true);
     const waitLimit = Date.now() + 6000;
     while (!sessions.getOrCreateSession('main').messages.some(message => message.id.startsWith('job-reply-')) && Date.now() < waitLimit) {
         await new Promise(resolve => setTimeout(resolve, 25));
     }
-    const persisted = new SessionManager(dataDir).getOrCreateSession('main').messages;
-    assert.deepEqual(persisted.filter(message => message.id.startsWith('job-reply-')).map(message => [message.role, message.status, message.content]),
-        [['assistant', 'done', '后台结果：已完成']]);
+    const reloaded = new SessionManager(dataDir);
+    const persisted = reloaded.getOrCreateSession('main').messages.filter(message => message.id.startsWith('job-reply-'));
+    assert.deepEqual(persisted.map(message => [message.role, message.source, message.status, message.content]),
+        [['assistant', 'autonomous_job_reply', 'done', '后台结果：已完成']]);
+    assert.equal(reloaded.getPendingBackground('main'), `已有摘要：作业仍在运行\n\n[后台作业回复 ${persisted[0].id}]\n后台结果：已完成`);
 });
