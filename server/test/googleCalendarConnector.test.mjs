@@ -55,6 +55,16 @@ test('connect verifies backend, consumes state once, and disconnect discards con
     assert.deepEqual(await connector.status(), { status: 'disconnected' });
 });
 
+test('a transient Google outage preserves the local disconnect action', async t => {
+    const { connector, setVerify } = await fixture(t);
+    await connector.connect();
+    assert.equal(await connector.callback(state, 'synthetic-code'), true);
+    setVerify(null);
+    assert.deepEqual(await connector.status(), { status: 'verification_unavailable', account: 'calendar@example.com' });
+    assert.deepEqual(await connector.disconnect(), { status: 'disconnected' });
+    assert.deepEqual(await connector.status(), { status: 'disconnected' });
+});
+
 test('rejects an extra scope and preserves a verified connection when consent is declined', async t => {
     const { connector, extraScope } = await fixture(t);
     extraScope(' https://www.googleapis.com/auth/calendar');

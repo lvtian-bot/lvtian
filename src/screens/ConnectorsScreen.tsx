@@ -11,12 +11,13 @@ export function ConnectorsScreen() {
     const { availability, snapshot, busy, failure, refresh, connect, disconnect } = useGoogleCalendarConnector();
     const status = snapshot?.status;
     const showConnect = status === 'disconnected' || status === 'connected' || status === 'needs_reauth' || status === 'authorizing';
-    const showDisconnect = status === 'connected' || status === 'needs_reauth' || status === 'authorizing';
+    const verificationUnavailable = status === 'verification_unavailable';
+    const showDisconnect = status === 'connected' || status === 'needs_reauth' || status === 'authorizing' || verificationUnavailable;
     const note = availability === 'offline'
         ? t('settings.agentOfflineDesc')
-        : status === 'unavailable' || status === 'unsupported' || status === 'authorizing'
-            ? t(`connectors.notes.${status}`)
-            : undefined;
+        : verificationUnavailable ? t('connectors.errors.statusFailed')
+            : status === 'unavailable' || status === 'unsupported' || status === 'authorizing'
+                ? t(`connectors.notes.${status}`) : undefined;
     const confirmDisconnect = () => {
         if (!disconnect) return;
         Alert.alert(
@@ -28,10 +29,10 @@ export function ConnectorsScreen() {
             ],
         );
     };
-    const badge = status ? t(`connectors.status.${status}`)
+    const badge = status ? t(`connectors.status.${verificationUnavailable ? 'unknown' : status}`)
         : availability === 'offline' ? undefined
             : failure && !busy ? t('connectors.status.unknown') : t('assistant.remoteValuePending');
-    const showRetry = Boolean(failure && refresh);
+    const showRetry = Boolean((failure || verificationUnavailable) && refresh);
     const showRefresh = showRetry || status === 'authorizing';
 
     return (

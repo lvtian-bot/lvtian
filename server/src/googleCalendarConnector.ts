@@ -12,7 +12,7 @@ const GOOGLE_AUTH = 'https://accounts.google.com/o/oauth2/auth';
 const SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/calendar.readonly'];
 
 export type GoogleCalendarStatus = {
-    status: 'unavailable' | 'disconnected' | 'authorizing' | 'connected' | 'needs_reauth';
+    status: 'unavailable' | 'disconnected' | 'authorizing' | 'connected' | 'needs_reauth' | 'verification_unavailable';
     account?: string;
 };
 export class GoogleCalendarError extends Error {
@@ -175,11 +175,11 @@ export class GoogleCalendarConnector {
                 if (!verified?.isFile() || verified.size !== 64 || await fs.readFile(marker, 'utf8') !== this.configFingerprint()) {
                     return { status: 'needs_reauth' };
                 }
-                const result = await this.verify(home);
+                const result = await this.verify(home).catch(() => ({ code: null }));
                 if (result.code === 0) return { status: 'connected', account: this.config!.account };
                 // v0.48 exit 4: missing/revoked authorization or insufficient scope. Don't diagnose outages as revocation.
                 if (result.code === 4) return { status: 'needs_reauth', account: this.config!.account };
-                return { status: 'unavailable' };
+                return { status: 'verification_unavailable', account: this.config!.account };
             } catch {
                 return { status: 'unavailable' };
             }

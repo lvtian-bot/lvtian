@@ -20,7 +20,7 @@
 
 前三个接口使用绿天已有的 HTTP Bearer 鉴权。授权必须使用 HTTPS；运营侧应确保反向代理、监控与访问日志不记录回调查询字符串。浏览器回调页只提示返回 App 查看状态。
 
-状态：`unavailable`（未配置或不可用）、`disconnected`（未连接）、`authorizing`（正在授权）、`connected`（后台验证通过）、`needs_reauth`（需重新授权）。`connected` 不表示任何个人自动化已启用。
+状态：`unavailable`（未配置或不可用）、`disconnected`（未连接）、`authorizing`（正在授权）、`connected`（后台验证通过）、`needs_reauth`（需重新授权）、`verification_unavailable`（已有连接但暂时无法验证，仍可断开）。`connected` 不表示任何个人自动化已启用。
 
 ## 服务端开关与 Google 配置
 

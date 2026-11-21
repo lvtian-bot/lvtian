@@ -4,7 +4,7 @@ import { AssistantClient } from './AssistantClient';
 const CONNECTOR_PATH = '/api/connectors/google-calendar';
 const REQUEST_TIMEOUT_MS = 10000;
 
-type ConnectorStatus = 'unavailable' | 'disconnected' | 'authorizing' | 'connected' | 'needs_reauth';
+type ConnectorStatus = 'unavailable' | 'disconnected' | 'authorizing' | 'connected' | 'needs_reauth' | 'verification_unavailable';
 export interface GoogleCalendarStatus {
     status: ConnectorStatus;
     account?: string;
@@ -19,7 +19,7 @@ function parseStatus(data: unknown): GoogleCalendarStatus {
     if (!data || typeof data !== 'object' || !('status' in data)) throw new Error('invalid_status');
     const status = data.status;
     if (status !== 'unavailable' && status !== 'disconnected' && status !== 'authorizing'
-        && status !== 'connected' && status !== 'needs_reauth') throw new Error('invalid_status');
+        && status !== 'connected' && status !== 'needs_reauth' && status !== 'verification_unavailable') throw new Error('invalid_status');
     const account = 'account' in data ? data.account : undefined;
     if (account !== undefined && typeof account !== 'string') throw new Error('invalid_account');
     return { status, account };
