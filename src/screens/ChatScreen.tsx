@@ -53,7 +53,7 @@ import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ChatAttachment } from '../types/assistantProtocol';
 import { getAssistantDisplayParts } from '../utils/assistantMessageParts';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
-import { ChatBubbleText } from '../components/ChatBubbleText';
+import { ChatBubbleText, ChatSendingSlot } from '../components/ChatBubbleText';
 import { formatChatDate, formatChatTime, isPlainChatText, startsChatDay } from '../utils/chatDate';
 import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -180,6 +180,7 @@ export const ChatScreen = () => {
         messages,
         taskState,
         pendingApprovals,
+        pendingSendQueue,
         skills,
         setServerConfig,
     } = useAssistantStore();
@@ -187,6 +188,22 @@ export const ChatScreen = () => {
     const [inputContent, setInputContent] = useState('');
     const [retryingStorage, setRetryingStorage] = useState(false);
     const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+    const [submittedId, setSubmittedId] = useState<string>();
+    const taskRunning = taskState === 'processing' || taskState === 'awaiting_approval';
+    const submittedStatus = submittedId ? messages.find(message => message.id === submittedId)?.status : undefined;
+    const awaitingStart = Boolean(submittedId) && !taskRunning && connectionState === 'connected' && !isServerUpgrading
+        && (submittedStatus === 'sending' || submittedStatus === 'sent')
+        && !pendingSendQueue.some(item => item.messageId === submittedId);
+    useEffect(() => {
+        if (!submittedId) return;
+        if (!awaitingStart) {
+            setSubmittedId(undefined);
+        } else if (submittedStatus === 'sent') {
+            // A duplicate acknowledgement may have no following task event.
+            const timer = setTimeout(() => setSubmittedId(undefined), 500);
+            return () => clearTimeout(timer);
+        }
+    }, [submittedId, submittedStatus, awaitingStart]);
     const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
     const pendingAttachmentsRef = useRef<ChatAttachment[]>([]);
     const updatePendingAttachments = useCallback((attachments: ChatAttachment[]) => {
@@ -586,7 +603,8 @@ export const ChatScreen = () => {
             Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
             return;
         }
-        AssistantClient.getInstance().sendMessage(text, attachments.length > 0 ? attachments : undefined);
+        const messageId = AssistantClient.getInstance().sendMessage(text, attachments.length > 0 ? attachments : undefined);
+        setSubmittedId(taskRunning ? undefined : messageId);
         setInputContent('');
         updatePendingAttachments([]);
         const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
@@ -775,7 +793,7 @@ export const ChatScreen = () => {
                 windowSize={11}
                 renderScrollComponent={renderChatScrollComponent}
                 ListFooterComponent={renderListFooter}
-                ListHeaderComponent={taskState === 'processing' || taskState === 'awaiting_approval'
+                ListHeaderComponent={taskRunning
                     ? <TypingIndicator /> : undefined}
                 extraData={`${dateNow}-${chatI18n.language}`}
                 renderItem={({ item, index }) => {
@@ -787,9 +805,9 @@ export const ChatScreen = () => {
                         : [];
                     const lastTextPartKey = [...assistantParts].reverse().find((part) => part.type === 'text')?.key;
                     // Status changes must not move the clock from a footer into
-                    // the body after acknowledgement. Status controls stay separate.
+                    // the body after acknowledgement. Only actionable states need a footer.
                     const inlineUserTime = isUser && Boolean(item.content);
-                    const showUserStatus = isUser && ['sending', 'queued', 'error'].includes(item.status);
+                    const showUserStatus = isUser && (item.status === 'queued' || item.status === 'error');
                     // Data is newest-first, while each cell remains top-to-bottom.
                     const showDate = startsChatDay(item.timestamp, displayMessages[index + 1]?.timestamp);
                     const hasProseBubble = isUser || Boolean(item.attachments?.length ||
@@ -881,7 +899,7 @@ export const ChatScreen = () => {
 
                                 {isUser ? (
                                     <View>
-                                        {inlineUserTime ? <ChatBubbleText text={item.content} time={time}
+                                        {inlineUserTime ? <ChatBubbleText text={item.content} time={time} sending={item.status === 'sending'}
                                             textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} /> : <Text
                                             style={[
                                                 styles.userText,
@@ -938,9 +956,7 @@ export const ChatScreen = () => {
                                     >
                                         {!isUser && item.completedAt ? formatChatTime(item.completedAt, chatI18n.language) : time}
                                     </Text>}
-                                    {isUser && item.status === 'sending' && (
-                                        <ActivityIndicator size={10} color={theme.colors.primaryDark} style={styles.statusMargin} />
-                                    )}
+                                    {isUser && !inlineUserTime && <ChatSendingSlot sending={item.status === 'sending'} />}
                                     {isUser && item.status === 'error' && (
                                         <TouchableOpacity
                                             onPress={() => {
@@ -1195,7 +1211,7 @@ export const ChatScreen = () => {
                             >
                                 <Icon name="arrow-upward" size={18} color={theme.colors.white} />
                             </TouchableOpacity>
-                        ) : (taskState === 'processing' || taskState === 'awaiting_approval') ? (
+                        ) : taskRunning ? (
                             <TouchableOpacity
                                 style={styles.stopBtnActive}
                                 onPress={handleStop}
@@ -1207,7 +1223,7 @@ export const ChatScreen = () => {
                             </TouchableOpacity>
                         ) : (
                             <TouchableOpacity
-                                style={[styles.sendBtnActive, styles.sendBtnDisabled]}
+                                style={[styles.sendBtnActive, !awaitingStart && styles.sendBtnDisabled]}
                                 disabled
                                 accessibilityRole="button"
                                 accessibilityLabel={t('common.send', '发送')}

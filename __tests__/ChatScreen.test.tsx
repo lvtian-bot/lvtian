@@ -152,6 +152,38 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(sendButton().props.disabled).toBe(true);
     });
 
+    it.each(['processing', 'queued', 'error', 'disconnected'] as const)('在线发送保持箭头底色，按实际状态 %s 恢复操作', async (outcome) => {
+        const outgoing = { id: 'submitted', role: 'user', content: '你好', status: 'sending', seq: 0, timestamp: Date.now() } as const;
+        jest.spyOn(AssistantClient.getInstance(), 'sendMessage').mockImplementation(() => {
+            useAssistantStore.getState().addOrUpdateMessage(outgoing);
+            return outgoing.id;
+        });
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const root = currentRenderer!.root;
+        const sendButton = () => root.findAllByType(TouchableOpacity).find(button =>
+            /^(发送|Send)$/.test(button.props.accessibilityLabel))!;
+        const color = () => StyleSheet.flatten(sendButton().props.style).backgroundColor;
+        await ReactTestRenderer.act(async () => root.findByType(TextInput).props.onChangeText(outgoing.content));
+        await ReactTestRenderer.act(async () => sendButton().props.onPress());
+        expect(sendButton().props.disabled).toBe(true);
+        expect(sendButton().props.onPress).toBeUndefined();
+        expect(color()).toBe('#60A5FA');
+        if (outcome === 'processing') {
+            await ReactTestRenderer.act(async () => useAssistantStore.getState().addOrUpdateMessage({ ...outgoing, status: 'sent' }));
+            expect(color()).toBe('#60A5FA');
+            await ReactTestRenderer.act(async () => useAssistantStore.getState().setTaskState('processing'));
+            expect(root.findAllByType(TouchableOpacity).some(button => /停止执行|Stop/i.test(button.props.accessibilityLabel))).toBe(true);
+        } else {
+            await ReactTestRenderer.act(async () => {
+                if (outcome === 'disconnected') useAssistantStore.getState().setConnectionState(outcome);
+                else useAssistantStore.getState().addOrUpdateMessage({ ...outgoing, status: outcome });
+            });
+            expect(color()).toBe('#C4CBD6');
+        }
+    });
+
     it('当 AI 执行任务中且输入框为空时，渲染停止正方形且不渲染黄色悬浮条；输入内容切换为发送箭头', async () => {
         const stopSpy = jest.spyOn(AssistantClient.getInstance(), 'stopExecution').mockReturnValue(true);
         await ReactTestRenderer.act(async () => {

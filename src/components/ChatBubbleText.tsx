@@ -1,5 +1,5 @@
-import React, { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, Text, View, useWindowDimensions, type StyleProp, type TextStyle } from 'react-native';
+import React, { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { theme } from '../utils/theme';
 import { auxFontSizes } from '../utils/fontSize';
 import { useBubbleLayoutPolicy, useBubbleLayoutReady } from './ChatBubbleReveal';
@@ -12,6 +12,21 @@ interface ChatBubbleTextProps {
     children?: ReactNode;
     fullWidth?: boolean;
     clockTestID?: string;
+    /** For outgoing messages the clock always includes the same status slot. */
+    sending?: boolean;
+}
+
+function DelayedSendingIndicator() {
+    const [visible, setVisible] = useState(false);
+    useEffect(() => {
+        const timer = setTimeout(() => setVisible(true), 250);
+        return () => clearTimeout(timer);
+    }, []);
+    return visible ? <ActivityIndicator size={10} color={theme.colors.primaryDark} /> : null;
+}
+
+export function ChatSendingSlot({ sending }: { sending: boolean }) {
+    return <View style={styles.sendingSlot}>{sending && <DelayedSendingIndicator />}</View>;
 }
 
 interface LineBounds {
@@ -29,7 +44,7 @@ export function ChatBubbleText(props: ChatBubbleTextProps) {
 }
 
 function MeasuredBubbleText({ text, time, textStyle, children, fullWidth = false,
-    clockTestID = 'inline-bubble-time' }: ChatBubbleTextProps) {
+    clockTestID = 'inline-bubble-time', sending }: ChatBubbleTextProps) {
     const { streaming, footerFallback } = useBubbleLayoutPolicy();
     const hasStreamed = useRef(streaming);
     useLayoutEffect(() => { if (streaming) hasStreamed.current = true; }, [streaming]);
@@ -61,6 +76,22 @@ function MeasuredBubbleText({ text, time, textStyle, children, fullWidth = false
     const placement = footerFallback ? { inline: false, top: 0 }
         : measured ? { inline, top } : previousPlacement.current;
 
+    const clockStyle = [styles.clock, row && styles.rowClock,
+        !row && !streaming && placement?.inline && styles.inlineClock,
+        !row && !streaming && placement?.inline && { top: placement.top },
+        !ready && !row && ((!placement || streaming) ? styles.pendingClock : styles.hiddenClock),
+    ];
+    const clockProps = {
+        testID: clockTestID, accessible: false, accessibilityElementsHidden: true,
+        importantForAccessibility: 'no-hide-descendants' as const, pointerEvents: 'none' as const,
+        onLayout: (event: LayoutChangeEvent) => {
+            if (committed.current.time !== time) return;
+            const { width: clockWidth, height } = event.nativeEvent.layout;
+            setClock((previous) => previous?.time === time && previous.width === clockWidth && previous.height === height
+                ? previous : { time, width: clockWidth, height });
+        },
+    };
+
     return (
         <View style={[styles.container, fullWidth && styles.fullWidth, row && styles.row]}
             onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
@@ -77,18 +108,12 @@ function MeasuredBubbleText({ text, time, textStyle, children, fullWidth = false
                 }}>
                 {children ?? text}
             </Text>
-            {time ? <Text key={time} style={[styles.clock, row && styles.rowClock,
-                !row && !streaming && placement?.inline && styles.inlineClock,
-                !row && !streaming && placement?.inline && { top: placement.top },
-                !ready && !row && ((!placement || streaming) ? styles.pendingClock : styles.hiddenClock),
-            ]} testID={clockTestID} accessible={false} selectable={false}
-                onLayout={(event) => {
-                    if (committed.current.time !== time) return;
-                    const { width: clockWidth, height } = event.nativeEvent.layout;
-                    setClock((previous) => previous?.time === time && previous.width === clockWidth && previous.height === height
-                        ? previous : { time, width: clockWidth, height });
-                }}
-                accessibilityElementsHidden importantForAccessibility="no-hide-descendants" pointerEvents="none">{time}</Text> : null}
+            {Boolean(time) && (sending === undefined
+                ? <Text key={time} {...clockProps} style={[clockStyle, styles.clockText]} selectable={false}>{time}</Text>
+                : <View key={time} {...clockProps} style={[clockStyle, styles.outgoingClock]}>
+                    <Text style={styles.clockText} selectable={false}>{time}</Text>
+                    <ChatSendingSlot sending={sending} />
+                </View>)}
         </View>
     );
 }
@@ -99,7 +124,10 @@ const styles = StyleSheet.create({
     row: { flexDirection: 'row', alignItems: 'flex-end' },
     rowBody: { flexShrink: 1, minWidth: 0 },
     rowClock: { marginLeft: 8, marginTop: 0, flexShrink: 0 },
-    clock: { alignSelf: 'flex-end', marginTop: 2, fontSize: auxFontSizes.badge, color: theme.colors.textSecondary },
+    clock: { alignSelf: 'flex-end', marginTop: 2 },
+    outgoingClock: { flexDirection: 'row', alignItems: 'center' },
+    sendingSlot: { width: 14, height: 10, alignItems: 'flex-end', justifyContent: 'center' },
+    clockText: { fontSize: auxFontSizes.badge, color: theme.colors.textSecondary },
     inlineClock: { position: 'absolute', right: 0, marginTop: 0 },
     // Streaming prose remains visible; an unmeasured clock must not create a
     // provisional footer or flash at the wrong edge while native callbacks arrive.

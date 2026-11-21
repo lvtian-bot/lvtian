@@ -1,8 +1,8 @@
 import React from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
 import * as ReactNative from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
-import { ChatBubbleText } from '../src/components/ChatBubbleText';
+import { ChatBubbleText, ChatSendingSlot } from '../src/components/ChatBubbleText';
 import { ChatMarkdownBubble } from '../src/components/ChatMarkdownBubble';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { ToolCallsCard } from '../src/components/ToolCallsCard';
@@ -48,6 +48,7 @@ describe('bubble rendering', () => {
     let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
     afterEach(async () => {
         await ReactTestRenderer.act(async () => renderer?.unmount());
+        renderer = undefined;
         jest.restoreAllMocks();
     });
     it('groups adjacent calls without losing order or mutating message data', () => {
@@ -244,7 +245,8 @@ describe('bubble rendering', () => {
         });
         const renderItem = renderer!.root.findByType(FlatList).props.renderItem;
         let previousBody: ReactTestRenderer.ReactTestInstance | undefined;
-        for (const status of ['sending', 'queued', 'error', 'sent'] as const) {
+        let previousSlot: ReactTestRenderer.ReactTestInstance | undefined;
+        for (const status of ['sending', 'sent', 'queued', 'error'] as const) {
             await ReactTestRenderer.act(async () => renderer!.update(renderItem({
                 item: message({ id: 'user', role: 'user', content: 'first\nlast', status }), index: 0,
             })));
@@ -252,9 +254,43 @@ describe('bubble rendering', () => {
             const text = bubble.findByType(ChatBubbleText);
             expect(text.props.text).toBe('first\nlast');
             expect(bubble.findAllByType(Text).filter(node => node.props.children === '12:05')).toHaveLength(1);
+            const slot = text.findByType(ChatSendingSlot);
+            expect(slot.props.sending).toBe(status === 'sending');
+            if (previousSlot) expect(slot).toBe(previousSlot);
+            previousSlot = slot;
+            // An ordinary acknowledgement must not add/remove a footer underneath the body.
+            expect(React.Children.toArray(bubble.props.children)).toHaveLength(status === 'sending' || status === 'sent' ? 1 : 2);
             const selectable = text.findAllByType(Text).find(node => node.props.selectable === true)!;
             if (previousBody) expect(selectable).toBe(previousBody);
             previousBody = selectable;
+        }
+    });
+    it('shows slow delivery inside a fixed slot and suppresses the spinner for a fast acknowledgement', async () => {
+        jest.useFakeTimers();
+        const update = async (sending: boolean) => {
+            await ReactTestRenderer.act(async () => {
+                const slot = <ChatSendingSlot sending={sending} />;
+                if (renderer) renderer.update(slot);
+                else renderer = ReactTestRenderer.create(slot);
+            });
+        };
+        const spinners = () => renderer!.root.findAllByType(ActivityIndicator);
+        try {
+            await update(true);
+            expect(spinners()).toHaveLength(0);
+            await update(false);
+            await ReactTestRenderer.act(async () => { jest.advanceTimersByTime(300); });
+            expect(spinners()).toHaveLength(0);
+            await update(true);
+            await ReactTestRenderer.act(async () => { jest.advanceTimersByTime(250); });
+            expect(spinners()).toHaveLength(1);
+            const slotView = renderer!.root.findByType(View);
+            expect(StyleSheet.flatten(slotView.props.style)).toMatchObject({ width: 14, height: 10 });
+            await update(false);
+            expect(spinners()).toHaveLength(0);
+            expect(renderer!.root.findByType(View)).toBe(slotView);
+        } finally {
+            jest.useRealTimers();
         }
     });
     it('renders grouped cards at a definite width with two-line summaries and independent detail state', async () => {
