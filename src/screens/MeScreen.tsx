@@ -184,6 +184,11 @@ export const MeScreen = () => {
                             onPress={() => navigation.navigate('AgentConfig')}
                         />
                         <SettingsRow
+                            title={t('connectors.title')}
+                            icon="connection"
+                            onPress={() => navigation.navigate('Connectors')}
+                        />
+                        <SettingsRow
                             title={t('tabs.files', '系统文件')}
                             icon="folder-outline"
                             onPress={() => navigation.navigate('ServerFileList')}

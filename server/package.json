@@ -24,6 +24,7 @@
     "@deepseek-ai/dsh-acp": "0.2.2-rc.4",
     "@deepseek-ai/dsh-agent": "0.2.2-rc.4",
     "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.4",
+    "i18next": "^25.10.10",
     "ws": "^8.18.0",
     "yaml": "^2.9.1"
   },
