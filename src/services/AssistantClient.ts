@@ -608,10 +608,7 @@ export class AssistantClient {
     }
 
     private cleanUpWs(): void {
-        clearTimeout(this.retryTimer);
-        this.retryTimer = undefined;
-        this.sendingId = undefined;
-        this.inFlightSentId = undefined;
+        this.releaseSendLock();
         this.serverSynced = false;
         this.awaitingFullSnapshot = false;
         this.clearPhaseTimeout();
@@ -797,24 +794,31 @@ export class AssistantClient {
         }
     }
 
+    private releaseSendLock(messageId?: string): boolean {
+        let released = false;
+        if (!messageId || this.sendingId === messageId) {
+            released = this.sendingId !== undefined || this.retryTimer !== undefined;
+            this.sendingId = undefined;
+            clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
+        }
+        if (!messageId || this.inFlightSentId === messageId) {
+            this.inFlightSentId = undefined;
+        }
+        return released;
+    }
+
     private markPendingMessageFailed(
         messageId: string,
         diagnosticReason: OperationReasons['chat_send'],
         errorMessage?: string
     ): void {
-        recordOperation('chat_send', diagnosticReason);
         this.sendRetries.delete(messageId);
-        if (this.sendingId === messageId) {
-            this.sendingId = undefined;
-            clearTimeout(this.retryTimer);
-            this.retryTimer = undefined;
-        }
-        if (this.inFlightSentId === messageId) {
-            this.inFlightSentId = undefined;
-        }
+        this.releaseSendLock(messageId);
         const store = useAssistantStore.getState();
         const pendingItem = store.pendingSendQueue.find(item => item.messageId === messageId && !item.withdrawal);
         if (!pendingItem) return;
+        recordOperation('chat_send', diagnosticReason);
         store.addToPendingSendQueue({ ...pendingItem, failed: true });
         const existing = store.messages.find(message => message.id === messageId);
         store.addOrUpdateMessage({
@@ -835,10 +839,19 @@ export class AssistantClient {
         immediate: boolean
     ): void {
         const store = useAssistantStore.getState();
+        if (store.isServerUpgrading) {
+            this.releaseSendLock(messageId);
+            return;
+        }
         const pendingItem = store.pendingSendQueue.find(
             item => item.messageId === messageId && !item.withdrawal && !item.failed
         );
-        if (!pendingItem) return;
+        if (!pendingItem) {
+            this.sendRetries.delete(messageId);
+            const releasedLock = this.releaseSendLock(messageId);
+            if (releasedLock) this.flushPendingSendQueue();
+            return;
+        }
         const retries = (this.sendRetries.get(messageId) ?? 0) + 1;
         if (retries > MAX_AUTO_SEND_RETRIES) {
             this.markPendingMessageFailed(messageId, diagnosticReason);
@@ -847,14 +860,7 @@ export class AssistantClient {
         }
         this.sendRetries.set(messageId, retries);
         if (immediate) {
-            if (this.sendingId === messageId) {
-                this.sendingId = undefined;
-                clearTimeout(this.retryTimer);
-                this.retryTimer = undefined;
-            }
-            if (this.inFlightSentId === messageId) {
-                this.inFlightSentId = undefined;
-            }
+            this.releaseSendLock(messageId);
             this.flushPendingSendQueue();
             return;
         }
@@ -877,6 +883,9 @@ export class AssistantClient {
     public async flushPendingSendQueue(): Promise<void> {
         const store = useAssistantStore.getState();
         const sendingSocket = this.ws;
+        if (this.sendingId && !store.pendingSendQueue.some(q => q.messageId === this.sendingId && !q.withdrawal && !q.failed)) {
+            this.releaseSendLock(this.sendingId);
+        }
         if (this.sendingId || store.connectionState !== 'connected' || store.isServerUpgrading || store.outboxStatus !== 'ready') return;
         const nextItem = store.pendingSendQueue.find(item => !item.withdrawal && !item.failed);
         if (!nextItem) return;
@@ -897,9 +906,13 @@ export class AssistantClient {
 
         const current = useAssistantStore.getState();
         if (this.ws !== sendingSocket || this.sendingId !== nextItem.messageId) return;
-        if (current.connectionState !== 'connected' || current.isServerUpgrading ||
-            !current.pendingSendQueue.some(q => q.messageId === nextItem.messageId && !q.withdrawal && !q.failed)) {
+        if (current.connectionState !== 'connected' || current.isServerUpgrading) {
             this.sendingId = undefined;
+            return;
+        }
+        if (!current.pendingSendQueue.some(q => q.messageId === nextItem.messageId && !q.withdrawal && !q.failed)) {
+            this.sendingId = undefined;
+            this.flushPendingSendQueue();
             return;
         }
         if (!nextItem.attempted) current.addToPendingSendQueue({ ...nextItem, attempted: true });
@@ -930,6 +943,11 @@ export class AssistantClient {
         clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => {
             if (this.ws !== sendingSocket || this.sendingId !== nextItem.messageId) return;
+            const latestStore = useAssistantStore.getState();
+            if (latestStore.isServerUpgrading || latestStore.connectionState !== 'connected') {
+                this.releaseSendLock(nextItem.messageId);
+                return;
+            }
             this.inFlightSentId = undefined;
             this.handleRetryableSendFailure(nextItem.messageId, 'send_ack_timeout', true);
         }, timeoutMs);
@@ -990,14 +1008,7 @@ export class AssistantClient {
         const item = store.pendingSendQueue.find(q => q.messageId === messageId && !q.withdrawal);
         if (!item) return;
         this.sendRetries.delete(messageId);
-        if (this.inFlightSentId === messageId) {
-            this.inFlightSentId = undefined;
-        }
-        if (this.sendingId === messageId) {
-            this.sendingId = undefined;
-            clearTimeout(this.retryTimer);
-            this.retryTimer = undefined;
-        }
+        this.releaseSendLock(messageId);
         if (item.attempted === false) {
             if (action === 'cancel') store.removeMessage(messageId);
             else store.addToPendingSendQueue({ ...item, withdrawal: 'draft', failed: undefined });
@@ -1165,13 +1176,17 @@ export class AssistantClient {
         if (current) {
             this.cancellingMessages.set(messageId, current);
         }
+        this.sendRetries.delete(messageId);
+        const releasedLock = this.releaseSendLock(messageId);
         // Remove from the send queue and enqueue the cancellation in one update.
         store.cancelPendingMessage(messageId);
-        return this.sendRaw({
+        const sent = this.sendRaw({
             type: 'cancel_queued',
             sessionId: 'main',
             messageId,
         });
+        if (releasedLock) this.flushPendingSendQueue();
+        return sent;
     }
 
     /**
@@ -1229,6 +1244,7 @@ export class AssistantClient {
             }
 
             case 'service_upgrading': {
+                this.releaseSendLock();
                 store.setIsServerUpgrading(true);
                 // 收到升级预告，重置重连计数以便进入 1 秒快速重连周期
                 this.reconnectAttempts = 0;
@@ -1238,10 +1254,7 @@ export class AssistantClient {
             case 'sync_result': {
                 this.logConnection('sync_received', { messageCount: msg.messages.length, payloadChars });
                 this.clearPhaseTimeout();
-                this.sendingId = undefined;
-                this.inFlightSentId = undefined;
-                clearTimeout(this.retryTimer);
-                this.retryTimer = undefined;
+                this.releaseSendLock();
                 this.serverSynced = true;
                 store.markChatAuthoritative();
                 const replaceCache = this.awaitingFullSnapshot;
@@ -1326,20 +1339,14 @@ export class AssistantClient {
             case 'message_ack': {
                 const existing = store.messages.find((m) => m.id === msg.messageId);
                 const isError = msg.status === 'error';
-                if (this.sendingId === msg.messageId) {
-                    this.sendingId = undefined;
-                    clearTimeout(this.retryTimer);
-                    this.retryTimer = undefined;
-                }
-                if (this.inFlightSentId === msg.messageId) {
-                    this.inFlightSentId = undefined;
-                }
+                const releasedLock = this.releaseSendLock(msg.messageId);
                 const pendingItem = store.pendingSendQueue.find((item) => item.messageId === msg.messageId);
                 // 服务端在优雅停机排空期拒绝新任务：客户端将其重新加入本地排队队列并置为升级中态，不向用户报错
                 if (isError && msg.error === 'service_upgrading') {
-                    if (pendingItem?.withdrawal) break;
+                    this.releaseSendLock();
                     store.setIsServerUpgrading(true);
                     this.reconnectAttempts = 0;
+                    if (pendingItem?.withdrawal) break;
                     store.addOrUpdateMessage({
                         id: msg.messageId,
                         seq: msg.seq,
@@ -1360,7 +1367,10 @@ export class AssistantClient {
                 }
 
                 if (isError && msg.seq === 0) {
-                    if (pendingItem?.withdrawal || pendingItem?.failed) break;
+                    if (pendingItem?.withdrawal || pendingItem?.failed) {
+                        if (releasedLock) this.flushPendingSendQueue();
+                        break;
+                    }
                     if (!pendingItem && existing) {
                         store.addToPendingSendQueue({
                             sessionId: 'main',
@@ -1369,6 +1379,10 @@ export class AssistantClient {
                             attachments: existing.attachments,
                             attempted: true,
                         });
+                    } else if (!pendingItem) {
+                        this.sendRetries.delete(msg.messageId);
+                        if (releasedLock) this.flushPendingSendQueue();
+                        break;
                     }
                     this.handleRetryableSendFailure(msg.messageId, 'server_rejected', false);
                     break;
@@ -1488,15 +1502,18 @@ export class AssistantClient {
 
             case 'message_deleted': {
                 this.sendRetries.delete(msg.messageId);
+                const releasedLock = this.releaseSendLock(msg.messageId);
                 const item = store.pendingSendQueue.find(q => q.messageId === msg.messageId);
                 if (item?.withdrawal === 'edit' || item?.withdrawal === 'draft') {
                     store.addToPendingSendQueue({ ...item, withdrawal: 'draft' });
+                    if (releasedLock) this.flushPendingSendQueue();
                     break;
                 }
                 this.cancellingMessages.delete(msg.messageId);
                 store.removeMessage(msg.messageId);
                 store.removeFromPendingCancelQueue(msg.messageId);
                 store.removeFromPendingSendQueue(msg.messageId);
+                if (releasedLock) this.flushPendingSendQueue();
                 break;
             }
 

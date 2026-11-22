@@ -1269,4 +1269,197 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
             sendRawSpy.mockRestore();
         }
     });
+
+    test('升级等待期间不消耗重试预算也不误标失败，对账恢复后按原 ID 自动补发', async () => {
+        jest.useFakeTimers();
+        const socket = { readyState: WebSocket.OPEN, send: jest.fn(), close: jest.fn() };
+        (client as unknown as { ws: typeof socket | null }).ws = socket;
+        const sendRawSpy = jest.spyOn(
+            client as unknown as { sendRaw: (msg: { messageId?: string }) => boolean },
+            'sendRaw'
+        ).mockReturnValue(true);
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            connectionState: 'connected',
+            outboxStatus: 'ready',
+            isServerUpgrading: false,
+            messages: [
+                { id: 'm-upg-wait', seq: 0, role: 'user', content: '升级等待消息', timestamp: 1000, status: 'sending' },
+            ],
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-upg-wait', content: '升级等待消息' },
+            ],
+        });
+
+        try {
+            await client.flushPendingSendQueue();
+            expect(sendRawSpy).toHaveBeenCalledTimes(1);
+
+            // 耗尽前 3 次回执超时窗口（6s / 6s / 8s），进入第 4 段 10s 等待窗口
+            for (const timeout of [6000, 6000, 8000]) {
+                jest.advanceTimersByTime(timeout);
+                await Promise.resolve();
+            }
+            expect(sendRawSpy).toHaveBeenCalledTimes(4);
+
+            // 排空期通知到达：经过超过 ack 超时的 30s 等待也不消耗剩余预算或误标失败
+            handleServerMessage({ type: 'service_upgrading', estimatedSeconds: 30 });
+            jest.advanceTimersByTime(30000);
+            await Promise.resolve();
+            expect(sendRawSpy).toHaveBeenCalledTimes(4);
+            expect(useAssistantStore.getState().messages[0].status).toBe('sending');
+            expect(useAssistantStore.getState().pendingSendQueue[0].failed).toBeUndefined();
+
+            // 服务端恢复并下发 sync_result：解除升级态并按原 ID 自动补发
+            handleServerMessage({
+                type: 'sync_result',
+                sessionId: 'main',
+                messages: [],
+                taskState: 'idle',
+                currentSeq: 20,
+            });
+            await Promise.resolve();
+            expect(useAssistantStore.getState().isServerUpgrading).toBe(false);
+            expect(sendRawSpy).toHaveBeenCalledTimes(5);
+            expect(sendRawSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+                type: 'chat',
+                messageId: 'm-upg-wait',
+            }));
+
+            handleServerMessage({
+                type: 'message_ack',
+                messageId: 'm-upg-wait',
+                seq: 21,
+                status: 'sent',
+                role: 'user',
+            });
+            expect(useAssistantStore.getState().messages[0].status).toBe('sent');
+            expect(useAssistantStore.getState().pendingSendQueue).toHaveLength(0);
+        } finally {
+            client.disconnect();
+            sendRawSpy.mockRestore();
+            jest.useRealTimers();
+        }
+    });
+
+    test('在途消息收到 message_deleted 后立即释放发送锁并推进后续消息', async () => {
+        jest.useFakeTimers();
+        const socket = { readyState: WebSocket.OPEN, send: jest.fn(), close: jest.fn() };
+        (client as unknown as { ws: typeof socket | null }).ws = socket;
+        const sendRawSpy = jest.spyOn(
+            client as unknown as { sendRaw: (msg: { messageId?: string }) => boolean },
+            'sendRaw'
+        ).mockReturnValue(true);
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        useAssistantStore.setState({
+            connectionState: 'connected',
+            outboxStatus: 'ready',
+            messages: [
+                { id: 'm-del-1', seq: 0, role: 'user', content: '将被删除的重发消息', timestamp: 1000, status: 'sending' },
+                { id: 'm-del-2', seq: 0, role: 'user', content: '排在后面的消息', timestamp: 1001, status: 'sending' },
+            ],
+            pendingSendQueue: [
+                { sessionId: 'main', messageId: 'm-del-1', content: '将被删除的重发消息' },
+                { sessionId: 'main', messageId: 'm-del-2', content: '排在后面的消息' },
+            ],
+        });
+
+        try {
+            await client.flushPendingSendQueue();
+            expect(sendRawSpy).toHaveBeenCalledTimes(1);
+            expect(sendRawSpy).toHaveBeenLastCalledWith(expect.objectContaining({ messageId: 'm-del-1' }));
+
+            // 服务端反馈原消息已删除：立刻清除发送锁并发送 m-del-2
+            handleServerMessage({ type: 'message_deleted', sessionId: 'main', messageId: 'm-del-1' });
+            await Promise.resolve();
+            const stateAfterDelete = useAssistantStore.getState();
+            expect(stateAfterDelete.messages.some(m => m.id === 'm-del-1')).toBe(false);
+            expect(stateAfterDelete.pendingSendQueue.some(q => q.messageId === 'm-del-1')).toBe(false);
+            expect(sendRawSpy).toHaveBeenCalledTimes(2);
+            expect(sendRawSpy).toHaveBeenLastCalledWith(expect.objectContaining({ messageId: 'm-del-2' }));
+
+            handleServerMessage({ type: 'message_ack', messageId: 'm-del-2', seq: 10, status: 'sent', role: 'user' });
+            expect(useAssistantStore.getState().pendingSendQueue).toHaveLength(0);
+            const callsAfterAck = sendRawSpy.mock.calls.length;
+            jest.advanceTimersByTime(60000);
+            expect(sendRawSpy).toHaveBeenCalledTimes(callsAfterAck);
+        } finally {
+            client.disconnect();
+            sendRawSpy.mockRestore();
+            jest.useRealTimers();
+        }
+    });
+
+    test('在途消息被 cancelQueued 或从队列移除时不死锁后续消息', async () => {
+        jest.useFakeTimers();
+        const socket = { readyState: WebSocket.OPEN, send: jest.fn(), close: jest.fn() };
+        (client as unknown as { ws: typeof socket | null }).ws = socket;
+        const sendRawSpy = jest.spyOn(
+            client as unknown as { sendRaw: (msg: { type?: string; messageId?: string }) => boolean },
+            'sendRaw'
+        ).mockReturnValue(true);
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
+
+        try {
+            // 1. cancelQueued 取消正在发送的 m1，立即发送 cancel_queued 并放行 m2
+            useAssistantStore.setState({
+                connectionState: 'connected',
+                outboxStatus: 'ready',
+                messages: [
+                    { id: 'm-cq-1', seq: 0, role: 'user', content: '取消中', timestamp: 1000, status: 'sending' },
+                    { id: 'm-cq-2', seq: 0, role: 'user', content: '后续消息', timestamp: 1001, status: 'sending' },
+                ],
+                pendingSendQueue: [
+                    { sessionId: 'main', messageId: 'm-cq-1', content: '取消中' },
+                    { sessionId: 'main', messageId: 'm-cq-2', content: '后续消息' },
+                ],
+            });
+            await client.flushPendingSendQueue();
+            expect(sendRawSpy).toHaveBeenCalledTimes(1);
+
+            client.cancelQueued('m-cq-1');
+            await Promise.resolve();
+            expect(sendRawSpy).toHaveBeenNthCalledWith(2, { type: 'cancel_queued', sessionId: 'main', messageId: 'm-cq-1' });
+            expect(sendRawSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({ type: 'chat', messageId: 'm-cq-2' }));
+            handleServerMessage({ type: 'message_ack', messageId: 'm-cq-2', seq: 1, status: 'sent', role: 'user' });
+
+            // 2. 在途消息从 pendingSendQueue 意外消失时，回执超时回调清理锁并放行下一条
+            sendRawSpy.mockClear();
+            useAssistantStore.setState({
+                connectionState: 'connected',
+                outboxStatus: 'ready',
+                pendingCancelQueue: [],
+                messages: [
+                    { id: 'm-rm-3', seq: 0, role: 'user', content: '将被外部移除', timestamp: 1002, status: 'sending' },
+                    { id: 'm-rm-4', seq: 0, role: 'user', content: '等待放行', timestamp: 1003, status: 'sending' },
+                ],
+                pendingSendQueue: [
+                    { sessionId: 'main', messageId: 'm-rm-3', content: '将被外部移除' },
+                    { sessionId: 'main', messageId: 'm-rm-4', content: '等待放行' },
+                ],
+            });
+            await client.flushPendingSendQueue();
+            expect(sendRawSpy).toHaveBeenCalledTimes(1);
+            expect(sendRawSpy).toHaveBeenLastCalledWith(expect.objectContaining({ messageId: 'm-rm-3' }));
+
+            useAssistantStore.getState().removeMessage('m-rm-3');
+            jest.advanceTimersByTime(6000);
+            await Promise.resolve();
+            expect(sendRawSpy).toHaveBeenCalledTimes(2);
+            expect(sendRawSpy).toHaveBeenLastCalledWith(expect.objectContaining({ messageId: 'm-rm-4' }));
+            handleServerMessage({ type: 'message_ack', messageId: 'm-rm-4', seq: 2, status: 'sent', role: 'user' });
+        } finally {
+            client.disconnect();
+            sendRawSpy.mockRestore();
+            jest.useRealTimers();
+        }
+    });
 });
