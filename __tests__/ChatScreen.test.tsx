@@ -84,6 +84,47 @@ describe('ChatScreen 输入区与操作菜单', () => {
         await ReactTestRenderer.act(async () => row.unmount());
     });
 
+    it('选择保留原 Markdown 节点、链接样式与时间，并将选词手势交给系统', async () => {
+        const content = ['# 标题', '一段**加粗文字**', '- 列表项', '```js\nvalue\n```', '[链接](https://example.com)'].join('\n\n');
+        const item = { id: 'rich-select', seq: 1, role: 'assistant', status: 'done', content, timestamp: 1 } as const;
+        const copy = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ messages: [item] });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const root = currentRenderer!.root;
+        const renderRow = () => root.findByType(FlatList).props.renderItem({ item, index: 0 });
+        let row!: ReactTestRenderer.ReactTestRenderer;
+        await ReactTestRenderer.act(async () => { row = ReactTestRenderer.create(renderRow()); });
+        const textNodes = () => row.root.findAllByType(Text);
+        const leaves = textNodes().filter(node => ['标题', '加粗文字', '列表项', 'value', '链接'].includes(node.props.children));
+        expect(leaves).toHaveLength(5);
+        const link = textNodes().find(node => node.props.onLongPress)!;
+        const clock = row.root.findByProps({ testID: 'markdown-bubble-time' });
+        expect(leaves.every(node => node.props.selectable === false)).toBe(true);
+
+        const open = () => ReactTestRenderer.act(async () =>
+            link.props.onLongPress({ nativeEvent: { pageX: 10, pageY: 10 } }));
+        await open();
+        await ReactTestRenderer.act(async () => root.findByType(ChatMessageMenu).props.choose('copy'));
+        expect(copy).toHaveBeenCalledWith(content);
+        await open();
+        await ReactTestRenderer.act(async () => root.findByType(ChatMessageMenu).props.choose('select'));
+        await ReactTestRenderer.act(async () => row.update(renderRow()));
+
+        expect(root.findAllByType(ChatMessageMenu)).toHaveLength(0);
+        expect(row.root.findAll(node => typeof node.props.onPointerDown === 'function')[0].props.disabled).toBe(true);
+        for (const leaf of leaves) {
+            expect(textNodes()).toContain(leaf);
+            expect(leaf.props.selectable).toBe(true);
+        }
+        expect(link.props.onLongPress).toBeUndefined();
+        expect(link.props.onPress).toBeUndefined();
+        expect(row.root.findByProps({ testID: 'markdown-bubble-time' })).toBe(clock);
+        expect(clock.props.selectable).toBe(false);
+        await ReactTestRenderer.act(async () => row.unmount());
+    });
+
     it('渲染加号按钮和灰色禁用发送按钮，不渲染麦克风图标，输入上限为5000', async () => {
         await ReactTestRenderer.act(async () => {
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
