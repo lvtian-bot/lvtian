@@ -50,7 +50,7 @@ export interface AssistantMessage {
     /** Background reply shown in chat but not associated with a user request. */
     source?: 'native_task_report' | 'autonomous_job_reply';
     reportDeliveryId?: string;
-    /** 本条助手回复所回答的用户消息 id；排队时据此把回答归回对应请求 */
+    /** 助手回复或用户补充所属的首条用户消息 ID */
     replyTo?: string;
     content: string;
     timestamp: number;
@@ -77,6 +77,7 @@ export type ClientMessage =
           content: string;
           attachments?: ChatAttachment[];
       }
+    | { type: 'withdraw_unreceived'; sessionId: string; messageId: string }
     | { type: 'cancel_queued'; sessionId: string; messageId: string }
     | { type: 'approval_response'; approvalId: string; approved: boolean; reason?: string }
     | { type: 'stop'; sessionId: string }
@@ -121,6 +122,7 @@ export type ServerMessage =
       }
     | {
           type: 'message_ack';
+          replyTo?: string;
           messageId: string;
           seq: number;
           status?: 'sent' | 'queued' | 'error';
@@ -133,6 +135,7 @@ export type ServerMessage =
       }
     | {
           type: 'event_chunk';
+          replyTo?: string;
           seq: number;
           sessionId: string;
           messageId: string;

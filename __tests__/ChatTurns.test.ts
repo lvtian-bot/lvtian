@@ -61,6 +61,17 @@ describe('工作记录按轮聚合', () => {
         expect(turns[0].summary).toBe('');
     });
 
+    test('补充保留在原工作记录，收尾之后的新消息单独建轮', () => {
+        const turns = buildChatTurns([
+            message({ id: 'first', role: 'user', content: '第一条' }),
+            message({ id: 'answer', role: 'assistant', replyTo: 'first', content: '收到补充' }),
+            message({ id: 'extra', role: 'user', replyTo: 'first', content: '补充' }),
+            message({ id: 'new', role: 'user', content: '下一轮' }),
+        ]);
+        expect(turns.map(turn => turn.id)).toEqual(['new', 'first']);
+        expect(turns[1]).toMatchObject({ question: '第一条\n\n补充', status: 'done', answer: '收到补充' });
+    });
+
     test('连续排队时按 replyTo 把回答与工具归回各自请求', () => {
         const turns = buildChatTurns([
             message({ id: 'u1', role: 'user', content: '第一个问题', timestamp: 1 }),

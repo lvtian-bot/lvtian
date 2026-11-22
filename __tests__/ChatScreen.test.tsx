@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import { FlatList, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ChatMessageMenu } from '../src/components/ChatMessageMenu';
+import * as Clipboard from 'expo-clipboard';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
@@ -46,6 +48,40 @@ describe('ChatScreen 输入区与操作菜单', () => {
             currentRenderer = undefined;
         }
         jest.restoreAllMocks();
+    });
+
+    it('长按待发气泡可编辑，收件后菜单即时更新，整条复制与局部选择共享原文', async () => {
+        const content = '第一段\n\n`code`';
+        const outgoing = { id: 'menu-test', seq: 0, role: 'user', status: 'sending', content, timestamp: 1 } as const;
+        const copy = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ messages: [outgoing], pendingSendQueue: [{ sessionId: 'main', messageId: outgoing.id, content }] });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const root = currentRenderer!.root;
+        // The Jest keyboard scroll host does not mount virtualized cells.
+        const renderRow = () => root.findByType(FlatList).props.renderItem({
+            item: useAssistantStore.getState().messages[0], index: 0,
+        });
+        let row!: ReactTestRenderer.ReactTestRenderer;
+        await ReactTestRenderer.act(async () => { row = ReactTestRenderer.create(renderRow()); });
+        const open = () => ReactTestRenderer.act(async () => row.root.findAll(node => typeof node.props.onLongPress === 'function')[0]
+            .props.onLongPress({ nativeEvent: { pageX: 50, pageY: 75 } }));
+        const actions = () => root.findByType(ChatMessageMenu).findAllByType(Text).map(node => node.props.children);
+        await open();
+        expect(actions()).toEqual(['copy', 'select', 'cancel', 'edit'].map(key => i18n.t('common.' + key)));
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.getState().removeFromPendingSendQueue(outgoing.id);
+            useAssistantStore.getState().addOrUpdateMessage({ ...outgoing, status: 'sent' });
+        });
+        expect(actions()).toEqual(['copy', 'select'].map(key => i18n.t('common.' + key)));
+        await ReactTestRenderer.act(async () => root.findByType(ChatMessageMenu).props.choose('copy'));
+        expect(copy).toHaveBeenCalledWith(content);
+        await open();
+        await ReactTestRenderer.act(async () => root.findByType(ChatMessageMenu).props.choose('select'));
+        await ReactTestRenderer.act(async () => row.update(renderRow()));
+        expect(row.root.findAllByType(Text).filter(node => node.props.selectable && node.props.children === content)).toHaveLength(1);
+        await ReactTestRenderer.act(async () => row.unmount());
     });
 
     it('渲染加号按钮和灰色禁用发送按钮，不渲染麦克风图标，输入上限为5000', async () => {

@@ -3,6 +3,9 @@ import { stableHash } from '../utils/identityHash';
 import type { ChatAttachment } from '../types/assistantProtocol';
 
 export interface PendingChatMessage {
+    /** Missing on older records whose delivery is uncertain. */
+    attempted?: boolean;
+    withdrawal?: 'cancel' | 'edit' | 'draft';
     sessionId: string;
     messageId: string;
     content: string;
@@ -48,7 +51,10 @@ export async function readOutbox(key: string): Promise<ChatOutbox> {
 export async function writeOutbox(key: string, outbox: ChatOutbox): Promise<void> {
     const pendingSendQueue = outbox.pendingSendQueue.map(item => ({
         ...item,
-        attachments: item.attachments?.map(({ type, name, mimeType, size, uri }) => ({ type, name, mimeType, size, uri })),
+        // A previous process may have written to the socket after its last disk
+        // snapshot. Only a live process can prove that it never attempted this ID.
+        attempted: item.attempted || undefined,
+        attachments: item.attachments?.map(att => att.uri ? { type: att.type, name: att.name, mimeType: att.mimeType, size: att.size, uri: att.uri } : att),
     }));
     await AsyncStorage.setItem(key, JSON.stringify({ pendingSendQueue, pendingCancelQueue: outbox.pendingCancelQueue }));
 }

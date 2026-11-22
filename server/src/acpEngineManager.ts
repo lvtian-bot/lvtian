@@ -51,7 +51,53 @@ function classifyEngineFailure(message: string): EngineFailure {
     return 'unknown';
 }
 
+export type ChatPromptBlock = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string };
+
+function chatPromptBlocks(workspace: string, fullPrompt: string, attachments?: ChatAttachment[]): ChatPromptBlock[] {
+    let attachmentContext = '';
+    const promptBlocks: ChatPromptBlock[] = [];
+
+    if (attachments && attachments.length > 0) {
+        for (const att of attachments) {
+            if (att.type === 'image' && att.data) {
+                promptBlocks.push({
+                    type: 'image',
+                    data: att.data,
+                    mimeType: att.mimeType || 'image/jpeg',
+                });
+                attachmentContext += `\n[主人附带了图片: ${att.name}]`;
+            } else if (att.type === 'file') {
+                if (att.content) {
+                    attachmentContext += `\n\n[主人附带了文件内容: ${att.name}]\n\`\`\`\n${att.content}\n\`\`\``;
+                } else if (att.data) {
+                    try {
+                        const attDir = path.join(workspace, 'attachments');
+                        if (!fs.existsSync(attDir)) {
+                            fs.mkdirSync(attDir, { recursive: true });
+                        }
+                        const rawName = path.basename(att.name);
+                        const uniquePrefix = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                        const safeName = `${uniquePrefix}_${rawName}`;
+                        const targetFile = path.join(attDir, safeName);
+                        fs.writeFileSync(targetFile, Buffer.from(att.data, 'base64'));
+                        attachmentContext += `\n[主人附带了文件已保存至工作区: attachments/${safeName}] (原名: ${rawName})`;
+                    } catch (err) {
+                        console.error(`[AcpEngineManager] 保存二进制附件失败:`, err);
+                        throw new Error(`保存二进制附件失败 (${att.name}): ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                }
+            }
+        }
+    }
+
+    const promptText = attachmentContext ? `${fullPrompt}\n${attachmentContext}` : fullPrompt;
+    promptBlocks.unshift({ type: 'text', text: promptText });
+
+    return promptBlocks;
+}
+
 export interface EngineCallbacks {
+    takeSupplement?: () => { id: string; content: string; attachments?: ChatAttachment[]; remaining: number } | undefined;
     onDelta: (delta: string) => void;
     onFinalText?: (fullText: string) => void;
     onToolCall: (toolCall: ToolCallState) => void;
@@ -844,44 +890,7 @@ export class AcpEngineManager {
                 fullPrompt = source === 'user' ? userPrompt : `[后台任务结果交付（非用户指令）]\n${userPrompt}`;
             }
 
-            let attachmentContext = '';
-            const promptBlocks: Array<{ type: string; [key: string]: unknown }> = [];
-
-            if (attachments && attachments.length > 0) {
-                for (const att of attachments) {
-                    if (att.type === 'image' && att.data) {
-                        promptBlocks.push({
-                            type: 'image',
-                            data: att.data,
-                            mimeType: att.mimeType || 'image/jpeg',
-                        });
-                        attachmentContext += `\n[主人附带了图片: ${att.name}]`;
-                    } else if (att.type === 'file') {
-                        if (att.content) {
-                            attachmentContext += `\n\n[主人附带了文件内容: ${att.name}]\n\`\`\`\n${att.content}\n\`\`\``;
-                        } else if (att.data) {
-                            try {
-                                const attDir = path.join(this.workspace, 'attachments');
-                                if (!fs.existsSync(attDir)) {
-                                    fs.mkdirSync(attDir, { recursive: true });
-                                }
-                                const rawName = path.basename(att.name);
-                                const uniquePrefix = `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-                                const safeName = `${uniquePrefix}_${rawName}`;
-                                const targetFile = path.join(attDir, safeName);
-                                fs.writeFileSync(targetFile, Buffer.from(att.data, 'base64'));
-                                attachmentContext += `\n[主人附带了文件已保存至工作区: attachments/${safeName}] (原名: ${rawName})`;
-                            } catch (err) {
-                                console.error(`[AcpEngineManager] 保存二进制附件失败:`, err);
-                                throw new Error(`保存二进制附件失败 (${att.name}): ${err instanceof Error ? err.message : String(err)}`);
-                            }
-                        }
-                    }
-                }
-            }
-
-            const promptText = attachmentContext ? `${fullPrompt}\n${attachmentContext}` : fullPrompt;
-            promptBlocks.unshift({ type: 'text', text: promptText });
+            const promptBlocks = chatPromptBlocks(this.workspace, fullPrompt, attachments);
 
             if (callbacks.beforePrompt && !callbacks.beforePrompt(engineSessionId)) {
                 this.sessionManager.setTaskState(sessionId, previousTaskState);
@@ -1084,7 +1093,7 @@ export class AcpEngineManager {
 
         if (this.autonomousJobReplies) envExtra.LVTIAN_AUTONOMOUS_JOB_REPLY_FD = '3';
         const child: ChildProcess = spawn(command, [...argsPrefix, '--profile', 'acp', ...this.additionalPatches.flatMap(patch => ['--patch', patch])], {
-            ...(this.autonomousJobReplies ? { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] as const } : {}),
+            ...(this.autonomousJobReplies ? { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'ipc'] as const } : {}),
             cwd: this.workspace,
             env: {
                 ...process.env,
@@ -1109,6 +1118,23 @@ export class AcpEngineManager {
             });
             this.replyBridge = bridge;
             bridge.attach(pipe);
+            child.on('message', frame => {
+                if (!frame || typeof frame !== 'object' || !('type' in frame) || frame.type !== 'take_supplement'
+                    || !('requestId' in frame) || typeof frame.requestId !== 'number'
+                    || !('sessionId' in frame) || typeof frame.sessionId !== 'string' || !child.connected) return;
+                const sessionId = this.engineSessionIndex.get(frame.sessionId);
+                const runtime = sessionId ? this.runtimes.get(sessionId) : undefined;
+                const active = this.replyBridge === bridge && runtime?.engineSessionId === frame.sessionId
+                    && sessionId && !this.stoppedSessions.has(sessionId) && !this.timedOutSessions.has(sessionId);
+                const response = { type: 'supplement', requestId: frame.requestId };
+                try {
+                    const item = active ? runtime.callbacks.takeSupplement?.() : undefined;
+                    const message = item && { id: item.id, remaining: item.remaining, blocks: chatPromptBlocks(this.workspace, item.content, item.attachments) };
+                    child.send({ ...response, message }, () => {});
+                } catch {
+                    child.send({ ...response, failed: true }, () => {});
+                }
+            });
         }
         child.stdin?.on('error', (err: Error) => {
             console.warn(`[AcpEngine] stdin 管道异常 (子进程可能已退出): ${err.message}`);

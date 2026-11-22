@@ -6,6 +6,8 @@ import {
     StyleSheet,
     TextInput,
     TouchableOpacity,
+    Pressable,
+    BackHandler,
     FlatList,
     ScrollView,
     ActivityIndicator,
@@ -53,7 +55,8 @@ import { AssistantClient } from '../services/AssistantClient';
 import { AssistantMessage, ChatAttachment } from '../types/assistantProtocol';
 import { getAssistantDisplayParts } from '../utils/assistantMessageParts';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
-import { ChatBubbleText, ChatSendingSlot } from '../components/ChatBubbleText';
+import { ChatMessageMenu, type MessageAction, type MessageMenuAnchor } from '../components/ChatMessageMenu';
+import { ChatBubbleText } from '../components/ChatBubbleText';
 import { formatChatDate, formatChatTime, isPlainChatText, startsChatDay } from '../utils/chatDate';
 import { RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -192,8 +195,7 @@ export const ChatScreen = () => {
     const taskRunning = taskState === 'processing' || taskState === 'awaiting_approval';
     const submittedStatus = submittedId ? messages.find(message => message.id === submittedId)?.status : undefined;
     const awaitingStart = Boolean(submittedId) && !taskRunning && connectionState === 'connected' && !isServerUpgrading
-        && (submittedStatus === 'sending' || submittedStatus === 'sent')
-        && !pendingSendQueue.some(item => item.messageId === submittedId);
+        && (submittedStatus === 'sending' || submittedStatus === 'sent');
     useEffect(() => {
         if (!submittedId) return;
         if (!awaitingStart) {
@@ -338,36 +340,50 @@ export const ChatScreen = () => {
     const WINDOW_BATCH_SIZE = 30;
     const [renderedCount, setRenderedCount] = useState(INITIAL_WINDOW_SIZE);
 
-    const handleCancelQueued = useCallback((msg: AssistantMessage) => {
-        Alert.alert(
-            t('assistant.cancelQueuedTitle', '排队中消息'),
-            t('assistant.cancelQueuedPrompt', '是否取消该条排队消息？文字将退回输入框。'),
-            [
-                { text: t('common.cancel', '保留'), style: 'cancel' },
-                {
-                    text: t('assistant.cancelQueuedConfirm', '取消排队'),
-                    style: 'destructive',
-                    onPress: () => {
-                        const current = useAssistantStore.getState().messages.find((m) => m.id === msg.id);
-                        if (current && current.status !== 'queued') {
-                            Alert.alert(
-                                t('common.tip', '提示'),
-                                t('assistant.cancelFailedAlreadyStarted', '该任务已开始执行，无法取消排队')
-                            );
-                            return;
-                        }
-                        AssistantClient.getInstance().cancelQueued(msg.id, current || msg);
-                        setInputContent(msg.content);
-                    },
-                },
-            ]
-        );
-    }, [t]);
+    const [menu, setMenu] = useState<MessageMenuAnchor>();
+    const [selecting, setSelecting] = useState<string>();
+    const openMessageMenu = useCallback((id: string, x: number, y: number) => {
+        setSelecting(undefined);
+        setMenu({ id, x, y });
+    }, []);
+    const menuMessage = menu && messages.find(m => m.id === menu.id);
+    const pendingById = useMemo(() => new Map(pendingSendQueue.map(item => [item.messageId, item])), [pendingSendQueue]);
+    useEffect(() => {
+        if (!selecting) return;
+        const back = BackHandler.addEventListener('hardwareBackPress', () => { setSelecting(undefined); return true; });
+        return () => back.remove();
+    }, [selecting]);
+    const savedDrafts = useRef<Array<{ text: string; attachments: ChatAttachment[] }>>([]);
+    useEffect(() => {
+        const store = useAssistantStore.getState();
+        const draft = store.pendingSendQueue.find(item => item.withdrawal === 'draft');
+        if (!draft) return;
+        if (inputContent || pendingAttachmentsRef.current.length) {
+            savedDrafts.current.push({ text: inputContent, attachments: pendingAttachmentsRef.current });
+        }
+        setInputContent(draft.content);
+        updatePendingAttachments(draft.attachments ?? []);
+        store.removeMessage(draft.messageId);
+    }, [pendingSendQueue, inputContent, updatePendingAttachments]);
+
+    const finishComposer = () => {
+        const previous = savedDrafts.current.pop();
+        setInputContent(previous?.text ?? '');
+        updatePendingAttachments(previous?.attachments ?? []);
+    };
+
+    const chooseMessageAction = (action: MessageAction) => {
+        setMenu(undefined);
+        if (!menuMessage) return;
+        if (action === 'copy') Clipboard.setStringAsync(menuMessage.content).catch(() => {});
+        else if (action === 'select') setSelecting(menuMessage.id);
+        else AssistantClient.getInstance().withdrawPending(menuMessage.id, action);
+    };
 
     // 倒序排列：第 0 项为最新消息（处于倒序视口最底部），数组末尾为最早历史消息
     const reversedMessages = useMemo(() => {
-        return [...messages].reverse();
-    }, [messages]);
+        return messages.filter(m => !pendingById.get(m.id)?.withdrawal).reverse();
+    }, [messages, pendingById]);
 
     // 视口开窗：冷启动与初始状态仅切片装载最新批次，绝不预加载全量历史
     const displayMessages = useMemo(() => {
@@ -534,47 +550,10 @@ export const ChatScreen = () => {
         setIsAttachMenuVisible((prev) => !prev);
     }, []);
 
-    const handleRetryMessage = useCallback(async (item: AssistantMessage) => {
-        let attachments = item.attachments;
-        if (attachments && attachments.length > 0) {
-            try {
-                attachments = await Promise.all(
-                    attachments.map(async (att) => {
-                        if (att.data !== undefined || att.content !== undefined) {
-                            return att;
-                        }
-                        if (!att.uri) {
-                            throw new Error('ATTACHMENT_URI_MISSING');
-                        }
-                        const isImg = att.type === 'image';
-                        const res = await fsService.readAttachment(att.uri, 10 * 1024 * 1024, isImg ? 'image/jpeg' : att.mimeType, att.name);
-                        return {
-                            ...att,
-                            mimeType: isImg ? 'image/jpeg' : (att.mimeType || 'application/octet-stream'),
-                            content: res.content,
-                            data: res.data,
-                        };
-                    }),
-                );
-            } catch {
-                Alert.alert(t('common.error', '错误'), t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送'));
-                return;
-            }
-        }
-        if (isAttachmentBudgetExceeded(attachments)) {
-            Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
-            return;
-        }
-        useAssistantStore.getState().removeMessage(item.id);
-        const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
-        flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
-        AssistantClient.getInstance().sendMessage(item.content, attachments);
-    }, [t]);
-
     const handleSend = () => {
         const trimmed = inputContent.trim();
         if (trimmed === '/new') {
-            setInputContent('');
+            finishComposer();
             const doReset = async () => {
                 try {
                     const ok = await AssistantClient.getInstance().resetSession();
@@ -605,8 +584,7 @@ export const ChatScreen = () => {
         }
         const messageId = AssistantClient.getInstance().sendMessage(text, attachments.length > 0 ? attachments : undefined);
         setSubmittedId(taskRunning ? undefined : messageId);
-        setInputContent('');
-        updatePendingAttachments([]);
+        finishComposer();
         const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
         flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
     };
@@ -807,7 +785,8 @@ export const ChatScreen = () => {
                     // Status changes must not move the clock from a footer into
                     // the body after acknowledgement. Only actionable states need a footer.
                     const inlineUserTime = isUser && Boolean(item.content);
-                    const showUserStatus = isUser && (item.status === 'queued' || item.status === 'error');
+                    const pending = pendingById.has(item.id) || item.status === 'sending';
+                    const selectingHere = selecting === item.id;
                     // Data is newest-first, while each cell remains top-to-bottom.
                     const showDate = startsChatDay(item.timestamp, displayMessages[index + 1]?.timestamp);
                     const hasProseBubble = isUser || Boolean(item.attachments?.length ||
@@ -829,8 +808,19 @@ export const ChatScreen = () => {
                                 isUser ? styles.userRow : styles.assistantRow,
                             ]}
                         >
-                            <View style={isUser ? styles.userMessageGroup : styles.assistantMessageGroup}>
-                            {!isUser && assistantParts.map((part) => {
+                            <Pressable accessible={false} disabled={selectingHere}
+                                onPress={() => setSelecting(undefined)}
+                                onLongPress={e => openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY)}
+                                onPointerDown={e => { if (!selectingHere && e.nativeEvent.button === 2) openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY); }}
+                                {...(Platform.OS === 'web' && !selectingHere ? { onContextMenu: (e: { preventDefault(): void; clientX: number; clientY: number }) => {
+                                    e.preventDefault();
+                                    openMessageMenu(item.id, e.clientX, e.clientY);
+                                } } : {})}
+                                style={[isUser ? styles.userMessageGroup : styles.assistantMessageGroup, isUser && pending && styles.pendingBubble]}>
+                            {selectingHere && <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+                                <Text selectable style={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]}>{item.content}</Text>
+                            </View>}
+                            {!selectingHere && !isUser && assistantParts.map((part) => {
                                 const partTime = part.type === 'text' && part.key === lastTextPartKey && item.completedAt
                                     ? formatChatTime(item.completedAt, chatI18n.language)
                                     : time;
@@ -840,15 +830,15 @@ export const ChatScreen = () => {
                                         testID={`assistant-prose-${item.id}-${part.key}`}
                                         style={[styles.bubble, styles.assistantBubble]}
                                     >
-                                        <ChatBubbleText text={part.text} time={partTime}
+                                        <ChatBubbleText selectable={false} text={part.text} time={partTime}
                                             textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} />
                                     </View>
                                 ) : (
-                                    <ChatMarkdownBubble key={part.key} text={part.text} time={partTime} metrics={metrics}
+                                    <ChatMarkdownBubble selectable={false} messageId={item.id} onOpenMenu={openMessageMenu} key={part.key} text={part.text} time={partTime} metrics={metrics}
                                         testID={`assistant-prose-${item.id}-${part.key}`} />
                                 );
                             })}
-                            {hasProseBubble && <View
+                            {!selectingHere && hasProseBubble && <View
                                 testID={isUser ? `user-bubble-${item.id}` : `assistant-prose-${item.id}`}
                                 style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}
                             >
@@ -860,6 +850,7 @@ export const ChatScreen = () => {
                                         <TouchableOpacity
                                             key={idx}
                                             activeOpacity={0.85}
+                                            onLongPress={e => openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY)}
                                             onPress={() => setPreviewImageUri(imageUri)}
                                             accessibilityRole="button"
                                             accessibilityLabel={`${t('chat.previewImage', '预览图片')} ${att.name || ''}`}
@@ -899,7 +890,7 @@ export const ChatScreen = () => {
 
                                 {isUser ? (
                                     <View>
-                                        {inlineUserTime ? <ChatBubbleText text={item.content} time={time} sending={item.status === 'sending'}
+                                        {inlineUserTime ? <ChatBubbleText text={item.content} time={time} selectable={false}
                                             textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} /> : <Text
                                             style={[
                                                 styles.userText,
@@ -908,15 +899,10 @@ export const ChatScreen = () => {
                                                     lineHeight: metrics.chatLineHeight,
                                                 },
                                             ]}
-                                            selectable={true}
+                                            selectable={false}
                                         >
                                             {item.content}
                                         </Text>}
-                                        {item.status === 'error' && item.errorMessage && (
-                                            <Text style={styles.userErrorText}>
-                                                {translateErrorMessage(item.errorMessage)}
-                                            </Text>
-                                        )}
                                     </View>
                                 ) : (
                                     <View style={styles.assistantContentContainer}>
@@ -937,43 +923,13 @@ export const ChatScreen = () => {
                                 )}
 
                                 {/* 时间与状态 */}
-                                {(!inlineUserTime || showUserStatus) && <View style={styles.msgFooter}>
-                                    {isUser && item.status === 'queued' && (
-                                        <TouchableOpacity
-                                            style={styles.queuedBadge}
-                                            onPress={() => handleCancelQueued(item)}
-                                            activeOpacity={0.7}
-                                        >
-                                            <Icon name="schedule" size={12} color={theme.colors.textSecondary} style={styles.queuedIcon} />
-                                            <Text style={styles.queuedText}>{t('assistant.statusQueued', '排队中')}</Text>
-                                        </TouchableOpacity>
-                                    )}
-                                    {!inlineUserTime && <Text
-                                        style={[
-                                            styles.timeText,
-                                            isUser ? styles.userTime : styles.assistantTime,
-                                        ]}
-                                    >
+                                {!inlineUserTime && <View style={styles.msgFooter}>
+                                    <Text style={[styles.timeText, isUser ? styles.userTime : styles.assistantTime]}>
                                         {!isUser && item.completedAt ? formatChatTime(item.completedAt, chatI18n.language) : time}
-                                    </Text>}
-                                    {isUser && !inlineUserTime && <ChatSendingSlot sending={item.status === 'sending'} />}
-                                    {isUser && item.status === 'error' && (
-                                        <TouchableOpacity
-                                            onPress={() => {
-                                                handleRetryMessage(item);
-                                            }}
-                                        >
-                                            <Icon
-                                                name="error-outline"
-                                                size={14}
-                                                color={theme.colors.dangerStrong}
-                                                style={styles.statusMargin}
-                                            />
-                                        </TouchableOpacity>
-                                    )}
+                                    </Text>
                                 </View>}
                             </View>}
-                            </View>
+                            </Pressable>
                         </ChatBubbleReveal> : null}
                         </View>
                     );
@@ -1153,7 +1109,11 @@ export const ChatScreen = () => {
                                             </View>
                                         )}
                                         <TouchableOpacity
-                                            onPress={() => updatePendingAttachments(pendingAttachmentsRef.current.filter((_, itemIndex) => itemIndex !== index))}
+                                            onPress={() => {
+                                                const remaining = pendingAttachmentsRef.current.filter((_, itemIndex) => itemIndex !== index);
+                                                if (!remaining.length && !inputContent && savedDrafts.current.length) finishComposer();
+                                                else updatePendingAttachments(remaining);
+                                            }}
                                             accessibilityRole="button"
                                             accessibilityLabel={`${t('common.delete', '删除')} ${attachment.name}`}
                                             style={styles.draftDeleteBadge}
@@ -1191,10 +1151,12 @@ export const ChatScreen = () => {
                             placeholderTextColor={theme.colors.textTertiary}
                             value={inputContent}
                             onFocus={() => {
+                                setSelecting(undefined);
                                 if (isAttachMenuVisible) setIsAttachMenuVisible(false);
                             }}
                             onChangeText={(text) => {
-                                setInputContent(text);
+                                if (!text && !pendingAttachmentsRef.current.length && savedDrafts.current.length) finishComposer();
+                                else setInputContent(text);
                                 if (isAttachMenuVisible) setIsAttachMenuVisible(false);
                             }}
                             multiline
@@ -1236,6 +1198,8 @@ export const ChatScreen = () => {
                 </View>
             </View>
             </KeyboardStickyView>
+            {menu && menuMessage && <ChatMessageMenu anchor={menu} pending={pendingById.has(menu.id)}
+                close={() => setMenu(undefined)} choose={chooseMessageAction} />}
             <ImageViewerModal
                 visible={!!previewImageUri}
                 imageUri={previewImageUri}
@@ -1406,6 +1370,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
     },
+    pendingBubble: { opacity: 0.5 },
     userMessageGroup: {
         maxWidth: '85%',
         flexShrink: 1,
@@ -1450,9 +1415,6 @@ const styles = StyleSheet.create({
     },
     timeText: {
         fontSize: auxFontSizes.caption,
-    },
-    statusMargin: {
-        marginLeft: 4,
     },
     userTime: {
         color: 'rgba(17, 24, 39, 0.5)',
@@ -1765,28 +1727,6 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.15,
         shadowRadius: 4,
-    },
-    queuedBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: theme.colors.border,
-        borderRadius: 10,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        marginRight: 6,
-    },
-    queuedIcon: {
-        marginRight: 3,
-    },
-    queuedText: {
-        fontSize: auxFontSizes.caption,
-        color: theme.colors.textSecondary,
-        fontWeight: '500',
-    },
-    userErrorText: {
-        fontSize: auxFontSizes.caption,
-        color: theme.colors.dangerStrong,
-        marginTop: 4,
     },
     toastContainer: {
         position: 'absolute',

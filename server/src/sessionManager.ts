@@ -468,17 +468,6 @@ export class SessionManager {
                     seq: m.seq,
                     m,
                 });
-            } else if (m.status === 'queued') {
-                m.status = 'error';
-                m.errorMessage = 'service_restarted';
-                session.currentSeq += 1;
-                m.seq = session.currentSeq;
-                this.appendEvent(session.sessionId, {
-                    t: 'msg',
-                    at: Date.now(),
-                    seq: m.seq,
-                    m,
-                });
             }
         }
     }
@@ -659,6 +648,22 @@ export class SessionManager {
         return fullMsg;
     }
 
+    /** Assign the next accepted input once, before any caller can hand it to the engine. */
+    public takeQueuedMessage(sessionId: string, replyTo?: string): AssistantMessage | undefined {
+        const session = this.getOrCreateSession(sessionId);
+        const index = session.messages.findIndex(m => m.role === 'user' && m.status === 'queued');
+        if (index < 0) return;
+        const previous = session.messages[index];
+        const message: AssistantMessage = { ...previous, status: 'sent', seq: ++session.currentSeq, replyTo };
+        session.messages[index] = message;
+        if (!this.appendEvent(sessionId, { t: 'msg', at: Date.now(), seq: message.seq, m: message })) {
+            session.messages[index] = previous;
+            session.currentSeq--;
+            throw new Error('chat_receipt_not_persisted');
+        }
+        return message;
+    }
+
     public updateMessage(
         sessionId: string,
         messageId: string,
@@ -695,14 +700,12 @@ export class SessionManager {
         }
     }
 
-    public deleteMessage(sessionId: string, messageId: string): boolean {
+    public deleteMessage(sessionId: string, messageId: string, reserveMissing = false): boolean {
         this.assertValidSessionId(sessionId);
         const session = this.getOrCreateSession(sessionId);
         const idx = session.messages.findIndex((m) => m.id === messageId);
-        if (idx === -1) {
-            return false;
-        }
-        session.messages.splice(idx, 1);
+        if (idx === -1 && (!reserveMissing || session.deletedMessages?.some(m => m.id === messageId))) return false;
+        const removed = idx >= 0 ? session.messages.splice(idx, 1)[0] : undefined;
         session.currentSeq += 1;
         const delSeq = session.currentSeq;
         session.updatedAt = Date.now();
@@ -710,12 +713,17 @@ export class SessionManager {
             session.deletedMessages = [];
         }
         session.deletedMessages.push({ id: messageId, seq: delSeq });
-        this.appendEvent(sessionId, {
+        if (!this.appendEvent(sessionId, {
             t: 'del_msg',
             at: Date.now(),
             seq: delSeq,
             id: messageId,
-        });
+        })) {
+            session.deletedMessages.pop();
+            session.currentSeq--;
+            if (removed) session.messages.splice(idx, 0, removed);
+            throw new Error('chat_withdrawal_not_persisted');
+        }
         return true;
     }
 

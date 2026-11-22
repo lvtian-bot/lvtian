@@ -135,12 +135,12 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(useAssistantStore.getState().pendingSendQueue.length).toBe(1);
         expect(useAssistantStore.getState().pendingSendQueue[0].messageId).toBe(msgId2);
 
-        // 第一条任务处理中 (processing) 时，不发送第二条
+        // 第一条已受理，执行期间立即发送第二条，同时抑制重复推进。
         useAssistantStore.setState({ taskState: 'processing' });
         client.flushPendingSendQueue();
-        expect(sendRawSpy).toHaveBeenCalledTimes(1);
+        expect(sendRawSpy).toHaveBeenCalledTimes(2);
 
-        // 第一条任务完成终态，自动触发补发第二条消息
+        // 第一条任务结束的迟到通知不能重复发送第二条。
         handleServerMessage({
             type: 'task_status',
             seq: 12,
@@ -159,6 +159,51 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         );
 
         sendRawSpy.mockRestore();
+    });
+
+    test('连接看似正常但消息没有到达时，重连保留两条原始消息并先补发第一条', async () => {
+        const transport = client as unknown as {
+            ws: { readyState: number; send: jest.Mock; close: jest.Mock } | null;
+            handleServerMessage: (message: ServerMessage) => void;
+        };
+        const socket = { readyState: WebSocket.OPEN, send: jest.fn(), close: jest.fn() };
+        transport.ws = socket;
+        try {
+            useAssistantStore.setState({ connectionState: 'connected', taskState: 'idle', outboxStatus: 'ready' });
+            const first = client.sendMessage('第一条');
+            useAssistantStore.setState({ connectionState: 'disconnected' });
+            const second = client.sendMessage('第二条');
+            socket.send.mockClear();
+            transport.handleServerMessage({
+                type: 'sync_result', sessionId: 'main', messages: [], currentSeq: 1, taskState: 'idle',
+            });
+            await Promise.resolve();
+            const state = useAssistantStore.getState();
+            expect(state.pendingSendQueue.map(message => message.messageId)).toEqual([first, second]);
+            expect(state.messages.find(message => message.id === first)?.status).toBe('sending');
+            const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw) as { type: string; messageId?: string });
+            expect(frames.find(frame => frame.type === 'chat')?.messageId).toBe(first);
+        } finally {
+            transport.ws = null;
+        }
+    });
+
+    test.each(['accepted', 'unreceived'] as const)('编辑途中核对已尝试投递的原消息 %s', result => {
+        const id = 'pending-edit';
+        const receive = (client as unknown as { handleServerMessage(msg: ServerMessage): void });
+        const store = useAssistantStore.getState();
+        store.addToPendingSendQueue({ sessionId: 'main', messageId: id, content: '原文', attempted: true });
+        store.addOrUpdateMessage({ id, seq: 0, role: 'user', status: 'sending', timestamp: 1, content: '原文' });
+        client.withdrawPending(id, 'edit');
+        expect(useAssistantStore.getState().pendingSendQueue[0].withdrawal).toBe('edit');
+        if (result === 'accepted') {
+            receive.handleServerMessage({ type: 'message_ack', messageId: id, seq: 1, status: 'sent' });
+            expect(useAssistantStore.getState().pendingSendQueue).toHaveLength(0);
+            expect(useAssistantStore.getState().messages[0].status).toBe('sent');
+        } else {
+            receive.handleServerMessage({ type: 'message_deleted', sessionId: 'main', messageId: id });
+            expect(useAssistantStore.getState().pendingSendQueue[0].withdrawal).toBe('draft');
+        }
     });
 
     test('收到 message_ack 时移出 pendingSendQueue', () => {
@@ -342,7 +387,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(asst?.errorMessage).toBe('approval_timeout');
     });
 
-    test('收到终态失败回执时保留失败消息并自动推进下一条', () => {
+    test('服务端尚未保存时保留原 ID 等待重试', () => {
         const handleServerMessage = (client as unknown as {
             handleServerMessage: (msg: ServerMessage) => void;
         }).handleServerMessage.bind(client);
@@ -385,23 +430,9 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         });
 
         const state = useAssistantStore.getState();
-        // 1. 失败消息标红
-        const failedMsg = state.messages.find((m) => m.id === 'm-fail-1');
-        expect(failedMsg?.status).toBe('error');
-        expect(failedMsg?.errorMessage).toBe('disk_full');
-
-        // 2. 失败消息保留，后面的消息仍可发送。
+        expect(state.messages.find(m => m.id === 'm-fail-1')?.status).toBe('sending');
         expect(state.pendingSendQueue.map(item => item.messageId)).toEqual(['m-fail-1', 'm-pending-2']);
-
-        // 3. 自动触发推进队列中的下一条消息
-        expect(sendRawSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-                type: 'chat',
-                messageId: 'm-pending-2',
-                content: '排在后面的消息',
-            })
-        );
-
+        expect(sendRawSpy).not.toHaveBeenCalled();
         sendRawSpy.mockRestore();
     });
 
@@ -447,7 +478,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.messages[0].attachments?.[0].name).toBe('diag.png');
     });
 
-    test('重水化附件失败时标记错误并移出待发队列，不发送残缺指令', async () => {
+    test('附件暂时不可读时保留完整待发项并静默重试', async () => {
         const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
 
         useAssistantStore.setState({
@@ -492,9 +523,8 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         const state = useAssistantStore.getState();
         // 1. 绝不发送残缺消息
         expect(sendRawSpy).not.toHaveBeenCalled();
-        // 2. 消息标记为失败状态以供重试
-        expect(state.messages[0].status).toBe('error');
-        expect(state.messages[0].errorMessage).toMatch(/失效|无法重新发送|Attachment file is no longer available/);
+        // 用户仍可取消或编辑。
+        expect(state.messages[0].status).toBe('sending');
         // 3. 失败的待发送消息继续保留，供用户处理。
         expect(state.pendingSendQueue.length).toBe(1);
 

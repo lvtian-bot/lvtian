@@ -12,7 +12,7 @@ describe('AssistantClient attachment budget across retry hydration', () => {
             isServerUpgrading: false, connectionState: 'connected' });
         sendRaw = jest.spyOn(client as unknown as { sendRaw: (message: ClientMessage) => boolean }, 'sendRaw').mockReturnValue(true);
     });
-    afterEach(() => { jest.restoreAllMocks(); });
+    afterEach(() => { client.disconnect(); jest.restoreAllMocks(); });
 
     it('rejects direct oversize encoded sends before changing local messages or queues', () => {
         const attachments: ChatAttachment[] = [{ type: 'file', name: 'escaped.txt', content: '\u0000'.repeat(4 * 1024 * 1024) }];
@@ -37,7 +37,7 @@ describe('AssistantClient attachment budget across retry hydration', () => {
         expect(sendRaw).toHaveBeenCalledTimes(1);
         expect(sendRaw).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'later' }));
         expect(useAssistantStore.getState().messages).toEqual([expect.objectContaining({
-            id: 'oversize', content: 'original', attachments, status: 'error', errorMessage: i18n.t('chat.attachmentTooLarge'),
+            id: 'oversize', content: 'original', attachments, status: 'sending',
         })]);
         expect(useAssistantStore.getState().pendingSendQueue.map((item) => item.messageId)).toEqual(['oversize', 'later']);
     });
@@ -49,7 +49,7 @@ describe('AssistantClient attachment budget across retry hydration', () => {
         await client.flushPendingSendQueue();
         expect(read).not.toHaveBeenCalled();
         expect(sendRaw).not.toHaveBeenCalled();
-        expect(useAssistantStore.getState().messages[0].status).toBe('error');
+        expect(useAssistantStore.getState().messages[0].status).toBe('sending');
     });
 
     it('does not send a queued attachment whose original file is unavailable', async () => {
@@ -57,7 +57,7 @@ describe('AssistantClient attachment budget across retry hydration', () => {
         useAssistantStore.setState({ pendingSendQueue: [{ messageId: 'missing', sessionId: 'main', content: 'file', attachments }] });
         await client.flushPendingSendQueue();
         expect(sendRaw).not.toHaveBeenCalled();
-        expect(useAssistantStore.getState().messages[0]).toMatchObject({ id: 'missing', status: 'error' });
+        expect(useAssistantStore.getState().messages[0]).toMatchObject({ id: 'missing', status: 'sending' });
         expect(useAssistantStore.getState().pendingSendQueue[0].messageId).toBe('missing');
     });
 });

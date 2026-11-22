@@ -130,7 +130,7 @@ describe('AssistantClient independent connection initialization', () => {
         expect(TestSocket.instances[0].url).toBe('wss://saved.test');
     });
 
-    it('connects and sends in-memory queued messages while the outbox loads', async () => {
+    it('connects immediately and preserves send order while earlier outbox entries load', async () => {
         useAssistantStore.setState({ outboxStatus: 'loading', clearedSeq: 0 });
         await client.connect();
         const socket = TestSocket.instances[0];
@@ -139,6 +139,8 @@ describe('AssistantClient independent connection initialization', () => {
         socket.onmessage?.({ data: JSON.stringify({
             type: 'sync_result', sessionId: 'main', messages: [], taskState: 'idle', currentSeq: 0,
         }) });
+        expect(socket.send.mock.calls.some(([value]) => JSON.parse(value as string).messageId === 'late')).toBe(false);
+        useAssistantStore.setState({ outboxStatus: 'ready' });
         expect(socket.send.mock.calls.some(([value]) => JSON.parse(value as string).messageId === 'late')).toBe(true);
     });
 

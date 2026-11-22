@@ -291,6 +291,7 @@
     "close": "Close",
     "share": "Share",
     "shareNotAvailable": "Share is not available on this device",
+    "select": "Select",
     "copy": "Copy",
     "loadMore": "Load More",
     "success": "Success"

@@ -1,6 +1,6 @@
 import React, { useMemo, type ReactNode } from 'react';
-import { Platform, StyleSheet, Text, View, type TextStyle, type ViewStyle } from 'react-native';
-import Markdown, { MarkdownIt, type ASTNode } from 'react-native-markdown-display';
+import { Platform, Pressable, StyleSheet, Text, View, type GestureResponderEvent, type TextStyle, type ViewStyle } from 'react-native';
+import Markdown, { MarkdownIt, openUrl, type ASTNode } from 'react-native-markdown-display';
 import { auxFontSizes, type FontSizeMetrics } from '../utils/fontSize';
 import { theme } from '../utils/theme';
 import { ChatBubbleText } from './ChatBubbleText';
@@ -14,6 +14,9 @@ interface ChatMarkdownBubbleProps {
     testID?: string;
     /** 去掉气泡底色和圆角，用于非聊天的正文阅读区。 */
     plain?: boolean;
+    selectable?: boolean;
+    messageId?: string;
+    onOpenMenu?: (id: string, x: number, y: number) => void;
 }
 
 type RuleStyles = Record<string, TextStyle & ViewStyle>;
@@ -23,25 +26,25 @@ type RuleStyles = Record<string, TextStyle & ViewStyle>;
 const chatMarkdown = MarkdownIt({ html: false, breaks: true, linkify: true, typographer: true });
 
 /** Keep the library's inline Text tree (including bold/link inheritance) selectable. */
-const markdownRules = {
+const markdownRules = (selectable: boolean) => ({
     text: (node: ASTNode, _children: ReactNode[], _parent: ASTNode[], styles: RuleStyles, inherited: TextStyle = {}) => (
-        <Text key={node.key} style={[inherited, styles.text]} selectable>{node.content}</Text>
+        <Text key={node.key} style={[inherited, styles.text]} selectable={selectable}>{node.content}</Text>
     ),
     textgroup: (node: ASTNode, children: ReactNode[], _parent: ASTNode[], styles: RuleStyles) => (
-        <Text key={node.key} style={styles.textgroup} selectable>{children}</Text>
+        <Text key={node.key} style={styles.textgroup} selectable={selectable}>{children}</Text>
     ),
     code_inline: (node: ASTNode, _children: ReactNode[], _parent: ASTNode[], styles: RuleStyles, inherited: TextStyle = {}) => (
-        <Text key={node.key} style={[inherited, styles.code_inline]} selectable>{node.content}</Text>
+        <Text key={node.key} style={[inherited, styles.code_inline]} selectable={selectable}>{node.content}</Text>
     ),
-    code_block: renderCodeBlock,
-    fence: renderCodeBlock,
-};
+    code_block: renderCodeBlock(selectable),
+    fence: renderCodeBlock(selectable),
+});
 
-function renderCodeBlock(node: ASTNode, _children: ReactNode[], _parent: ASTNode[], styles: RuleStyles, inherited: TextStyle = {}) {
+const renderCodeBlock = (selectable: boolean) => (node: ASTNode, _children: ReactNode[], _parent: ASTNode[], styles: RuleStyles, inherited: TextStyle = {}) => {
     // markdown-it adds one trailing newline; do not otherwise alter copyable code.
     const content = node.content.endsWith('\n') ? node.content.slice(0, -1) : node.content;
     return (
-        <Text key={node.key} style={[inherited, styles[node.type]]} selectable>{content}</Text>
+        <Text key={node.key} style={[inherited, styles[node.type]]} selectable={selectable}>{content}</Text>
     );
 }
 
@@ -62,10 +65,13 @@ function terminalTextGroup(node: ASTNode): ASTNode | undefined {
 /** Rich text needs a definite width before Yoga measures paragraphs and list rows.
  * Do not nest this inside the shrink-to-content plain-text bubble.
  */
-export function ChatMarkdownBubble({ text, time, metrics, testID, plain = false }: ChatMarkdownBubbleProps) {
+export function ChatMarkdownBubble({ text, time, metrics, testID, plain = false, selectable = true, messageId, onOpenMenu }: ChatMarkdownBubbleProps) {
     const { streaming } = useBubbleLayoutPolicy();
     const markdownStyles = useMemo(() => getMarkdownStyles(metrics), [metrics]);
-    const rules = useMemo(() => createClockRules(text, time, metrics, streaming), [text, time, metrics, streaming]);
+    const onLongPress = useMemo(() => messageId && onOpenMenu
+        ? (event: GestureResponderEvent) => onOpenMenu(messageId, event.nativeEvent.pageX, event.nativeEvent.pageY)
+        : undefined, [messageId, onOpenMenu]);
+    const rules = useMemo(() => createClockRules(text, time, metrics, streaming, selectable, onLongPress), [text, time, metrics, streaming, selectable, onLongPress]);
     return (
         <View testID={testID} style={plain ? layoutStyles.plain : layoutStyles.bubble}>
             <Markdown markdownit={chatMarkdown} style={markdownStyles} rules={rules}>{text}</Markdown>
@@ -73,9 +79,20 @@ export function ChatMarkdownBubble({ text, time, metrics, testID, plain = false 
     );
 }
 
-function createClockRules(text: string, time: string | undefined, metrics: FontSizeMetrics, streaming: boolean) {
+function createClockRules(text: string, time: string | undefined, metrics: FontSizeMetrics, streaming: boolean, selectable: boolean, onLongPress?: (event: GestureResponderEvent) => void) {
+    const rules = markdownRules(selectable);
     return {
-        ...markdownRules,
+        ...rules,
+        ...(onLongPress ? {
+            link: (node: ASTNode, children: ReactNode[], _parents: ASTNode[], styles: RuleStyles) => (
+                <Text key={node.key} style={styles.link} onLongPress={onLongPress}
+                    onPress={() => openUrl(node.attributes.href)}>{children}</Text>
+            ),
+            blocklink: (node: ASTNode, children: ReactNode[], _parents: ASTNode[], styles: RuleStyles) => (
+                <Pressable key={node.key} style={styles.blocklink} onLongPress={onLongPress}
+                    onPress={() => openUrl(node.attributes.href)}><View style={styles.image}>{children}</View></Pressable>
+            ),
+        } : {}),
         body: (node: ASTNode, children: ReactNode[], _parent: ASTNode[], styles: RuleStyles) => (
             <View key={node.key} style={styles._VIEW_SAFE_body}>
                 {children}
@@ -88,9 +105,9 @@ function createClockRules(text: string, time: string | undefined, metrics: FontS
             if (time && root && terminalTextGroup(root)?.key === node.key) {
                 return <ChatBubbleText key={node.key} text={text} time={time}
                     textStyle={[styles.textgroup, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]}
-                    fullWidth clockTestID="markdown-bubble-time">{children}</ChatBubbleText>;
+                    fullWidth selectable={selectable} clockTestID="markdown-bubble-time">{children}</ChatBubbleText>;
             }
-            return markdownRules.textgroup(node, children, parents, styles);
+            return rules.textgroup(node, children, parents, styles);
         },
     };
 }
