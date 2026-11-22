@@ -4,6 +4,7 @@ import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
 import { classifySocketError, recordConnectionEvent, type ConnectionEventDetails } from './connectionDiagnostics';
+import { recordOperation } from './operationDiagnostics';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import {
     ClientMessage,
@@ -333,10 +334,11 @@ export class AssistantClient {
         const cleanUrl = serverUrl.trim().replace(/\/+$/, '');
         const httpUrl = cleanUrl.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
         if (!httpUrl || !token) return { success: false, code: 'PARAM_INVALID' };
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
         try {
             const controller = new AbortController();
             // 权限切换可能包含服务端即时提炼《心智接力备忘录》的深度大模型调用，放宽超时至 60 秒
-            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            timeoutId = setTimeout(() => controller.abort(), 60000);
             const res = await fetch(`${httpUrl}/api/permission`, {
                 method: 'POST',
                 headers: {
@@ -346,10 +348,20 @@ export class AssistantClient {
                 body: JSON.stringify({ permissionMode: mode }),
                 signal: controller.signal,
             });
-            clearTimeout(timeoutId);
-            return AssistantClient.parseRemoteApplyResponse(res);
+            const result = await AssistantClient.parseRemoteApplyResponse(res);
+            if (!result.success) {
+                recordOperation('remote_setting', 'permission_rejected', { httpStatus: res.status });
+            }
+            return result;
         } catch (err: unknown) {
-            return AssistantClient.classifyRemoteApplyError(err);
+            const result = AssistantClient.classifyRemoteApplyError(err);
+            recordOperation(
+                'remote_setting',
+                result.code === 'REQUEST_UNCONFIRMED' ? 'permission_unconfirmed' : 'permission_network_error'
+            );
+            return result;
+        } finally {
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
         }
     }
 
@@ -398,10 +410,11 @@ export class AssistantClient {
     ): Promise<{ success: boolean; changed?: boolean; code?: string; message?: string }> {
         const httpUrl = AssistantClient.toHttpUrl(serverUrl);
         if (!httpUrl || !token) return { success: false, code: 'PARAM_INVALID' };
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
         try {
             const controller = new AbortController();
             // 模型切换与会话交接共用流水线，可能包含服务端即时提炼《心智接力备忘录》的深度大模型调用，放宽超时至 60 秒
-            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            timeoutId = setTimeout(() => controller.abort(), 60000);
             const res = await fetch(`${httpUrl}/api/model`, {
                 method: 'POST',
                 headers: {
@@ -411,10 +424,20 @@ export class AssistantClient {
                 body: JSON.stringify({ provider, model }),
                 signal: controller.signal,
             });
-            clearTimeout(timeoutId);
-            return AssistantClient.parseRemoteApplyResponse(res);
+            const result = await AssistantClient.parseRemoteApplyResponse(res);
+            if (!result.success) {
+                recordOperation('remote_setting', 'model_rejected', { httpStatus: res.status });
+            }
+            return result;
         } catch (err: unknown) {
-            return AssistantClient.classifyRemoteApplyError(err);
+            const result = AssistantClient.classifyRemoteApplyError(err);
+            recordOperation(
+                'remote_setting',
+                result.code === 'REQUEST_UNCONFIRMED' ? 'model_unconfirmed' : 'model_network_error'
+            );
+            return result;
+        } finally {
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
         }
     }
 
@@ -751,7 +774,20 @@ export class AssistantClient {
                 if (isAttachmentBudgetExceeded(attachments)) {
                     throw new Error('ATTACHMENT_TOO_LARGE');
                 }
-            } catch {
+            } catch (err: unknown) {
+                const code = err instanceof Error ? err.message : '';
+                const reason = code === 'ATTACHMENT_URI_MISSING'
+                    ? 'attachment_uri_missing'
+                    : code === 'ATTACHMENT_NOT_FOUND'
+                        ? 'attachment_not_found'
+                        : code === 'ATTACHMENT_TOO_LARGE'
+                            ? 'attachment_too_large'
+                            : code === 'ATTACHMENT_READ_FAILED'
+                                ? 'attachment_read_failed'
+                                : code === 'ATTACHMENT_READ_EMPTY'
+                                    ? 'attachment_read_empty'
+                                    : 'attachment_unknown_error';
+                recordOperation('chat_send', reason);
                 if (this.ws !== sendingSocket || this.sendingId !== nextItem.messageId) return;
                 this.sendingId = undefined;
                 const current = useAssistantStore.getState();
@@ -778,7 +814,10 @@ export class AssistantClient {
         try {
             this.sendRaw({ type: 'chat', sessionId: nextItem.sessionId, messageId: nextItem.messageId,
                 content: nextItem.content, attachments });
-        } catch { /* The same ID remains in the outbox for retry. */ }
+        } catch {
+            /* The same ID remains in the outbox for retry. */
+            recordOperation('chat_send', 'send_raw_failed');
+        }
     }
 
     public withdrawPending(messageId: string, action: 'cancel' | 'edit'): void {

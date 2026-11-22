@@ -1,4 +1,4 @@
-import React, { useMemo, type ComponentProps } from 'react';
+import React, { useMemo, useRef, type ComponentProps } from 'react';
 import {
     ScrollView,
     StyleSheet,
@@ -16,9 +16,10 @@ import Constants from 'expo-constants';
 import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { theme } from '../utils/theme';
-import { useSettingsFont } from '../components/settings';
+import { SettingsToast, useSettingsFont, useSettingsToast } from '../components/settings';
 import { auxFontSizes } from '../utils/fontSize';
 import { RootStackParamList } from '../types/navigation';
+import { exportDiagnosticLogToFile } from '../services/diagnosticLog';
 import {
     HELP_DOC_URL,
     PRIVACY_POLICY_URL,
@@ -42,10 +43,32 @@ export const AboutScreen = () => {
     const { t } = useTranslation();
     const font = useSettingsFont();
     const navigation = useNavigation<AboutScreenNavigationProp>();
+    const exportingLog = useRef(false);
+    const { toast, showToast } = useSettingsToast();
 
     const appVersion = useMemo(() => {
         return Constants.expoConfig?.version || '1.0.0';
     }, []);
+
+    const handleExportDiagnosticLog = async () => {
+        if (exportingLog.current) return;
+        exportingLog.current = true;
+        try {
+            const result = await exportDiagnosticLogToFile();
+            if (result.status === 'saved') {
+                showToast(t('about.diagnostics.exportSuccessDetail', { fileName: result.fileName }));
+            } else if (result.status === 'error') {
+                const message = result.code === 'DOWNLOADS_FOLDER_RESTRICTED'
+                    ? t('about.diagnostics.downloadsFolderRestricted')
+                    : t('about.diagnostics.exportFailed');
+                Alert.alert(t('about.diagnostics.exportFailedTitle'), message);
+            }
+        } catch {
+            Alert.alert(t('about.diagnostics.exportFailedTitle'), t('about.diagnostics.exportFailed'));
+        } finally {
+            exportingLog.current = false;
+        }
+    };
 
     const handleCopyOfficialAccount = async () => {
         await Clipboard.setStringAsync(OFFICIAL_ACCOUNT_NAME);
@@ -117,59 +140,72 @@ export const AboutScreen = () => {
     const separator = <View style={styles.separator} />;
 
     return (
-        <ScrollView style={styles.container}>
-            {/* 使用帮助、隐私政策、权限说明 */}
-            <View style={styles.group}>
-                {renderRow('help-circle-outline', t('about.help.title'), () =>
-                    openLink(HELP_DOC_URL, t('about.linkError'))
-                )}
-                {separator}
-                {renderRow('shield-lock-outline', t('about.privacy.title'), () =>
-                    openLink(PRIVACY_POLICY_URL, t('about.linkError'))
-                )}
-                {separator}
-                {renderRow('security', t('about.permissions.title'), () =>
-                    navigation.navigate('PermissionInfo')
-                )}
-            </View>
+        <View style={styles.root}>
+            <ScrollView style={styles.container}>
+                {/* 使用帮助、隐私政策、权限说明 */}
+                <View style={styles.group}>
+                    {renderRow('help-circle-outline', t('about.help.title'), () =>
+                        openLink(HELP_DOC_URL, t('about.linkError'))
+                    )}
+                    {separator}
+                    {renderRow('shield-lock-outline', t('about.privacy.title'), () =>
+                        openLink(PRIVACY_POLICY_URL, t('about.linkError'))
+                    )}
+                    {separator}
+                    {renderRow('security', t('about.permissions.title'), () =>
+                        navigation.navigate('PermissionInfo')
+                    )}
+                </View>
 
-            {/* 开发者信息 */}
-            <View style={styles.group}>
-                {renderRow(
-                    'wechat',
-                    t('about.developer.officialAccount'),
-                    handleCopyOfficialAccount,
-                    <View style={styles.valueWithIcon}>
-                        <Text style={styles.rowValue}>{OFFICIAL_ACCOUNT_NAME}</Text>
-                        <Icon name="content-copy" size={18} color={theme.colors.textSecondary} />
-                    </View>
-                )}
-                {separator}
-                {renderRow(
-                    'email-outline',
-                    t('about.contact.title'),
-                    handleCopyEmail,
-                    <View style={styles.valueWithIcon}>
-                        <Text style={styles.rowValue} numberOfLines={1}>{CONTACT_EMAIL}</Text>
-                        <Icon name="content-copy" size={18} color={theme.colors.textSecondary} />
-                    </View>
-                )}
-            </View>
+                {/* 开发者信息 */}
+                <View style={styles.group}>
+                    {renderRow(
+                        'wechat',
+                        t('about.developer.officialAccount'),
+                        handleCopyOfficialAccount,
+                        <View style={styles.valueWithIcon}>
+                            <Text style={styles.rowValue}>{OFFICIAL_ACCOUNT_NAME}</Text>
+                            <Icon name="content-copy" size={18} color={theme.colors.textSecondary} />
+                        </View>
+                    )}
+                    {separator}
+                    {renderRow(
+                        'email-outline',
+                        t('about.contact.title'),
+                        handleCopyEmail,
+                        <View style={styles.valueWithIcon}>
+                            <Text style={styles.rowValue} numberOfLines={1}>{CONTACT_EMAIL}</Text>
+                            <Icon name="content-copy" size={18} color={theme.colors.textSecondary} />
+                        </View>
+                    )}
+                </View>
 
-            {/* 应用信息 */}
-            <View style={styles.group}>
-                {renderRow(
-                    'information-outline',
-                    t('about.appName'),
-                    undefined,
-                    <Text style={styles.rowValue}>v{appVersion}</Text>
-                )}
-            </View>
-        </ScrollView>
+                {/* 应用信息 */}
+                <View style={styles.group}>
+                    {renderRow(
+                        'information-outline',
+                        t('about.appName'),
+                        undefined,
+                        <Text style={styles.rowValue}>v{appVersion}</Text>
+                    )}
+                    {separator}
+                    {renderRow(
+                        'folder-download-outline',
+                        t('about.diagnostics.export'),
+                        handleExportDiagnosticLog
+                    )}
+                </View>
+            </ScrollView>
+            <SettingsToast message={toast} />
+        </View>
     );
 };
 
 const styles = StyleSheet.create({
+    root: {
+        flex: 1,
+        backgroundColor: theme.colors.background,
+    },
     container: {
         flex: 1,
         backgroundColor: theme.colors.background,

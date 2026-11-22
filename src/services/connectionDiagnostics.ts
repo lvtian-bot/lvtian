@@ -1,4 +1,3 @@
-import { useAssistantStore } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
 
 // Only export fixed categories. Native error messages can contain URLs and credentials.
@@ -48,13 +47,11 @@ export function recordConnectionEvent(event: ConnectionEvent): void {
     }).catch(() => { missedWrites += 1; });
 }
 
-export function exportConnectionDiagnostics(): Promise<string> {
-    const state = useAssistantStore.getState();
-    const time = new Date().toISOString();
-    const snapshot = pending.then(() => fsService.exportConnectionLog(JSON.stringify({
-        time, event: 'export', connectionState: state.connectionState, configured: Boolean(state.serverUrl),
-        credentialsStatus: state.credentialsStatus, credentialsError: state.credentialsError, missedWrites,
-    })));
+export function readConnectionDiagnostics(): Promise<{ content: string; missedWrites: number }> {
+    const snapshot = pending.then(async () => ({
+        content: await fsService.readConnectionLogs(),
+        missedWrites,
+    }));
     pending = snapshot.then(() => {}, () => {});
     return snapshot;
 }

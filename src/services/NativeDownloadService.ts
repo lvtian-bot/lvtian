@@ -1,4 +1,5 @@
 import { File } from 'expo-file-system';
+import { recordOperation } from './operationDiagnostics';
 
 export class DownloadTimeoutError extends Error {
     constructor() {
@@ -84,6 +85,7 @@ export async function downloadToFile(
                         await backup.copy(destination, { overwrite: true });
                     } catch (restoreError: unknown) {
                         preserveTemp = true;
+                        recordOperation('download', 'backup_restore_failed');
                         console.error('[NativeDownloadService] Failed to restore download destination; backup retained:', backup.uri, restoreError);
                     }
                 }

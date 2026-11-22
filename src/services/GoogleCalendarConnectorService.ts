@@ -1,5 +1,12 @@
 import { fetch } from 'expo/fetch';
 import { AssistantClient } from './AssistantClient';
+import { recordOperation } from './operationDiagnostics';
+
+class ConnectorRequestError extends Error {
+    constructor(message: string, readonly httpStatus?: number) {
+        super(message);
+    }
+}
 
 const CONNECTOR_PATH = '/api/connectors/google-calendar';
 const REQUEST_TIMEOUT_MS = 10000;
@@ -16,12 +23,21 @@ export interface ConnectorConnection {
 }
 
 function parseStatus(data: unknown): GoogleCalendarStatus {
-    if (!data || typeof data !== 'object' || !('status' in data)) throw new Error('invalid_status');
+    if (!data || typeof data !== 'object' || !('status' in data)) {
+        recordOperation('connector', 'invalid_status');
+        throw new Error('invalid_status');
+    }
     const status = data.status;
     if (status !== 'unavailable' && status !== 'disconnected' && status !== 'authorizing'
-        && status !== 'connected' && status !== 'needs_reauth' && status !== 'verification_unavailable') throw new Error('invalid_status');
+        && status !== 'connected' && status !== 'needs_reauth' && status !== 'verification_unavailable') {
+        recordOperation('connector', 'invalid_status');
+        throw new Error('invalid_status');
+    }
     const account = 'account' in data ? data.account : undefined;
-    if (account !== undefined && typeof account !== 'string') throw new Error('invalid_account');
+    if (account !== undefined && typeof account !== 'string') {
+        recordOperation('connector', 'invalid_status');
+        throw new Error('invalid_status');
+    }
     return { status, account };
 }
 
@@ -29,7 +45,10 @@ async function request(connection: ConnectorConnection, action: '' | '/connect' 
     const server = new URL(AssistantClient.toHttpUrl(connection.serverUrl));
     const token = connection.serverToken.trim();
     if (server.protocol !== 'https:' || server.username || server.password || server.search || server.hash
-        || !token || /[\r\n\0]/.test(token)) throw new Error('invalid_connection');
+        || !token || /[\r\n\0]/.test(token)) {
+        recordOperation('connector', 'invalid_connection');
+        throw new Error('invalid_connection');
+    }
     if (signal.aborted) throw new Error('request_aborted');
 
     const controller = new AbortController();
@@ -52,12 +71,26 @@ async function request(connection: ConnectorConnection, action: '' | '/connect' 
                 redirect: 'error',
                 signal: controller.signal,
             });
-            if (response.redirected) throw new Error('redirect_blocked');
+            if (response.redirected) throw new ConnectorRequestError('redirect_blocked');
             // A previous Lvtian server may not implement the status route at all.
             if (!action && response.status === 404) return { status: 'unsupported' };
-            if (!response.ok) throw new Error('connector_request_failed');
+            if (!response.ok) throw new ConnectorRequestError('connector_request_failed', response.status);
             return response.json();
         })()]);
+    } catch (error: unknown) {
+        if (error instanceof ConnectorRequestError) {
+            recordOperation(
+                'connector',
+                error.message === 'redirect_blocked' ? 'redirect_blocked' : 'request_failed',
+                { httpStatus: error.httpStatus },
+            );
+            throw error;
+        }
+        const message = error instanceof Error ? error.message : '';
+        if (message !== 'request_aborted' && message !== 'request_cancelled') {
+            recordOperation('connector', 'network');
+        }
+        throw error;
     } finally {
         clearTimeout(timeout);
         signal.removeEventListener('abort', abort);
@@ -76,6 +109,7 @@ export const googleCalendarConnector = {
             || typeof data.authorizationUrl !== 'string'
             || !/^https:\/\/accounts\.google\.com\/o\/oauth2\/auth\?[^\s#\\]+$/.test(data.authorizationUrl)
             || !/^[!-~]+$/.test(data.authorizationUrl)) {
+            recordOperation('connector', 'invalid_authorization_url');
             throw new Error('invalid_authorization_url');
         }
         return data.authorizationUrl;

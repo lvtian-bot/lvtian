@@ -1,12 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import * as Sharing from 'expo-sharing';
-import { exportConnectionDiagnostics } from '../services/connectionDiagnostics';
 import * as ImagePicker from 'expo-image-picker';
 
 import { fsService } from '../services/FileSystemService';
@@ -26,24 +24,6 @@ export const MeScreen = () => {
 
     const { userAvatar, setUserAvatar } = useSettingsStore();
     const { serverUrl, connectionState } = useAssistantStore();
-
-    const exportingLog = useRef(false);
-    const shareConnectionLog = async () => {
-        if (exportingLog.current) return;
-        exportingLog.current = true;
-        try {
-            const uri = await exportConnectionDiagnostics();
-            if (await Sharing.isAvailableAsync()) {
-                await Sharing.shareAsync(uri, { mimeType: 'text/plain', UTI: 'public.plain-text' });
-            } else {
-                Alert.alert(t('common.shareNotAvailable'));
-            }
-        } catch {
-            Alert.alert(t('settings.exportConnectionLogFailed'));
-        } finally {
-            exportingLog.current = false;
-        }
-    };
 
     const isConnected = connectionState === 'connected';
 
@@ -231,11 +211,6 @@ export const MeScreen = () => {
                             title={t('about.title', '关于')}
                             icon="information-outline"
                             onPress={() => navigation.navigate('About')}
-                        />
-                        <SettingsRow
-                            title={t('settings.exportConnectionLog')}
-                            icon="file-export-outline"
-                            onPress={shareConnectionLog}
                             last
                         />
                     </SettingsGroup>

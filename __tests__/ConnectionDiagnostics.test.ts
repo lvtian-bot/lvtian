@@ -1,15 +1,8 @@
-import { classifySocketError, exportConnectionDiagnostics, recordConnectionEvent } from '../src/services/connectionDiagnostics';
+import { classifySocketError, readConnectionDiagnostics, recordConnectionEvent } from '../src/services/connectionDiagnostics';
 import { fsService } from '../src/services/FileSystemService';
 
 jest.mock('../src/services/FileSystemService', () => ({
-    fsService: { appendConnectionLog: jest.fn(), exportConnectionLog: jest.fn() },
-}));
-
-jest.mock('../src/store/useAssistantStore', () => ({
-    useAssistantStore: { getState: () => ({
-        serverUrl: 'https://private.example', serverToken: 'private-token', messages: ['private-message'],
-        credentialsStatus: 'error', credentialsError: 'credentials_read_failed', connectionState: 'disconnected',
-    }) },
+    fsService: { appendConnectionLog: jest.fn(), readConnectionLogs: jest.fn() },
 }));
 
 const event = {
@@ -23,17 +16,18 @@ it('keeps native error text out of exported data', () => {
     expect(classifySocketError('unknown private url')).toBe('unknown');
 });
 
-it('preserves write order, reports gaps and waits for pending writes before exporting', async () => {
+it('preserves write order, reports gaps and waits for pending writes before reading', async () => {
     const lines: string[] = [];
     const write = jest.mocked(fsService.appendConnectionLog);
     write.mockRejectedValueOnce(new Error('disk busy')).mockImplementation(async line => { lines.push(line); });
-    jest.mocked(fsService.exportConnectionLog).mockImplementation(async status => [...lines, status].join('\n'));
+    jest.mocked(fsService.readConnectionLogs).mockImplementation(async () => lines.join('\n'));
     recordConnectionEvent(event);
-    await expect(exportConnectionDiagnostics()).resolves.toContain('"missedWrites":1');
+    await expect(readConnectionDiagnostics()).resolves.toEqual({ content: '', missedWrites: 1 });
     recordConnectionEvent({ ...event, event: 'retry_scheduled' });
     recordConnectionEvent({ ...event, event: 'authenticated' });
-    const exported = await exportConnectionDiagnostics();
-    expect(exported).not.toContain('private');
-    expect(exported.split('\n').map(line => JSON.parse(line).event))
-        .toEqual(['log_write_gap', 'retry_scheduled', 'authenticated', 'export']);
+    const exported = await readConnectionDiagnostics();
+    expect(exported.missedWrites).toBe(0);
+    expect(exported.content).not.toContain('private');
+    expect(exported.content.split('\n').filter(Boolean).map(line => JSON.parse(line).event))
+        .toEqual(['log_write_gap', 'retry_scheduled', 'authenticated']);
 });

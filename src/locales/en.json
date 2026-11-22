@@ -74,7 +74,14 @@
         "message": "Please ensure an email client is installed or copy the email address manually."
       }
     },
-    "linkError": "Cannot open this link"
+    "linkError": "Cannot open this link",
+    "diagnostics": {
+      "export": "Export Diagnostic Logs",
+      "exportSuccessDetail": "File saved as: {{fileName}}",
+      "exportFailedTitle": "Failed to export diagnostic logs",
+      "exportFailed": "Could not export diagnostic logs. Please try again.",
+      "downloadsFolderRestricted": "Save failed. Do not select \"Downloads\" from the sidebar (System Restricted).\n\nPlease tap Menu → Select your Device (Internal Storage) → Then go to Download folder."
+    }
   },
   "automaticTasks": {
     "title": "Tasks",
@@ -360,8 +367,6 @@
     "serverSubtitle": "Configure server address and token",
     "agentConfig": "AI Agent",
     "agentConfigSubtitle": "Configure AI agent permissions & capabilities",
-    "exportConnectionLog": "Export connection log",
-    "exportConnectionLogFailed": "Could not export the connection log. Please try again.",
     "appSettings": "App Settings",
     "fontSize": "Font Size",
     "fontSizes": {

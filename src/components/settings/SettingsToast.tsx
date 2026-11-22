@@ -51,12 +51,14 @@ const styles = StyleSheet.create({
         top: 56,
         left: 0,
         right: 0,
+        paddingHorizontal: 16,
         alignItems: 'center',
     },
     toast: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 7,
+        maxWidth: '100%',
         backgroundColor: 'rgba(31, 41, 51, 0.92)',
         borderRadius: 999,
         paddingHorizontal: 15,
@@ -68,6 +70,7 @@ const styles = StyleSheet.create({
         elevation: 6,
     },
     text: {
+        flexShrink: 1,
         fontSize: auxFontSizes.secondary,
         color: theme.colors.white,
     },

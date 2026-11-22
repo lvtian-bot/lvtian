@@ -1,11 +1,58 @@
 import { fetch as expoFetch } from 'expo/fetch';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { ConnectionConfigError } from './connectionConfig';
+import { recordOperation, type OperationReasons } from './operationDiagnostics';
 import type {
     AutomaticTask, AutomaticTaskConnection, AutomaticTaskDelivery, AutomaticTaskErrorCode,
     AutomaticTaskHistory, AutomaticTaskHistoryOptions, AutomaticTaskRecord,
     AutomaticTaskRequestOptions, AutomaticTaskResponse, AutomaticTaskResult,
 } from '../types/automaticTasks';
+
+function mapTaskFailure(code: AutomaticTaskErrorCode): OperationReasons['automatic_task'] | null {
+    switch (code) {
+        case 'aborted':
+        case 'connection_changed':
+        case 'disposed':
+            return null;
+        case 'unauthorized':
+        case 'authentication_failed':
+            return 'unauthorized';
+        case 'timeout':
+            return 'timeout';
+        case 'network':
+        case 'connection_failed':
+            return 'network';
+        case 'redirect_blocked':
+            return 'redirect_blocked';
+        case 'invalid_response':
+            return 'invalid_response';
+        case 'http_error':
+        case 'forbidden':
+        case 'not_found':
+        case 'service_closed':
+        case 'native_tasks_unavailable':
+        case 'service_upgrading':
+        case 'remote_failed':
+        case 'dispose_failed':
+        case 'method_not_allowed':
+        case 'metadata_invalid':
+            return 'http_error';
+        case 'connection_not_ready':
+        case 'connection_config_read_failed':
+        case 'connection_config_invalid':
+        case 'connection_config_write_failed':
+        case 'credentials_read_failed':
+        case 'credentials_write_failed':
+        case 'credentials_rollback_failed':
+            return 'connection_not_ready';
+        case 'invalid_endpoint':
+            return 'invalid_endpoint';
+        case 'invalid_token':
+            return 'invalid_token';
+        default:
+            return 'other';
+    }
+}
 
 export class AutomaticTaskError extends Error {
     constructor(
@@ -194,9 +241,16 @@ export class AutomaticTaskService {
                 return { ...parse(data), generation };
             })()]);
         } catch (error: unknown) {
-            if (error instanceof AutomaticTaskError) throw error;
-            if (error instanceof ConnectionConfigError) throw new AutomaticTaskError(error.code);
-            throw new AutomaticTaskError('network');
+            const taskError = error instanceof AutomaticTaskError
+                ? error
+                : error instanceof ConnectionConfigError
+                    ? new AutomaticTaskError(error.code)
+                    : new AutomaticTaskError('network');
+            const outcome = mapTaskFailure(taskError.code);
+            if (outcome) {
+                recordOperation('automatic_task', outcome, { httpStatus: taskError.status });
+            }
+            throw taskError;
         } finally {
             clearTimeout(timer);
             options.signal?.removeEventListener('abort', onAbort);
