@@ -11,6 +11,9 @@ export async function prepareAutonomousJobReplyOverlay(dataDir: string): Promise
     const content = yaml.stringify([{ insert: [{
         id: 'lvtian-autonomous-job-reply',
         name: fileURLToPath(new URL('./autonomousJobReplyPlugin.js', import.meta.url)),
+    }, {
+        id: 'lvtian-chat-supplements',
+        name: fileURLToPath(new URL('./chatSupplementPlugin.js', import.meta.url)),
     }] }]);
     const digest = createHash('sha256').update(content).digest('hex').slice(0, 16);
     const target = path.join(root, `acp-autonomous-job-reply-${digest}.patch.yml`);

@@ -50,6 +50,11 @@ export function buildChatTurns(messages: AssistantMessage[]): ChatTurn[] {
 
     for (const message of messages) {
         if (message.role === 'user') {
+            if (message.replyTo) {
+                const owner = turnsById.get(message.replyTo);
+                if (owner) owner.question += '\n\n' + message.content;
+                continue;
+            }
             current = {
                 id: message.id,
                 question: message.content,

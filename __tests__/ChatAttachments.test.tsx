@@ -247,21 +247,19 @@ describe('聊天附件待发送', () => {
         expect(drafts()).toHaveLength(0);
         expect(renderer.root.findByType(TextInput).props.value).toBe('');
     });
-    it('失败消息重新水合后按附件合计拦截，不删除原失败记录或输入草稿', async () => {
-        await type('不要丢失草稿');
-        await ReactTestRenderer.act(async () => { useAssistantStore.setState({ messages: [{
-            id: 'retry-large', seq: 1, role: 'user', content: 'retry original', status: 'error', timestamp: Date.now(),
-            attachments: [1, 2].map((id) => ({ type: 'file', name: `${id}.txt`, uri: `file:///${id}.txt`, size: 1 })),
-        }] }); });
-        jest.mocked(fsService.readAttachment).mockResolvedValue({ content: '\t'.repeat(6 * 1024 * 1024), size: 6 * 1024 * 1024 });
-        const retry = renderer.root.findAllByType(TouchableOpacity).find((node) =>
-            node.findAll((child) => child.props.name === 'error-outline').length > 0);
-        expect(retry).toBeDefined();
-        await ReactTestRenderer.act(async () => { retry!.props.onPress(); });
+    it('离线编辑恢复原文和附件，并保留已有输入', async () => {
+        await type('已有草稿');
+        await ReactTestRenderer.act(async () => {
+            const store = useAssistantStore.getState();
+            store.addToPendingSendQueue({ sessionId: 'main', messageId: 'edit', content: '原消息',
+                attempted: false, attachments: [{ type: 'file', name: 'notes.txt', content: 'data' }] });
+            AssistantClient.getInstance().withdrawPending('edit', 'edit');
+        });
+        expect(renderer.root.findByType(TextInput).props.value).toBe('原消息');
+        expect(drafts()).toHaveLength(1);
         expect(send).not.toHaveBeenCalled();
-        expect(useAssistantStore.getState().messages.some((item) => item.id === 'retry-large')).toBe(true);
-        expect(renderer.root.findByType(TextInput).props.value).toBe('不要丢失草稿');
-        expect(Alert.alert).toHaveBeenCalledWith(i18n.t('common.notice'), i18n.t('chat.attachmentTooLarge'));
+        await pressSend();
+        expect(renderer.root.findByType(TextInput).props.value).toBe('已有草稿');
     });
     it('发送同步失败保留文字和附件，避免草稿丢失', async () => {
         jest.mocked(ImagePicker.launchImageLibraryAsync).mockResolvedValue(imageResult());

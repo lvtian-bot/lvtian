@@ -649,6 +649,7 @@ export class LvtianServer {
                 }
                 const sessionId = rawSessionId;
                 ws.sessionId = sessionId;
+                if (this.sessionManager.getOrCreateSession(sessionId).messages.some(m => m.status === 'queued')) this.scheduleProcessQueue(sessionId);
                 const reconcile = this.sessionManager.getReconcileData(sessionId, msg.lastSeq);
                 this.send(ws, {
                     type: 'sync_result',
@@ -677,6 +678,20 @@ export class LvtianServer {
                     break;
                 }
                 this.handleChat(ws, rawSessionId, msg.messageId, msg.content, msg.attachments);
+                break;
+            }
+
+            case 'withdraw_unreceived': {
+                const sessionId = msg.sessionId || 'main';
+                if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) break;
+                const target = this.sessionManager.getOrCreateSession(sessionId).messages.find(m => m.id === msg.messageId);
+                if (target) this.send(ws, { type: 'message_ack', messageId: target.id, seq: target.seq,
+                    status: target.status === 'error' ? 'error' : 'sent', content: target.content, timestamp: target.timestamp,
+                    replyTo: target.replyTo, attachments: target.attachments, error: target.errorMessage });
+                else {
+                    this.sessionManager.deleteMessage(sessionId, msg.messageId, true);
+                    this.send(ws, { type: 'message_deleted', sessionId, messageId: msg.messageId });
+                }
                 break;
             }
 
@@ -808,6 +823,11 @@ export class LvtianServer {
 
         const session = this.sessionManager.getOrCreateSession(sessionId);
 
+        if (session.deletedMessages?.some(m => m.id === userMessageId)) {
+            this.send(ws, { type: 'message_deleted', sessionId, messageId: userMessageId });
+            return;
+        }
+
         // 幂等去重保护：如果会话中已存在相同 ID 的消息，直接回执当前已有状态，避免网络重传重复追加排队项引发死循环
         const existing = session.messages.find((m) => m.id === userMessageId);
         if (existing) {
@@ -818,6 +838,7 @@ export class LvtianServer {
                 role: 'user',
                 content: existing.content,
                 timestamp: existing.timestamp,
+                replyTo: existing.replyTo,
                 attachments: existing.attachments,
                 status: existing.status === 'queued' ? 'queued' : existing.status === 'error' ? 'error' : 'sent',
                 error: existing.errorMessage,
@@ -944,6 +965,7 @@ export class LvtianServer {
             sessionId,
             messageId: assistantMessageId,
             delta: '',
+            replyTo,
             status: 'thinking',
             timestamp: asstMsg.timestamp,
         });
@@ -964,6 +986,16 @@ export class LvtianServer {
             assistantMessageId,
             content,
             {
+            takeSupplement: () => {
+                if (!replyTo || this.isDraining) return;
+                const next = this.sessionManager.takeQueuedMessage(sessionId, replyTo);
+                if (!next) return;
+                this.broadcastSession(sessionId, { type: 'message_ack', messageId: next.id,
+                    seq: next.seq, role: 'user', status: 'sent', content: next.content, timestamp: next.timestamp,
+                    replyTo });
+                const remaining = this.sessionManager.getOrCreateSession(sessionId).messages.filter(m => m.status === 'queued').length;
+                return { ...next, remaining };
+            },
             onDelta: (delta: string) => {
                 receivedModelText ||= delta.trim().length > 0;
                 const updated = this.sessionManager.appendDelta(sessionId, assistantMessageId, delta);
@@ -1085,25 +1117,22 @@ export class LvtianServer {
         if (this.isDraining || this.acpEngine.isRunning(sessionId)) {
             return;
         }
-        const session = this.sessionManager.getOrCreateSession(sessionId);
-        const nextQueued = session.messages.find(
-            (m) => m.role === 'user' && m.status === 'queued'
-        );
+        let nextQueued;
+        try { nextQueued = this.sessionManager.takeQueuedMessage(sessionId); }
+        catch {
+            setTimeout(() => this.processNextQueuedMessage(sessionId), 3000).unref();
+            return;
+        }
         if (!nextQueued) {
             if (sessionId === 'main') this.taskReporting?.wake();
             return;
         }
 
-        // 1. 将该排队消息转为已发送
-        this.sessionManager.updateMessage(sessionId, nextQueued.id, (m) => {
-            m.status = 'sent';
-        });
-
         // 2. 广播消息受理状态变更，通知前端该排队消息已开始流转
         this.broadcastSession(sessionId, {
             type: 'message_ack',
             messageId: nextQueued.id,
-            seq: session.currentSeq,
+            seq: nextQueued.seq,
             role: 'user',
             content: nextQueued.content,
             attachments: nextQueued.attachments,
@@ -1359,6 +1388,7 @@ export class LvtianServer {
                 resolve();
             });
         });
+        if (this.sessionManager.getOrCreateSession('main').messages.some(m => m.status === 'queued')) this.scheduleProcessQueue('main');
         // Saved rules must resume even when no App or browser ever connects.
         // Keep main chat available if the optional native host is temporarily unavailable.
         if (this.nativeTasks) {

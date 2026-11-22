@@ -1,5 +1,5 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
+import React, { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { theme } from '../utils/theme';
 import { auxFontSizes } from '../utils/fontSize';
 import { useBubbleLayoutPolicy, useBubbleLayoutReady } from './ChatBubbleReveal';
@@ -12,21 +12,7 @@ interface ChatBubbleTextProps {
     children?: ReactNode;
     fullWidth?: boolean;
     clockTestID?: string;
-    /** For outgoing messages the clock always includes the same status slot. */
-    sending?: boolean;
-}
-
-function DelayedSendingIndicator() {
-    const [visible, setVisible] = useState(false);
-    useEffect(() => {
-        const timer = setTimeout(() => setVisible(true), 250);
-        return () => clearTimeout(timer);
-    }, []);
-    return visible ? <ActivityIndicator size={10} color={theme.colors.primaryDark} /> : null;
-}
-
-export function ChatSendingSlot({ sending }: { sending: boolean }) {
-    return <View style={styles.sendingSlot}>{sending && <DelayedSendingIndicator />}</View>;
+    selectable?: boolean;
 }
 
 interface LineBounds {
@@ -44,7 +30,7 @@ export function ChatBubbleText(props: ChatBubbleTextProps) {
 }
 
 function MeasuredBubbleText({ text, time, textStyle, children, fullWidth = false,
-    clockTestID = 'inline-bubble-time', sending }: ChatBubbleTextProps) {
+    clockTestID = 'inline-bubble-time', selectable = true }: ChatBubbleTextProps) {
     const { streaming, footerFallback } = useBubbleLayoutPolicy();
     const hasStreamed = useRef(streaming);
     useLayoutEffect(() => { if (streaming) hasStreamed.current = true; }, [streaming]);
@@ -95,7 +81,7 @@ function MeasuredBubbleText({ text, time, textStyle, children, fullWidth = false
     return (
         <View style={[styles.container, fullWidth && styles.fullWidth, row && styles.row]}
             onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
-            <Text key={row ? 'row' : `measured-${width}`} style={[textStyle, row && styles.rowBody]} selectable
+            <Text key={row ? 'row' : `measured-${width}`} style={[textStyle, row && styles.rowBody]} selectable={selectable}
                 onTextLayout={(event) => {
                     if (committed.current.row !== row || committed.current.text !== text) return;
                     if (row) {
@@ -108,12 +94,8 @@ function MeasuredBubbleText({ text, time, textStyle, children, fullWidth = false
                 }}>
                 {children ?? text}
             </Text>
-            {Boolean(time) && (sending === undefined
-                ? <Text key={time} {...clockProps} style={[clockStyle, styles.clockText]} selectable={false}>{time}</Text>
-                : <View key={time} {...clockProps} style={[clockStyle, styles.outgoingClock]}>
-                    <Text style={styles.clockText} selectable={false}>{time}</Text>
-                    <ChatSendingSlot sending={sending} />
-                </View>)}
+            {Boolean(time) && <Text key={time} {...clockProps} style={[clockStyle, styles.clockText]}
+                selectable={false}>{time}</Text>}
         </View>
     );
 }
@@ -125,8 +107,6 @@ const styles = StyleSheet.create({
     rowBody: { flexShrink: 1, minWidth: 0 },
     rowClock: { marginLeft: 8, marginTop: 0, flexShrink: 0 },
     clock: { alignSelf: 'flex-end', marginTop: 2 },
-    outgoingClock: { flexDirection: 'row', alignItems: 'center' },
-    sendingSlot: { width: 14, height: 10, alignItems: 'flex-end', justifyContent: 'center' },
     clockText: { fontSize: auxFontSizes.badge, color: theme.colors.textSecondary },
     inlineClock: { position: 'absolute', right: 0, marginTop: 0 },
     // Streaming prose remains visible; an unmeasured clock must not create a

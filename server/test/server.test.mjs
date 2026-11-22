@@ -1308,7 +1308,7 @@ test('手动终止 stop：同时终止运行中任务与排队中的消息', asy
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('SessionManager repairAfterLoad：服务重启时未执行的排队消息标记为 service_restarted', () => {
+test('SessionManager repairAfterLoad：服务重启保留尚未交给引擎的已收消息', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-test-sm-queue-'));
     const sm = new SessionManager(tmpDir);
 
@@ -1324,8 +1324,8 @@ test('SessionManager repairAfterLoad：服务重启时未执行的排队消息�
     const sm2 = new SessionManager(tmpDir);
     const session = sm2.getOrCreateSession('test-session');
     const msg = session.messages.find((m) => m.id === 'u-queued');
-    assert.equal(msg.status, 'error');
-    assert.equal(msg.errorMessage, 'service_restarted');
+    assert.equal(msg.status, 'queued');
+    assert.equal(msg.errorMessage, undefined);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });

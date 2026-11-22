@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { outboxKey, readOutbox, writeOutbox, type ChatOutbox } from '../services/chatOutbox';
+import { outboxKey, readOutbox, writeOutbox, type ChatOutbox, type PendingChatMessage } from '../services/chatOutbox';
 import {
     ConnectionConfigError,
     CredentialsErrorCode,
@@ -15,7 +15,6 @@ import {
     TaskExecutionState,
     ApprovalRequest,
     ToolCallState,
-    ChatAttachment,
     AgentSkill,
 } from '../types/assistantProtocol';
 
@@ -99,7 +98,7 @@ interface AssistantState {
     /** 服务端是否正在优雅升级中 */
     isServerUpgrading: boolean;
     /** 待发送消息队列（离线/升级期间乐观入队，重连对账后自动静默补发） */
-    pendingSendQueue: Array<{ sessionId: string; messageId: string; content: string; attachments?: ChatAttachment[] }>;
+    pendingSendQueue: PendingChatMessage[];
     /** 待撤销排队消息队列（离线取消时入队，重连对账后自动静默补发） */
     pendingCancelQueue: string[];
     /** 服务端加载的可用技能列表 */
@@ -127,7 +126,7 @@ interface AssistantState {
     clearedSeq: number;
     clearChat: () => void;
     setIsServerUpgrading: (upgrading: boolean) => void;
-    addToPendingSendQueue: (item: { sessionId: string; messageId: string; content: string; attachments?: ChatAttachment[] }) => void;
+    addToPendingSendQueue: (item: PendingChatMessage) => void;
     removeFromPendingSendQueue: (messageId: string) => void;
     clearPendingSendQueue: () => void;
     addToPendingCancelQueue: (messageId: string) => void;
@@ -493,7 +492,7 @@ async function initializeOutbox(): Promise<void> {
         }
         const pendingSendQueue = Array.from(messages.values());
         const displayed = new Set(current.messages.map(message => message.id));
-        const pendingMessages: AssistantMessage[] = pendingSendQueue.filter(item => !displayed.has(item.messageId)).map(item => ({
+        const pendingMessages: AssistantMessage[] = pendingSendQueue.filter(item => !item.withdrawal && !displayed.has(item.messageId)).map(item => ({
             id: item.messageId, seq: 0, role: 'user', content: item.content, timestamp: Date.now(),
             status: 'sending', attachments: item.attachments,
         }));
