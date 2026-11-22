@@ -817,10 +817,7 @@ export const ChatScreen = () => {
                                     openMessageMenu(item.id, e.clientX, e.clientY);
                                 } } : {})}
                                 style={[isUser ? styles.userMessageGroup : styles.assistantMessageGroup, isUser && pending && styles.pendingBubble]}>
-                            {selectingHere && <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-                                <Text selectable style={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]}>{item.content}</Text>
-                            </View>}
-                            {!selectingHere && !isUser && assistantParts.map((part) => {
+                            {!isUser && assistantParts.map((part) => {
                                 const partTime = part.type === 'text' && part.key === lastTextPartKey && item.completedAt
                                     ? formatChatTime(item.completedAt, chatI18n.language)
                                     : time;
@@ -830,15 +827,15 @@ export const ChatScreen = () => {
                                         testID={`assistant-prose-${item.id}-${part.key}`}
                                         style={[styles.bubble, styles.assistantBubble]}
                                     >
-                                        <ChatBubbleText selectable={false} text={part.text} time={partTime}
+                                        <ChatBubbleText selectable={selectingHere} text={part.text} time={partTime}
                                             textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} />
                                     </View>
                                 ) : (
-                                    <ChatMarkdownBubble selectable={false} messageId={item.id} onOpenMenu={openMessageMenu} key={part.key} text={part.text} time={partTime} metrics={metrics}
+                                    <ChatMarkdownBubble selectable={selectingHere} messageId={item.id} onOpenMenu={openMessageMenu} key={part.key} text={part.text} time={partTime} metrics={metrics}
                                         testID={`assistant-prose-${item.id}-${part.key}`} />
                                 );
                             })}
-                            {!selectingHere && hasProseBubble && <View
+                            {hasProseBubble && <View
                                 testID={isUser ? `user-bubble-${item.id}` : `assistant-prose-${item.id}`}
                                 style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}
                             >
@@ -850,7 +847,7 @@ export const ChatScreen = () => {
                                         <TouchableOpacity
                                             key={idx}
                                             activeOpacity={0.85}
-                                            onLongPress={e => openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY)}
+                                            onLongPress={selectingHere ? undefined : e => openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY)}
                                             onPress={() => setPreviewImageUri(imageUri)}
                                             accessibilityRole="button"
                                             accessibilityLabel={`${t('chat.previewImage', '预览图片')} ${att.name || ''}`}
@@ -890,7 +887,7 @@ export const ChatScreen = () => {
 
                                 {isUser ? (
                                     <View>
-                                        {inlineUserTime ? <ChatBubbleText text={item.content} time={time} selectable={false}
+                                        {inlineUserTime ? <ChatBubbleText text={item.content} time={time} selectable={selectingHere}
                                             textStyle={[styles.userText, { fontSize: metrics.chatBody, lineHeight: metrics.chatLineHeight }]} /> : <Text
                                             style={[
                                                 styles.userText,
@@ -899,7 +896,7 @@ export const ChatScreen = () => {
                                                     lineHeight: metrics.chatLineHeight,
                                                 },
                                             ]}
-                                            selectable={false}
+                                            selectable={selectingHere}
                                         >
                                             {item.content}
                                         </Text>}
