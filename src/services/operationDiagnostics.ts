@@ -64,6 +64,7 @@ export type OperationReasons = {
         | 'request_failed'
         | 'invalid_status'
         | 'invalid_authorization_url'
+        | 'timeout'
         | 'network';
 };
 

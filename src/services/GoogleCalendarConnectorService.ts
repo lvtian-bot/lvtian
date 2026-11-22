@@ -53,14 +53,19 @@ async function request(connection: ConnectorConnection, action: '' | '/connect' 
 
     const controller = new AbortController();
     let abort = () => {};
+    let timedOut = () => {};
     const cancelled = new Promise<never>((_, reject) => {
         abort = () => {
             controller.abort();
             reject(new Error('request_cancelled'));
         };
+        timedOut = () => {
+            controller.abort();
+            reject(new ConnectorRequestError('request_timeout'));
+        };
     });
     signal.addEventListener('abort', abort);
-    const timeout = setTimeout(abort, REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(timedOut, REQUEST_TIMEOUT_MS);
     try {
         // Unlike RN's legacy global fetch, Expo's native transport blocks redirects
         // before forwarding the Bearer credential to another endpoint.
@@ -79,11 +84,12 @@ async function request(connection: ConnectorConnection, action: '' | '/connect' 
         })()]);
     } catch (error: unknown) {
         if (error instanceof ConnectorRequestError) {
-            recordOperation(
-                'connector',
-                error.message === 'redirect_blocked' ? 'redirect_blocked' : 'request_failed',
-                { httpStatus: error.httpStatus },
-            );
+            const outcome = error.message === 'redirect_blocked'
+                ? 'redirect_blocked'
+                : error.message === 'request_timeout'
+                    ? 'timeout'
+                    : 'request_failed';
+            recordOperation('connector', outcome, { httpStatus: error.httpStatus });
             throw error;
         }
         const message = error instanceof Error ? error.message : '';

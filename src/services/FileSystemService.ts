@@ -14,9 +14,6 @@ export type SaveUserFileResult =
     | { status: 'saved'; uri: string; fileName: string }
     | { status: 'cancelled' };
 
-const SUGGESTED_ANDROID_DOWNLOAD_URI =
-    'content://com.android.externalstorage.documents/tree/primary%3ADownload';
-
 function isPickerCancelledError(error: unknown): boolean {
     if (!error || typeof error !== 'object') {
         return typeof error === 'string' && /cancel/i.test(error);
@@ -459,8 +456,7 @@ class FileSystemService {
     ): Promise<SaveUserFileResult> {
         let directory: Directory;
         try {
-            const initialUri = Platform.OS === 'android' ? SUGGESTED_ANDROID_DOWNLOAD_URI : undefined;
-            directory = await Directory.pickDirectoryAsync(initialUri);
+            directory = await Directory.pickDirectoryAsync();
         } catch (error: unknown) {
             if (isPickerCancelledError(error)) {
                 return { status: 'cancelled' };

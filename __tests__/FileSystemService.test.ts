@@ -218,9 +218,7 @@ describe('saveTextToUserStorage 直接保存本地存储', () => {
     } as unknown as Directory);
 
     const result = await fsService.saveTextToUserStorage('lvtian-diagnostics-test.txt', 'hello');
-    expect(pickDirectoryAsync).toHaveBeenCalledWith(
-      'content://com.android.externalstorage.documents/tree/primary%3ADownload',
-    );
+    expect(pickDirectoryAsync).toHaveBeenCalledWith();
     expect(createFile).toHaveBeenCalledWith('lvtian-diagnostics-test.txt', 'text/plain');
     expect(write).toHaveBeenCalledWith('hello');
     expect(result).toEqual({
@@ -266,12 +264,12 @@ describe('saveTextToUserStorage 直接保存本地存储', () => {
     });
   });
 
-  it('用户取消目录选择时返回 cancelled，iOS 不传 Android 初始 URI', async () => {
+  it('用户取消目录选择时返回 cancelled，iOS 同样正常写入本地目录', async () => {
     Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
     const pickDirectoryAsync = jest.mocked(Directory.pickDirectoryAsync);
     pickDirectoryAsync.mockRejectedValueOnce(new Error('File picking was cancelled by the user'));
     await expect(fsService.saveTextToUserStorage('log.txt', 'hello')).resolves.toEqual({ status: 'cancelled' });
-    expect(pickDirectoryAsync).toHaveBeenCalledWith(undefined);
+    expect(pickDirectoryAsync).toHaveBeenCalledWith();
 
     const write = jest.fn().mockResolvedValue(undefined);
     const createFile = jest.fn().mockReturnValue({ uri: 'file:///ios/Downloads/log.txt', write });
@@ -281,6 +279,6 @@ describe('saveTextToUserStorage 直接保存本地存储', () => {
       uri: 'file:///ios/Downloads/log.txt',
       fileName: 'log.txt',
     });
-    expect(pickDirectoryAsync).toHaveBeenLastCalledWith(undefined);
+    expect(pickDirectoryAsync).toHaveBeenLastCalledWith();
   });
 });

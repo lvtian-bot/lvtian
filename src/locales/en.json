@@ -80,7 +80,7 @@
       "exportSuccessDetail": "File saved as: {{fileName}}",
       "exportFailedTitle": "Failed to export diagnostic logs",
       "exportFailed": "Could not export diagnostic logs. Please try again.",
-      "downloadsFolderRestricted": "Save failed. Do not select \"Downloads\" from the sidebar (System Restricted).\n\nPlease tap Menu → Select your Device (Internal Storage) → Then go to Download folder."
+      "downloadsFolderRestricted": "This folder is restricted by Android and cannot be written to directly.\n\nPlease create a subfolder (for example, tap \"New folder\" inside Download) or pick another writable folder, then tap \"Use this folder\"."
     }
   },
   "automaticTasks": {

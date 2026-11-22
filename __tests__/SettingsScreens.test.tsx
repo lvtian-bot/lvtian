@@ -127,7 +127,7 @@ describe('MeScreen 与 AppSettingsScreen', () => {
             });
             expect(alertSpy).toHaveBeenLastCalledWith(
                 '导出诊断日志失败',
-                expect.stringContaining('内部存储'),
+                expect.stringContaining('新建子文件夹'),
             );
 
             exportSpy.mockResolvedValueOnce({ status: 'error', code: 'EXPORT_FAILED' });
