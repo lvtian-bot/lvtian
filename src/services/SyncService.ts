@@ -7,6 +7,7 @@ import { normalizePath } from '../utils/pathUtils';
 import { shadowFileService } from './ShadowFileService';
 import { mergeUtils } from '../utils/mergeUtils';
 import { BATCH_SYNC_STATUS_CHANGED_EVENT } from '../constants/events';
+import { recordOperation } from './operationDiagnostics';
 
 export type SyncStatus = 'synced' | 'conflict' | 'checking' | 'error' | 'offline' | 'not-configured';
 export type ConflictType = 'cloudNewer' | 'localNewer' | 'bidirectional' | null;
@@ -421,6 +422,7 @@ class SyncService {
                         await shadowFileService.saveShadow(filePath, content);
                     } catch (e) {
                         console.error('[SyncService] Failed to update shadow after upload:', e);
+                        recordOperation('cloud_sync', 'shadow_update_failed');
                     }
                 }
 
@@ -440,6 +442,7 @@ class SyncService {
         } catch (error: any) {
             if (error.code === 'PreconditionFailed') {
                 console.warn('SyncService Upload prevented (Optimistic Lock):', error.message);
+                recordOperation('cloud_sync', 'upload_conflict');
                 setUploadState(filePath, 'conflict-failed');
                 // ... emit conflict ...
                 DeviceEventEmitter.emit(BATCH_SYNC_STATUS_CHANGED_EVENT, {
@@ -460,6 +463,7 @@ class SyncService {
                 return false;
             } else {
                 console.error('SyncService Upload failed:', error);
+                recordOperation('cloud_sync', 'upload_failed');
                 setUploadState(filePath, 'failed');
 
                 // Broadcast error status for real-time UI feedback
@@ -490,6 +494,7 @@ class SyncService {
                     await shadowFileService.saveShadow(filePath, content);
                 } catch (e) {
                     console.error('[SyncService] Failed to update shadow after download:', e);
+                    recordOperation('cloud_sync', 'shadow_update_failed');
                 }
             }
 
@@ -497,6 +502,7 @@ class SyncService {
             return true;
         } catch (error) {
             console.error('SyncService Download failed:', error);
+            recordOperation('cloud_sync', 'download_failed');
             return false;
         }
     }
@@ -541,6 +547,7 @@ class SyncService {
             const baseContent = await shadowFileService.getShadow(filePath);
             if (baseContent === null) {
                 console.log(`[SyncService] Smart Merge aborted: No shadow file (Base) found.`);
+                recordOperation('cloud_sync', 'smart_merge_no_shadow');
                 return false;
             }
 
@@ -567,6 +574,7 @@ class SyncService {
 
             if (result.hasConflict) {
                 console.log(`[SyncService] Smart Merge failed: Conflict in content.`);
+                recordOperation('cloud_sync', 'smart_merge_conflict');
                 return false;
             }
 
@@ -580,6 +588,7 @@ class SyncService {
 
         } catch (e) {
             console.error(`[SyncService] Smart Merge exception:`, e);
+            recordOperation('cloud_sync', 'smart_merge_exception');
             return false;
         }
     }

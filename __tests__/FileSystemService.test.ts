@@ -1,17 +1,22 @@
+import { Platform } from 'react-native';
 import { File, Directory } from 'expo-file-system';
-import { fsService } from '../src/services/FileSystemService';
+import { fsService, UserStorageError } from '../src/services/FileSystemService';
 
-jest.mock('expo-file-system', () => ({
-  Paths: { document: { uri: 'file:///documents' }, cache: { uri: 'file:///cache' } },
-  Directory: jest.fn().mockImplementation((..._args) => ({
+jest.mock('expo-file-system', () => {
+  const MockDirectory = jest.fn().mockImplementation((..._args) => ({
     uri: 'file:///documents/lvtian_docs',
     exists: true,
     move: jest.fn(),
     list: jest.fn().mockReturnValue([]),
     delete: jest.fn(),
-  })),
-  File: jest.fn(),
-}));
+  })) as jest.Mock & { pickDirectoryAsync: jest.Mock };
+  MockDirectory.pickDirectoryAsync = jest.fn();
+  return {
+    Paths: { document: { uri: 'file:///documents' }, cache: { uri: 'file:///cache' } },
+    Directory: MockDirectory,
+    File: jest.fn(),
+  };
+});
 
 const mockFile = jest.mocked(File);
 const mockDirectory = jest.mocked(Directory);
@@ -159,7 +164,7 @@ describe('预览缓存信息', () => {
   });
 });
 
-it('轮换后仍按时间导出两段连接记录，快照保存在缓存中', async () => {
+it('轮换后仍按时间顺序读取两段连接记录，不再写入缓存导出目录', async () => {
   const files = new Map<string, string>([
     ['connection-events.previous.log', 'old\n'],
     ['connection-events.log', 'recent\n'],
@@ -168,7 +173,7 @@ it('轮换后仍按时间导出两段连接记录，快照保存在缓存中', a
   mockDirectory.mockImplementation(() => directory as unknown as Directory);
   mockFile.mockImplementation((_root, filename) => {
     const f = {
-      name: String(filename), uri: 'file:///cache/' + filename,
+      name: String(filename), uri: 'file:///documents/' + filename,
       get exists() { return files.has(f.name); },
       get size() { return 128 * 1024; },
       move: (target: File) => {
@@ -186,6 +191,94 @@ it('轮换后仍按时间导出两段连接记录，快照保存在缓存中', a
     return f as unknown as File;
   });
   await fsService.appendConnectionLog('new');
-  const uri = await fsService.exportConnectionLog('status');
-  expect(files.get(uri.split('/').pop()!)).toBe('recent\nnew\nstatus\n');
+  const content = await fsService.readConnectionLogs();
+  expect(content).toBe('recent\nnew\n');
+  expect(directory.create).not.toHaveBeenCalled();
+});
+
+describe('saveTextToUserStorage 直接保存本地存储', () => {
+  const originalOS = Platform.OS;
+
+  afterEach(() => {
+    Object.defineProperty(Platform, 'OS', { value: originalOS, configurable: true });
+    jest.restoreAllMocks();
+  });
+
+  it('Android 选择目录后直接创建文件并写入内容', async () => {
+    Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+    const write = jest.fn().mockResolvedValue(undefined);
+    const createFile = jest.fn().mockReturnValue({
+      uri: 'content://com.android.externalstorage.documents/tree/primary%3ADownload/document/log.txt',
+      write,
+    });
+    const pickDirectoryAsync = jest.mocked(Directory.pickDirectoryAsync);
+    pickDirectoryAsync.mockResolvedValue({
+      uri: 'content://com.android.externalstorage.documents/tree/primary%3ADownload',
+      createFile,
+    } as unknown as Directory);
+
+    const result = await fsService.saveTextToUserStorage('lvtian-diagnostics-test.txt', 'hello');
+    expect(pickDirectoryAsync).toHaveBeenCalledWith();
+    expect(createFile).toHaveBeenCalledWith('lvtian-diagnostics-test.txt', 'text/plain');
+    expect(write).toHaveBeenCalledWith('hello');
+    expect(result).toEqual({
+      status: 'saved',
+      uri: 'content://com.android.externalstorage.documents/tree/primary%3ADownload/document/log.txt',
+      fileName: 'lvtian-diagnostics-test.txt',
+    });
+  });
+
+  it('Android 误选侧边栏受限下载目录时抛出 DOWNLOADS_FOLDER_RESTRICTED', async () => {
+    Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+    jest.mocked(Directory.pickDirectoryAsync).mockResolvedValue({
+      uri: 'content://com.android.providers.downloads.documents/tree/downloads',
+      createFile: jest.fn(),
+    } as unknown as Directory);
+
+    await expect(fsService.saveTextToUserStorage('log.txt', 'hello')).rejects.toThrow(UserStorageError);
+    await expect(fsService.saveTextToUserStorage('log.txt', 'hello')).rejects.toMatchObject({
+      code: 'DOWNLOADS_FOLDER_RESTRICTED',
+    });
+  });
+
+  it('Android 写入报错 isn\'t writable 时映射为 DOWNLOADS_FOLDER_RESTRICTED，其余映射为 WRITE_FAILED', async () => {
+    Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+    jest.mocked(Directory.pickDirectoryAsync).mockResolvedValueOnce({
+      uri: 'content://com.android.externalstorage.documents/tree/primary%3ADownload',
+      createFile: () => {
+        throw new Error("The selected folder isn't writable");
+      },
+    } as unknown as Directory);
+    await expect(fsService.saveTextToUserStorage('log.txt', 'hello')).rejects.toMatchObject({
+      code: 'DOWNLOADS_FOLDER_RESTRICTED',
+    });
+
+    jest.mocked(Directory.pickDirectoryAsync).mockResolvedValueOnce({
+      uri: 'content://com.android.externalstorage.documents/tree/primary%3ADownload',
+      createFile: () => {
+        throw new Error('disk full');
+      },
+    } as unknown as Directory);
+    await expect(fsService.saveTextToUserStorage('log.txt', 'hello')).rejects.toMatchObject({
+      code: 'WRITE_FAILED',
+    });
+  });
+
+  it('用户取消目录选择时返回 cancelled，iOS 同样正常写入本地目录', async () => {
+    Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+    const pickDirectoryAsync = jest.mocked(Directory.pickDirectoryAsync);
+    pickDirectoryAsync.mockRejectedValueOnce(new Error('File picking was cancelled by the user'));
+    await expect(fsService.saveTextToUserStorage('log.txt', 'hello')).resolves.toEqual({ status: 'cancelled' });
+    expect(pickDirectoryAsync).toHaveBeenCalledWith();
+
+    const write = jest.fn().mockResolvedValue(undefined);
+    const createFile = jest.fn().mockReturnValue({ uri: 'file:///ios/Downloads/log.txt', write });
+    pickDirectoryAsync.mockResolvedValueOnce({ uri: 'file:///ios/Downloads/', createFile } as unknown as Directory);
+    await expect(fsService.saveTextToUserStorage('log.txt', 'ios-data')).resolves.toEqual({
+      status: 'saved',
+      uri: 'file:///ios/Downloads/log.txt',
+      fileName: 'log.txt',
+    });
+    expect(pickDirectoryAsync).toHaveBeenLastCalledWith();
+  });
 });

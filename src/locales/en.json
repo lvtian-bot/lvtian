@@ -74,7 +74,14 @@
         "message": "Please ensure an email client is installed or copy the email address manually."
       }
     },
-    "linkError": "Cannot open this link"
+    "linkError": "Cannot open this link",
+    "diagnostics": {
+      "export": "Export Diagnostic Logs",
+      "exportSuccessDetail": "File saved as: {{fileName}}",
+      "exportFailedTitle": "Failed to export diagnostic logs",
+      "exportFailed": "Could not export diagnostic logs. Please try again.",
+      "downloadsFolderRestricted": "This folder is restricted by Android and cannot be written to directly.\n\nPlease create a subfolder (for example, tap \"New folder\" inside Download) or pick another writable folder, then tap \"Use this folder\"."
+    }
   },
   "automaticTasks": {
     "title": "Tasks",
@@ -360,8 +367,6 @@
     "serverSubtitle": "Configure server address and token",
     "agentConfig": "AI Agent",
     "agentConfigSubtitle": "Configure AI agent permissions & capabilities",
-    "exportConnectionLog": "Export connection log",
-    "exportConnectionLogFailed": "Could not export the connection log. Please try again.",
     "appSettings": "App Settings",
     "fontSize": "Font Size",
     "fontSizes": {

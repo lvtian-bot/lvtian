@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { outboxKey, readOutbox, writeOutbox, type ChatOutbox, type PendingChatMessage } from '../services/chatOutbox';
+import { recordOperation } from '../services/operationDiagnostics';
 import {
     ConnectionConfigError,
     CredentialsErrorCode,
@@ -204,6 +205,7 @@ export const useAssistantStore = create<AssistantState>()(
                         startChatStorage(cleanUrl, cleanToken);
                     } catch (error) {
                         const code = credentialsErrorCode(error);
+                        recordOperation('credentials', code);
                         set({ credentialsStatus: 'error', credentialsError: code });
                         throw new ConnectionConfigError(code);
                     }
@@ -240,6 +242,7 @@ export const useAssistantStore = create<AssistantState>()(
                         return credentials;
                     } catch (error) {
                         const code = credentialsErrorCode(error);
+                        recordOperation('credentials', code);
                         set({ credentialsStatus: 'error', credentialsError: code });
                         throw new ConnectionConfigError(code);
                     }
@@ -446,6 +449,7 @@ export const useAssistantStore = create<AssistantState>()(
                 return (_state, error) => {
                     Promise.resolve().then(async () => {
                         if (error) {
+                            recordOperation('chat_storage', 'cache_rehydrate_failed');
                             try { await AsyncStorage.removeItem(CHAT_CACHE_KEY); } catch { /* cache is disposable */ }
                         }
                         chatHydrationSucceeded = true;
@@ -478,7 +482,16 @@ async function initializeOutbox(): Promise<void> {
     try {
         // An unreadable queue is disposable; continue with messages created in
         // this session and replace the unusable record when storage allows it.
-        const saved = await readOutbox(key).catch(() => ({ pendingSendQueue: [], pendingCancelQueue: [] }));
+        const saved = await readOutbox(key).catch((error: unknown) => {
+            const msg = error instanceof Error ? error.message : '';
+            const reason = msg === 'outbox_timeout'
+                ? 'outbox_read_timeout'
+                : msg === 'invalid_outbox'
+                    ? 'outbox_invalid'
+                    : 'outbox_read_failed';
+            recordOperation('chat_storage', reason);
+            return { pendingSendQueue: [], pendingCancelQueue: [] };
+        });
         const current = useAssistantStore.getState();
         if (generation !== outboxGeneration || key !== outboxKey(current.serverUrl, current.serverToken)) return;
         const cancelled = new Set([...saved.pendingCancelQueue, ...current.pendingCancelQueue]);
@@ -505,7 +518,10 @@ async function initializeOutbox(): Promise<void> {
 
 function persistOutbox(key: string, outbox: ChatOutbox): void {
     const previous = outboxWrites.get(key) ?? Promise.resolve();
-    const write = previous.catch(() => undefined).then(() => writeOutbox(key, outbox)).catch(() => {});
+    const write = previous
+        .catch(() => undefined)
+        .then(() => writeOutbox(key, outbox))
+        .catch(() => { recordOperation('chat_storage', 'outbox_write_failed'); });
     outboxWrites.set(key, write);
     write.then(() => { if (outboxWrites.get(key) === write) outboxWrites.delete(key); });
 }

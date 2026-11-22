@@ -72,3 +72,8 @@ jest.mock('expo-image-picker', () => ({
 jest.mock('expo-document-picker', () => ({
   getDocumentAsync: jest.fn().mockResolvedValue({ canceled: true, assets: [] }),
 }));
+
+jest.mock('expo-updates', () => ({
+  runtimeVersion: null,
+  updateId: null,
+}));

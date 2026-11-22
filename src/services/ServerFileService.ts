@@ -4,6 +4,7 @@ import {
     ServerDirectoryListing,
 } from '../types/assistantProtocol';
 import { downloadToFile, DownloadTimeoutError } from './NativeDownloadService';
+import { recordOperation } from './operationDiagnostics';
 
 export class ServerFileError extends Error {
     public code?: string;
@@ -93,10 +94,12 @@ export class ServerFileService {
             });
 
             if (response.status === 401) {
+                recordOperation('server_file', 'unauthorized', { httpStatus: 401 });
                 throw new ServerFileError('访问令牌无效或已过期，请重新配置', 'UNAUTHORIZED', 401);
             }
 
             if (!response.ok) {
+                recordOperation('server_file', 'http_error', { httpStatus: response.status });
                 let errorMsg = `服务响应失败 (${response.status})`;
                 let errorCode: string | undefined;
                 try {
@@ -117,10 +120,12 @@ export class ServerFileService {
         } catch (err: unknown) {
             const errObj = err as Error;
             if (errObj.name === 'AbortError') {
+                recordOperation('server_file', 'timeout', { httpStatus: 408 });
                 throw new ServerFileError('请求超时，请检查服务端连接', 'TIMEOUT', 408);
             }
             // 传输层立即失败（连接拒绝、服务器离线等）：包装为结构化错误码，供前端按语言映射
             if (!(err instanceof ServerFileError)) {
+                recordOperation('server_file', 'network');
                 const wrapped = new Error(errObj.message || 'Network request failed') as Error & { code?: string };
                 wrapped.code = 'network';
                 throw wrapped;
@@ -184,8 +189,10 @@ export class ServerFileService {
             });
         } catch (error: unknown) {
             if (error instanceof DownloadTimeoutError) {
+                recordOperation('server_file', 'download_timeout');
                 throw new ServerFileError('文件下载超时（30 秒无进展），请检查网络或稍后重试', 'DOWNLOAD_TIMEOUT', 408);
             }
+            recordOperation('server_file', 'download_failed');
             console.warn('[ServerFileService] Download failed:', error);
             throw new ServerFileError('文件下载失败，请稍后重试', 'DOWNLOAD_FAILED');
         }

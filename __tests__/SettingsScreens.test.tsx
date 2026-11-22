@@ -1,16 +1,14 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
-import { Text, TouchableOpacity } from 'react-native';
+import { Alert, Text, TouchableOpacity } from 'react-native';
 import i18n from '../src/i18n';
-import * as Sharing from 'expo-sharing';
-import { fsService } from '../src/services/FileSystemService';
-import { SettingsRow } from '../src/components/settings';
+import * as diagnosticLog from '../src/services/diagnosticLog';
+import { SettingsRow, SettingsToast } from '../src/components/settings';
+import { AboutScreen } from '../src/screens/AboutScreen';
 import { MeScreen } from '../src/screens/MeScreen';
 import { AppSettingsScreen } from '../src/screens/AppSettingsScreen';
 import { useSettingsStore } from '../src/store/useSettingsStore';
 import { useAssistantStore } from '../src/store/useAssistantStore';
-
-jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(), shareAsync: jest.fn() }));
 
 const mockNavigate = jest.fn();
 
@@ -49,6 +47,7 @@ describe('MeScreen 与 AppSettingsScreen', () => {
     });
 
     afterEach(async () => {
+        jest.restoreAllMocks();
         if (currentRenderer) {
             await ReactTestRenderer.act(async () => {
                 currentRenderer?.unmount();
@@ -76,24 +75,71 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         expect(allTexts).not.toContain('缓存管理');
     });
 
-    it('断线时仍可从关于下一行分享连接日志', async () => {
-        useAssistantStore.setState({ connectionState: 'disconnected', serverUrl: '' });
-        const uri = 'file:///cache/lvtian-connection.txt';
-        const snapshot = jest.spyOn(fsService, 'exportConnectionLog').mockResolvedValue(uri);
-        jest.mocked(Sharing.isAvailableAsync).mockResolvedValue(true);
+    it('MeScreen 不再显示日志导出入口，关于保持为卡片最后一行', async () => {
+        await ReactTestRenderer.act(async () => {
+            currentRenderer = ReactTestRenderer.create(<MeScreen />);
+        });
+        const rows = currentRenderer!.root.findAllByType(SettingsRow);
+        expect(rows.some(row => row.props.title === '导出连接日志' || row.props.title === '导出诊断日志')).toBe(false);
+        const about = rows.find(row => row.props.title === '关于');
+        expect(about).toBeDefined();
+        expect(about!.props.last).toBe(true);
+    });
+
+    it('AboutScreen 在应用信息下方提供导出诊断日志，直接保存本地存储并展示反馈', async () => {
+        jest.useFakeTimers();
         try {
+            useAssistantStore.setState({ connectionState: 'disconnected', serverUrl: '' });
+            const exportSpy = jest.spyOn(diagnosticLog, 'exportDiagnosticLogToFile');
+            const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+
             await ReactTestRenderer.act(async () => {
-                currentRenderer = ReactTestRenderer.create(<MeScreen />);
+                currentRenderer = ReactTestRenderer.create(<AboutScreen />);
             });
-            const rows = currentRenderer!.root.findAllByType(SettingsRow);
-            const about = rows.findIndex(row => row.props.title === '关于');
-            expect(about).toBeGreaterThanOrEqual(0);
-            const row = rows[about + 1];
-            expect(row.props.title).toBe('导出连接日志');
-            await ReactTestRenderer.act(async () => { await row.props.onPress(); });
-            expect(Sharing.shareAsync).toHaveBeenCalledWith(uri, expect.objectContaining({ mimeType: 'text/plain' }));
+
+            const root = currentRenderer!.root;
+            const exportRow = root
+                .findAllByType(TouchableOpacity)
+                .find(node => node.findAllByType(Text).some(text => text.props.children === '导出诊断日志'));
+            expect(exportRow).toBeDefined();
+
+            exportSpy.mockResolvedValueOnce({
+                status: 'saved',
+                fileName: 'lvtian-diagnostics-20261122-173000.txt',
+                uri: 'content://saved/log.txt',
+            });
+            await ReactTestRenderer.act(async () => {
+                await exportRow!.props.onPress();
+            });
+            expect(alertSpy).not.toHaveBeenCalled();
+            const toastComp = root.findByType(SettingsToast);
+            expect(toastComp.props.message).toBe('文件已保存为：lvtian-diagnostics-20261122-173000.txt');
+
+            exportSpy.mockResolvedValueOnce({ status: 'cancelled' });
+            await ReactTestRenderer.act(async () => {
+                await exportRow!.props.onPress();
+            });
+            expect(alertSpy).not.toHaveBeenCalled();
+
+            exportSpy.mockResolvedValueOnce({ status: 'error', code: 'DOWNLOADS_FOLDER_RESTRICTED' });
+            await ReactTestRenderer.act(async () => {
+                await exportRow!.props.onPress();
+            });
+            expect(alertSpy).toHaveBeenLastCalledWith(
+                '导出诊断日志失败',
+                expect.stringContaining('新建子文件夹'),
+            );
+
+            exportSpy.mockResolvedValueOnce({ status: 'error', code: 'EXPORT_FAILED' });
+            await ReactTestRenderer.act(async () => {
+                await exportRow!.props.onPress();
+            });
+            expect(alertSpy).toHaveBeenLastCalledWith('导出诊断日志失败', '诊断日志导出失败，请重试');
         } finally {
-            snapshot.mockRestore();
+            await ReactTestRenderer.act(async () => {
+                jest.runOnlyPendingTimers();
+            });
+            jest.useRealTimers();
         }
     });
 

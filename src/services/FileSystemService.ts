@@ -1,4 +1,29 @@
+import { Platform } from 'react-native';
 import { Paths, File, Directory } from 'expo-file-system';
+
+export type UserStorageErrorCode = 'DOWNLOADS_FOLDER_RESTRICTED' | 'WRITE_FAILED';
+
+export class UserStorageError extends Error {
+    constructor(public readonly code: UserStorageErrorCode) {
+        super(code);
+        this.name = 'UserStorageError';
+    }
+}
+
+export type SaveUserFileResult =
+    | { status: 'saved'; uri: string; fileName: string }
+    | { status: 'cancelled' };
+
+function isPickerCancelledError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+        return typeof error === 'string' && /cancel/i.test(error);
+    }
+    const err = error as { code?: unknown; name?: unknown; message?: unknown };
+    return [err.code, err.name, err.message].some(
+        value => typeof value === 'string' && /cancel/i.test(value),
+    );
+}
+
 export interface FileItem {
     name: string;
     path: string;
@@ -414,22 +439,58 @@ class FileSystemService {
         await new File(Paths.document, 'connection-events.log').write(line + '\n', { append: true });
     }
 
-    async exportConnectionLog(status: string): Promise<string> {
+    async readConnectionLogs(): Promise<string> {
         const parts: string[] = [];
         for (const name of ['connection-events.previous.log', 'connection-events.log']) {
             const file = new File(Paths.document, name);
             if (file.exists) parts.push(await file.text());
         }
-        parts.push(status + '\n');
-        const directory = new Directory(Paths.cache, 'connection-exports');
-        directory.create({ idempotent: true });
-        const snapshot = new File(directory, `lvtian-connection-${Date.now()}.txt`);
-        await snapshot.write(parts.join(''));
-        // A recipient may still be opening the previous share. Keep recent snapshots distinct.
-        const older = directory.list().filter(file => file instanceof File && file.uri !== snapshot.uri)
-            .sort((a, b) => b.name.localeCompare(a.name));
-        for (const file of older.slice(2)) file.delete();
-        return snapshot.uri;
+        return parts.join('');
+    }
+
+    /** 打开系统目录选择器并直接将文本写入用户选定的本地存储位置 */
+    async saveTextToUserStorage(
+        fileName: string,
+        content: string,
+        mimeType = 'text/plain',
+    ): Promise<SaveUserFileResult> {
+        let directory: Directory;
+        try {
+            directory = await Directory.pickDirectoryAsync();
+        } catch (error: unknown) {
+            if (isPickerCancelledError(error)) {
+                return { status: 'cancelled' };
+            }
+            throw new UserStorageError('WRITE_FAILED');
+        }
+
+        if (!directory?.uri) {
+            return { status: 'cancelled' };
+        }
+
+        if (
+            Platform.OS === 'android' &&
+            directory.uri.includes('com.android.providers.downloads.documents')
+        ) {
+            throw new UserStorageError('DOWNLOADS_FOLDER_RESTRICTED');
+        }
+
+        try {
+            const targetFile = directory.createFile(fileName, mimeType);
+            await targetFile.write(content);
+            return { status: 'saved', uri: targetFile.uri, fileName };
+        } catch (error: unknown) {
+            if (error instanceof UserStorageError) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            if (
+                Platform.OS === 'android' &&
+                (message.includes("isn't writable") ||
+                    message.includes('com.android.providers.downloads.documents'))
+            ) {
+                throw new UserStorageError('DOWNLOADS_FOLDER_RESTRICTED');
+            }
+            throw new UserStorageError('WRITE_FAILED');
+        }
     }
 
     /** 获取沙盒缓存文件路径及其缓存时效所需的文件信息。 */

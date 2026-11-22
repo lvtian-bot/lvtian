@@ -74,7 +74,14 @@
         "message": "请确认已安装邮箱客户端或手动复制邮箱地址。"
       }
     },
-    "linkError": "无法打开此链接"
+    "linkError": "无法打开此链接",
+    "diagnostics": {
+      "export": "导出诊断日志",
+      "exportSuccessDetail": "文件已保存为：{{fileName}}",
+      "exportFailedTitle": "导出诊断日志失败",
+      "exportFailed": "诊断日志导出失败，请重试",
+      "downloadsFolderRestricted": "当前文件夹受 Android 系统限制无法直接写入。\n\n请在目录选择器中新建子文件夹（例如在 Download 内点「新建文件夹」），或改选其他可写文件夹后再点「使用此文件夹」。"
+    }
   },
   "automaticTasks": {
     "title": "任务",
@@ -360,8 +367,6 @@
     "serverSubtitle": "配置服务地址与访问令牌以连接服务端",
     "agentConfig": "AI 智能体",
     "agentConfigSubtitle": "配置运行在服务端的 AI 代理权限与能力",
-    "exportConnectionLog": "导出连接日志",
-    "exportConnectionLogFailed": "连接日志导出失败，请重试",
     "appSettings": "App 设置",
     "fontSize": "字体大小",
     "fontSizes": {

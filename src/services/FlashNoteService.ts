@@ -6,6 +6,7 @@ import { DeviceEventEmitter } from 'react-native';
 import { normalizePath } from '../utils/pathUtils';
 import { syncService } from './SyncService';
 import * as Network from 'expo-network';
+import { recordOperation } from './operationDiagnostics';
 import {
     FLASH_NOTES_UPDATED_EVENT,
     SHARE_RECEIVED_EVENT,
@@ -362,6 +363,7 @@ class FlashNoteService {
 
         } catch (e) {
             console.error('[FlashNoteService] Batch Sync Failed:', e);
+            recordOperation('cloud_sync', 'flash_batch_sync_failed');
             emitStatus({ status: 'error', conflicts: [], uploadErrors: [] });
         } finally {
             this._isSyncing = false;
