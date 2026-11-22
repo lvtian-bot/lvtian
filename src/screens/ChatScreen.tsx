@@ -247,6 +247,14 @@ export const ChatScreen = () => {
         };
     }, []);
 
+    const handleResendMessage = useCallback(async (messageId: string) => {
+        setSelecting(undefined);
+        const result = await AssistantClient.getInstance().retryPendingMessage(messageId);
+        if (!result.ok && result.errorMessage) {
+            showToast(result.errorMessage);
+        }
+    }, [showToast]);
+
     useEffect(() => {
         if (connectionState === 'connected') {
             AssistantClient.getInstance().fetchSkills().catch(() => {});
@@ -785,7 +793,9 @@ export const ChatScreen = () => {
                     // Status changes must not move the clock from a footer into
                     // the body after acknowledgement. Only actionable states need a footer.
                     const inlineUserTime = isUser && Boolean(item.content);
-                    const pending = pendingById.has(item.id) || item.status === 'sending';
+                    const pendingItem = pendingById.get(item.id);
+                    const pending = Boolean(pendingItem) || item.status === 'sending';
+                    const sendFailed = isUser && Boolean(pendingItem?.failed);
                     const selectingHere = selecting === item.id;
                     // Data is newest-first, while each cell remains top-to-bottom.
                     const showDate = startsChatDay(item.timestamp, displayMessages[index + 1]?.timestamp);
@@ -793,30 +803,16 @@ export const ChatScreen = () => {
                         item.errorMessage || (item.stopReason && item.stopReason !== 'end_turn'));
                     // 纯工具消息已移出聊天：不保留空行，只在跨天时保留日期分隔。
                     const hasVisibleRow = isUser || assistantParts.length > 0 || hasProseBubble;
-                    return (
-                        <View>
-                        {showDate && <View style={styles.dateSeparator} testID={`chat-date-${item.id}`}>
-                            <Text style={styles.dateSeparatorText}>
-                                {formatChatDate(item.timestamp, dateNow, chatI18n.language, t)}
-                            </Text>
-                        </View>}
-                        {hasVisibleRow ? <ChatBubbleReveal
-                            layoutKey={JSON.stringify([item.id, metrics])}
-                            streaming={!isUser && item.status === 'processing'}
-                            style={[
-                                styles.messageRow,
-                                isUser ? styles.userRow : styles.assistantRow,
-                            ]}
-                        >
-                            <Pressable accessible={false} disabled={selectingHere}
-                                onPress={() => setSelecting(undefined)}
-                                onLongPress={e => openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY)}
-                                onPointerDown={e => { if (!selectingHere && e.nativeEvent.button === 2) openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY); }}
-                                {...(Platform.OS === 'web' && !selectingHere ? { onContextMenu: (e: { preventDefault(): void; clientX: number; clientY: number }) => {
-                                    e.preventDefault();
-                                    openMessageMenu(item.id, e.clientX, e.clientY);
-                                } } : {})}
-                                style={[isUser ? styles.userMessageGroup : styles.assistantMessageGroup, isUser && pending && styles.pendingBubble]}>
+                    const bubblePressable = hasVisibleRow ? (
+                        <Pressable accessible={false} disabled={selectingHere}
+                            onPress={() => setSelecting(undefined)}
+                            onLongPress={e => openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY)}
+                            onPointerDown={e => { if (!selectingHere && e.nativeEvent.button === 2) openMessageMenu(item.id, e.nativeEvent.pageX, e.nativeEvent.pageY); }}
+                            {...(Platform.OS === 'web' && !selectingHere ? { onContextMenu: (e: { preventDefault(): void; clientX: number; clientY: number }) => {
+                                e.preventDefault();
+                                openMessageMenu(item.id, e.clientX, e.clientY);
+                            } } : {})}
+                            style={[isUser ? styles.userBubblePressable : styles.assistantMessageGroup, isUser && pending && styles.pendingBubble]}>
                             {!isUser && assistantParts.map((part) => {
                                 const partTime = part.type === 'text' && part.key === lastTextPartKey && item.completedAt
                                     ? formatChatTime(item.completedAt, chatI18n.language)
@@ -926,7 +922,41 @@ export const ChatScreen = () => {
                                     </Text>
                                 </View>}
                             </View>}
-                            </Pressable>
+                        </Pressable>
+                    ) : null;
+                    return (
+                        <View>
+                        {showDate && <View style={styles.dateSeparator} testID={`chat-date-${item.id}`}>
+                            <Text style={styles.dateSeparatorText}>
+                                {formatChatDate(item.timestamp, dateNow, chatI18n.language, t)}
+                            </Text>
+                        </View>}
+                        {hasVisibleRow ? <ChatBubbleReveal
+                            layoutKey={JSON.stringify([item.id, metrics])}
+                            streaming={!isUser && item.status === 'processing'}
+                            style={[
+                                styles.messageRow,
+                                isUser ? styles.userRow : styles.assistantRow,
+                            ]}
+                        >
+                            {isUser ? (
+                                <View style={styles.userMessageGroup}>
+                                    {bubblePressable}
+                                    {sendFailed && (
+                                        <TouchableOpacity
+                                            testID={`resend-message-${item.id}`}
+                                            style={styles.resendButton}
+                                            onPress={() => handleResendMessage(item.id)}
+                                            activeOpacity={0.7}
+                                            hitSlop={{ top: 6, bottom: 6, left: 10, right: 6 }}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={t('chat.resend', '重发')}
+                                        >
+                                            <Text style={styles.resendText}>{t('chat.resend', '重发')}</Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                            ) : bubblePressable}
                         </ChatBubbleReveal> : null}
                         </View>
                     );
@@ -1371,6 +1401,20 @@ const styles = StyleSheet.create({
     userMessageGroup: {
         maxWidth: '85%',
         flexShrink: 1,
+        alignItems: 'flex-end',
+    },
+    userBubblePressable: {
+        maxWidth: '100%',
+    },
+    resendButton: {
+        marginTop: 4,
+        paddingHorizontal: 4,
+        paddingVertical: 2,
+    },
+    resendText: {
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.dangerText,
+        fontWeight: '500',
     },
     assistantMessageGroup: {
         width: '92%',

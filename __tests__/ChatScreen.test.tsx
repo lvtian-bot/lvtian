@@ -603,4 +603,78 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(allTexts.some((txt) => /上下文已重置|Context has been reset/i.test(txt))).toBe(false);
     });
 
+    it('发送失败维持未确认半透明气泡原样，仅在气泡外下方显示重发且长按菜单一致', async () => {
+        const outgoing = { id: 'user-failed', seq: 0, role: 'user', status: 'error', content: '待重发消息', timestamp: 1 } as const;
+        const retrySpy = jest.spyOn(AssistantClient.getInstance(), 'retryPendingMessage')
+            .mockResolvedValueOnce({ ok: false, errorMessage: i18n.t('chat.retryAttachmentFailed') })
+            .mockResolvedValueOnce({ ok: true });
+
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({
+                messages: [
+                    outgoing,
+                    { id: 'user-sending', seq: 0, role: 'user', status: 'sending', content: '发送中', timestamp: 2 },
+                    { id: 'user-sent', seq: 1, role: 'user', status: 'sent', content: '已发送', timestamp: 3 },
+                    { id: 'user-stopped', seq: 2, role: 'user', status: 'error', errorMessage: 'task_stopped', content: '被停止', timestamp: 4 },
+                ],
+                pendingSendQueue: [
+                    { sessionId: 'main', messageId: outgoing.id, content: outgoing.content, failed: true, attempted: true },
+                    { sessionId: 'main', messageId: 'user-sending', content: '发送中', attempted: false },
+                ],
+            });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+
+        const root = currentRenderer!.root;
+        const renderItem = root.findByType(FlatList).props.renderItem;
+        let failedRow!: ReactTestRenderer.ReactTestRenderer;
+        await ReactTestRenderer.act(async () => {
+            failedRow = ReactTestRenderer.create(renderItem({ item: outgoing, index: 0 }));
+        });
+
+        // 气泡保持半透明且气泡内部不含任何错误文案，仅气泡外下方显示「重发」
+        const pressable = failedRow.root.findAll(node => typeof node.props.onLongPress === 'function')[0];
+        expect(StyleSheet.flatten(pressable.props.style)).toMatchObject({ opacity: 0.5 });
+        const bubble = failedRow.root.findByProps({ testID: `user-bubble-${outgoing.id}` });
+        expect(bubble.findAllByType(Text).map(n => n.props.children)).not.toContain(i18n.t('chat.resend'));
+        expect(bubble.findAllByType(Text).map(n => n.props.children)).not.toContain(i18n.t('chat.retryAttachmentFailed'));
+
+        const resendBtn = failedRow.root.findByProps({ testID: `resend-message-${outgoing.id}` });
+        expect(resendBtn.findAllByType(Text).map(n => n.props.children)).toEqual([i18n.t('chat.resend')]);
+
+        // 长按仍打开包含 copy / select / cancel / edit 的完整菜单
+        await ReactTestRenderer.act(async () => {
+            pressable.props.onLongPress({ nativeEvent: { pageX: 40, pageY: 80 } });
+        });
+        const menuLabels = root.findByType(ChatMessageMenu).findAllByType(Text).map(node => node.props.children);
+        expect(menuLabels).toEqual(['copy', 'select', 'cancel', 'edit'].map(key => i18n.t(`common.${key}`)));
+        await ReactTestRenderer.act(async () => {
+            root.findByType(ChatMessageMenu).props.close();
+        });
+
+        // 点击重发：若附件损坏则弹轻提示，气泡仍不动
+        await ReactTestRenderer.act(async () => {
+            await resendBtn.props.onPress();
+        });
+        expect(retrySpy).toHaveBeenCalledWith(outgoing.id);
+        expect(root.findAllByType(Text).map(n => n.props.children)).toContain(i18n.t('chat.retryAttachmentFailed'));
+
+        // 第二次点击重发成功
+        await ReactTestRenderer.act(async () => {
+            await resendBtn.props.onPress();
+        });
+        expect(retrySpy).toHaveBeenCalledTimes(2);
+        await ReactTestRenderer.act(async () => failedRow.unmount());
+
+        // 发送中、已发送及服务端已受理但被停止的用户消息均不显示重发按钮
+        for (const msg of useAssistantStore.getState().messages.slice(1)) {
+            let otherRow!: ReactTestRenderer.ReactTestRenderer;
+            await ReactTestRenderer.act(async () => {
+                otherRow = ReactTestRenderer.create(renderItem({ item: msg, index: 0 }));
+            });
+            expect(otherRow.root.findAllByProps({ testID: `resend-message-${msg.id}` })).toHaveLength(0);
+            await ReactTestRenderer.act(async () => otherRow.unmount());
+        }
+    });
+
 });

@@ -207,6 +207,29 @@ describe('independent credentials, disposable chat cache, and durable outbox', (
         expect(store.getState().messages).toHaveLength(1);
     });
 
+    it('restores failed pending items as error without auto-retrying and clears them if already accepted on server', async () => {
+        const failedItem = { ...item, messageId: 'failed-msg', failed: true };
+        const { start, data, key } = setup({ [CONFIG]: config });
+        data.set(key, JSON.stringify({ pendingSendQueue: [failedItem], pendingCancelQueue: [] }));
+        const store = start();
+        await flush();
+        expect(store.getState().pendingSendQueue).toEqual([failedItem]);
+        expect(store.getState().messages).toEqual([expect.objectContaining({
+            id: 'failed-msg', status: 'error',
+        })]);
+
+        const late = setup({ [CONFIG]: config });
+        const pendingRead = deferred<string | null>();
+        late.storage.getItem.mockImplementation((name: string) => name === late.key ? pendingRead.promise : Promise.resolve(late.data.get(name) ?? null));
+        const lateStore = late.start();
+        await flush();
+        lateStore.getState().markChatAuthoritative();
+        lateStore.getState().setMessages([{ ...message, id: 'failed-msg', role: 'user', seq: 8, status: 'error', errorMessage: 'task_stopped' }]);
+        pendingRead.resolve(JSON.stringify({ pendingSendQueue: [failedItem], pendingCancelQueue: [] }));
+        await flush();
+        expect(lateStore.getState().pendingSendQueue).toEqual([]);
+    });
+
     it('does not restore another server identity’s queue', async () => {
         const { start, data, key } = setup({ [CONFIG]: config });
         data.set(key, queued);
