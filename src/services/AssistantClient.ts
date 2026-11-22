@@ -15,12 +15,8 @@ import {
     AgentModelOption,
 } from '../types/assistantProtocol';
 
-const HANDSHAKE_TIMEOUT_MS = 8000;
-const AUTH_TIMEOUT_MS = 8000;
-const SYNC_TIMEOUT_MS = 20000;
-const FOREGROUND_STALE_MS = 3000;
-
-type ConnectionPhase = 'handshake' | 'authentication' | 'sync';
+const PHASE_TIMEOUT_MS = { handshake: 8000, authentication: 8000, sync: 20000 };
+type ConnectionPhase = keyof typeof PHASE_TIMEOUT_MS;
 
 export class AssistantClient {
     private static instance: AssistantClient | null = null;
@@ -43,7 +39,6 @@ export class AssistantClient {
     private activeToken: string | null = null;
     private cancellingMessages: Map<string, AssistantMessage> = new Map();
     private currentAppState: AppStateStatus = (AppState.currentState as AppStateStatus) || 'active';
-    private lastBackgroundTimestamp = 0;
     private appStateSubscription: { remove: () => void } | null = null;
     private pendingResetCallbacks: Map<string, Array<(success: boolean) => void>> = new Map();
     private serverSynced = false;
@@ -85,8 +80,6 @@ export class AssistantClient {
             this.currentAppState = nextAppState;
             if (prevAppState.match(/inactive|background/) && nextAppState === 'active') {
                 this.handleAppForeground();
-            } else if (nextAppState.match(/inactive|background/)) {
-                this.lastBackgroundTimestamp = Date.now();
             }
         });
     }
@@ -117,6 +110,7 @@ export class AssistantClient {
                 if (!store.serverUrl || store.credentialsStatus !== 'ready') return;
 
                 this.logConnection('network_changed');
+                if (this.reuseCurrentConnection()) return;
                 this.clearReconnectTimer();
                 this.cleanUpWs();
                 store.setConnectionState('reconnecting');
@@ -137,30 +131,30 @@ export class AssistantClient {
         }
     }
 
-    /** 回到前台时复核连接期限；刚发起的握手继续等待，陈旧握手立即替换。 */
     public handleAppForeground(): void {
         const store = useAssistantStore.getState();
         if (!store.serverUrl || this.isExplicitlyClosed) return;
 
         this.clearReconnectTimer();
         this.reconnectAttempts = 0;
-        const backgroundDurationMs = this.lastBackgroundTimestamp > 0
-            ? Date.now() - this.lastBackgroundTimestamp : 0;
-        this.lastBackgroundTimestamp = 0;
         this.logConnection('foreground');
-        if (this.networkState?.isConnected === false) return;
+        if (this.networkState?.isConnected === false || this.reuseCurrentConnection()) return;
+        this.connect(true);
+    }
 
-        const isWsOpen = this.ws?.readyState === WebSocket.OPEN;
-        const isWsConnecting = this.ws?.readyState === WebSocket.CONNECTING;
-        if (isWsConnecting || (isWsOpen && !this.serverSynced)) {
-            const ageMs = Date.now() - this.phaseStartedAt;
-            if (this.connectionPhase && ageMs < FOREGROUND_STALE_MS) return;
-            this.connect(true);
-        } else if (!isWsOpen || backgroundDurationMs > FOREGROUND_STALE_MS) {
-            this.connect(true);
-        } else {
+    private reuseCurrentConnection(): boolean {
+        const state = this.ws?.readyState;
+        if (state !== WebSocket.OPEN && state !== WebSocket.CONNECTING) return false;
+        if (state === WebSocket.OPEN && this.serverSynced) {
             this.sendPingWithTimeout();
+            return true;
         }
+
+        // Android may suspend JS timers in the background. Keep the original phase deadline.
+        if (!this.connectionPhase) return false;
+        if (Date.now() - this.phaseStartedAt < PHASE_TIMEOUT_MS[this.connectionPhase]) return true;
+        this.logConnection('timeout');
+        return false;
     }
 
     private clearReconnectTimer(): void {
@@ -176,7 +170,7 @@ export class AssistantClient {
         this.connectionPhase = null;
     }
 
-    private startPhaseTimeout(ws: WebSocket, phase: ConnectionPhase, timeoutMs: number): void {
+    private startPhaseTimeout(ws: WebSocket, phase: ConnectionPhase): void {
         this.clearPhaseTimeout();
         this.connectionPhase = phase;
         this.phaseStartedAt = Date.now();
@@ -184,7 +178,7 @@ export class AssistantClient {
             if (this.ws !== ws) return;
             this.logConnection('timeout');
             this.retryConnection();
-        }, timeoutMs);
+        }, PHASE_TIMEOUT_MS[phase]);
     }
 
     private retryConnection(): void {
@@ -532,13 +526,13 @@ export class AssistantClient {
             const wsUrl = url.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://');
             const ws = new WebSocket(wsUrl);
             this.ws = ws;
-            this.startPhaseTimeout(ws, 'handshake', HANDSHAKE_TIMEOUT_MS);
+            this.startPhaseTimeout(ws, 'handshake');
             this.logConnection('connect_start');
 
             ws.onopen = () => {
                 if (this.ws !== ws) return;
                 this.logConnection('socket_open');
-                this.startPhaseTimeout(ws, 'authentication', AUTH_TIMEOUT_MS);
+                this.startPhaseTimeout(ws, 'authentication');
 
                 // 认证 & 增量对账
                 if (token) {
@@ -661,7 +655,13 @@ export class AssistantClient {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.serverSynced || this.pongTimeoutTimer) return;
 
         const ws = this.ws;
-        this.sendRaw({ type: 'ping' });
+        try {
+            this.sendRaw({ type: 'ping' });
+        } catch (error) {
+            this.logConnection('socket_error', { errorCategory: classifySocketError(error instanceof Error ? error.message : undefined) });
+            this.retryConnection();
+            return;
+        }
 
         // 挂载 3500ms 假死熔断保护：若 3.5 秒内无任何下行数据，判定当前网络为假死黑洞，立即推倒重连
         this.pongTimeoutTimer = setTimeout(() => {
@@ -1041,7 +1041,7 @@ export class AssistantClient {
             case 'auth_result': {
                 if (msg.success) {
                     this.logConnection('authenticated');
-                    if (this.ws) this.startPhaseTimeout(this.ws, 'sync', SYNC_TIMEOUT_MS);
+                    if (this.ws) this.startPhaseTimeout(this.ws, 'sync');
                     // 仅在鉴权真正成功后才重置重连尝试计数，防止闪断网络进入 1s 高频重试死循环
                     this.reconnectAttempts = 0;
                     this.fetchSkills().catch(() => {});
