@@ -31,7 +31,8 @@
     "attachmentTooLarge": "Attachment is too large (limit: 10MB)",
     "attachmentReadError": "Failed to read attachment file",
     "retryAttachmentFailed": "Attachment file is no longer available, cannot resend",
-    "previewImage": "Preview image"
+    "previewImage": "Preview image",
+    "resend": "Resend"
   },
   "moments": {
     "placeholderTitle": "Moments & Digest",

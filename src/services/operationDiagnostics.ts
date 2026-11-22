@@ -22,7 +22,10 @@ export type OperationReasons = {
         | 'attachment_read_failed'
         | 'attachment_read_empty'
         | 'attachment_unknown_error'
-        | 'send_raw_failed';
+        | 'send_raw_failed'
+        | 'send_ack_timeout'
+        | 'server_rejected'
+        | 'message_too_big';
     remote_setting:
         | 'permission_unconfirmed'
         | 'permission_network_error'

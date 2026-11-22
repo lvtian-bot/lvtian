@@ -4,7 +4,7 @@ import i18n from '../i18n';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
 import { classifySocketError, recordConnectionEvent, type ConnectionEventDetails } from './connectionDiagnostics';
-import { recordOperation } from './operationDiagnostics';
+import { recordOperation, type OperationReasons } from './operationDiagnostics';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import {
     ClientMessage,
@@ -16,6 +16,9 @@ import {
 } from '../types/assistantProtocol';
 
 const PHASE_TIMEOUT_MS = { handshake: 8000, authentication: 8000, sync: 20000 };
+const MAX_AUTO_SEND_RETRIES = 3;
+const SEND_ACK_TIMEOUTS_MS = [6000, 6000, 8000, 10000] as const;
+const SEND_RETRY_DELAYS_MS = [3000, 6000, 10000] as const;
 type ConnectionPhase = keyof typeof PHASE_TIMEOUT_MS;
 
 export class AssistantClient {
@@ -43,8 +46,10 @@ export class AssistantClient {
     private pendingResetCallbacks: Map<string, Array<(success: boolean) => void>> = new Map();
     private serverSynced = false;
     private sendingId?: string;
+    private inFlightSentId?: string;
     private retryTimer?: ReturnType<typeof setTimeout>;
-    private blockedAttachments = new Set<string>();
+    private sendRetries = new Map<string, number>();
+    private retryingIds = new Set<string>();
     private awaitingFullSnapshot = false;
 
     private constructor() {
@@ -181,7 +186,20 @@ export class AssistantClient {
         }, PHASE_TIMEOUT_MS[phase]);
     }
 
-    private retryConnection(): void {
+    private retryConnection(closeCode?: number): void {
+        const inFlightId = this.inFlightSentId;
+        if (inFlightId && !useAssistantStore.getState().isServerUpgrading) {
+            if (closeCode === 1009) {
+                this.markPendingMessageFailed(inFlightId, 'message_too_big');
+            } else {
+                const retries = (this.sendRetries.get(inFlightId) ?? 0) + 1;
+                if (retries > MAX_AUTO_SEND_RETRIES) {
+                    this.markPendingMessageFailed(inFlightId, 'send_ack_timeout');
+                } else {
+                    this.sendRetries.set(inFlightId, retries);
+                }
+            }
+        }
         this.cleanUpWs();
         if (this.isExplicitlyClosed) return;
         useAssistantStore.getState().setConnectionState('reconnecting');
@@ -564,7 +582,7 @@ export class AssistantClient {
             ws.onclose = (closeEvent) => {
                 if (this.ws !== ws) return;
                 this.logConnection('socket_close', { closeCode: closeEvent?.code });
-                this.retryConnection();
+                this.retryConnection(closeEvent?.code);
             };
         } catch (err: unknown) {
             this.logConnection('socket_setup_failed');
@@ -582,6 +600,8 @@ export class AssistantClient {
         this.connectionRequest += 1;
         this.activeUrl = null;
         this.activeToken = null;
+        this.sendRetries.clear();
+        this.retryingIds.clear();
         this.clearReconnectTimer();
         this.cleanUpWs();
         useAssistantStore.getState().setConnectionState('disconnected');
@@ -589,8 +609,9 @@ export class AssistantClient {
 
     private cleanUpWs(): void {
         clearTimeout(this.retryTimer);
+        this.retryTimer = undefined;
         this.sendingId = undefined;
-        this.blockedAttachments.clear();
+        this.inFlightSentId = undefined;
         this.serverSynced = false;
         this.awaitingFullSnapshot = false;
         this.clearPhaseTimeout();
@@ -719,17 +740,135 @@ export class AssistantClient {
 
         store.addOrUpdateMessage(localMessage);
 
+        this.sendRetries.delete(messageId);
         store.addToPendingSendQueue({ sessionId: 'main', messageId, content, attachments, attempted: false });
         if (isConnected) this.flushPendingSendQueue();
         else if (!this.ws || this.ws.readyState === WebSocket.CLOSED) this.connect();
         return messageId;
     }
 
-    private scheduleSendRetry(delay: number): void {
-        clearTimeout(this.retryTimer);
-        this.retryTimer = setTimeout(() => {
+    private async hydrateAttachments(attachments: ChatAttachment[]): Promise<
+        { ok: true; attachments: ChatAttachment[] }
+        | { ok: false; diagnosticReason: OperationReasons['chat_send']; errorMessage: string }
+    > {
+        try {
+            const hydrated = await Promise.all(
+                attachments.map(async (att) => {
+                    if (att.data !== undefined || att.content !== undefined) {
+                        return att;
+                    }
+                    if (!att.uri) throw new Error('ATTACHMENT_URI_MISSING');
+                    const isImg = att.type === 'image';
+                    const res = await fsService.readAttachment(
+                        att.uri,
+                        10 * 1024 * 1024,
+                        isImg ? 'image/jpeg' : att.mimeType,
+                        att.name
+                    );
+                    return {
+                        ...att,
+                        mimeType: isImg ? 'image/jpeg' : (att.mimeType || 'application/octet-stream'),
+                        content: res.content,
+                        data: res.data,
+                    };
+                })
+            );
+            if (isAttachmentBudgetExceeded(hydrated)) {
+                throw new Error('ATTACHMENT_TOO_LARGE');
+            }
+            return { ok: true, attachments: hydrated };
+        } catch (err: unknown) {
+            const code = err instanceof Error ? err.message : '';
+            const diagnosticReason: OperationReasons['chat_send'] = code === 'ATTACHMENT_URI_MISSING'
+                ? 'attachment_uri_missing'
+                : code === 'ATTACHMENT_NOT_FOUND'
+                    ? 'attachment_not_found'
+                    : code === 'ATTACHMENT_TOO_LARGE'
+                        ? 'attachment_too_large'
+                        : code === 'ATTACHMENT_READ_FAILED'
+                            ? 'attachment_read_failed'
+                            : code === 'ATTACHMENT_READ_EMPTY'
+                                ? 'attachment_read_empty'
+                                : 'attachment_unknown_error';
+            const errorMessage = code === 'ATTACHMENT_TOO_LARGE'
+                ? i18n.t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）')
+                : i18n.t('chat.retryAttachmentFailed', '附件原文件已失效，无法重新发送');
+            return { ok: false, diagnosticReason, errorMessage };
+        }
+    }
+
+    private markPendingMessageFailed(
+        messageId: string,
+        diagnosticReason: OperationReasons['chat_send'],
+        errorMessage?: string
+    ): void {
+        recordOperation('chat_send', diagnosticReason);
+        this.sendRetries.delete(messageId);
+        if (this.sendingId === messageId) {
             this.sendingId = undefined;
-            this.blockedAttachments.clear();
+            clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
+        }
+        if (this.inFlightSentId === messageId) {
+            this.inFlightSentId = undefined;
+        }
+        const store = useAssistantStore.getState();
+        const pendingItem = store.pendingSendQueue.find(item => item.messageId === messageId && !item.withdrawal);
+        if (!pendingItem) return;
+        store.addToPendingSendQueue({ ...pendingItem, failed: true });
+        const existing = store.messages.find(message => message.id === messageId);
+        store.addOrUpdateMessage({
+            id: messageId,
+            seq: existing?.seq ?? 0,
+            role: 'user',
+            content: existing?.content ?? pendingItem.content,
+            timestamp: existing?.timestamp ?? Date.now(),
+            status: 'error',
+            errorMessage,
+            attachments: existing?.attachments ?? pendingItem.attachments,
+        });
+    }
+
+    private handleRetryableSendFailure(
+        messageId: string,
+        diagnosticReason: OperationReasons['chat_send'],
+        immediate: boolean
+    ): void {
+        const store = useAssistantStore.getState();
+        const pendingItem = store.pendingSendQueue.find(
+            item => item.messageId === messageId && !item.withdrawal && !item.failed
+        );
+        if (!pendingItem) return;
+        const retries = (this.sendRetries.get(messageId) ?? 0) + 1;
+        if (retries > MAX_AUTO_SEND_RETRIES) {
+            this.markPendingMessageFailed(messageId, diagnosticReason);
+            this.flushPendingSendQueue();
+            return;
+        }
+        this.sendRetries.set(messageId, retries);
+        if (immediate) {
+            if (this.sendingId === messageId) {
+                this.sendingId = undefined;
+                clearTimeout(this.retryTimer);
+                this.retryTimer = undefined;
+            }
+            if (this.inFlightSentId === messageId) {
+                this.inFlightSentId = undefined;
+            }
+            this.flushPendingSendQueue();
+            return;
+        }
+        if (this.inFlightSentId === messageId) {
+            this.inFlightSentId = undefined;
+        }
+        if (this.sendingId && this.sendingId !== messageId) return;
+        this.sendingId = messageId;
+        clearTimeout(this.retryTimer);
+        const delay = SEND_RETRY_DELAYS_MS[retries - 1];
+        this.retryTimer = setTimeout(() => {
+            if (this.sendingId !== messageId) return;
+            this.sendingId = undefined;
+            this.retryTimer = undefined;
             this.flushPendingSendQueue();
         }, delay);
     }
@@ -739,84 +878,110 @@ export class AssistantClient {
         const store = useAssistantStore.getState();
         const sendingSocket = this.ws;
         if (this.sendingId || store.connectionState !== 'connected' || store.isServerUpgrading || store.outboxStatus !== 'ready') return;
-        const nextItem = store.pendingSendQueue.find(item => !item.withdrawal && !this.blockedAttachments.has(item.messageId));
-        if (!nextItem) {
-            if (this.blockedAttachments.size) this.scheduleSendRetry(10000);
-            return;
-        }
+        const nextItem = store.pendingSendQueue.find(item => !item.withdrawal && !item.failed);
+        if (!nextItem) return;
         this.sendingId = nextItem.messageId;
         let attachments = nextItem.attachments;
 
         // 若附件在持久化脱水后缺少 Base64/content，依据本地 uri 异步重新读取补全
         if (attachments && attachments.length > 0) {
-            try {
-                attachments = await Promise.all(
-                    attachments.map(async (att) => {
-                        if (att.data !== undefined || att.content !== undefined) {
-                            return att;
-                        }
-                        if (!att.uri) throw new Error('ATTACHMENT_URI_MISSING');
-                        const isImg = att.type === 'image';
-                        const res = await fsService.readAttachment(
-                            att.uri,
-                            10 * 1024 * 1024,
-                            isImg ? 'image/jpeg' : att.mimeType,
-                            att.name
-                        );
-                        return {
-                            ...att,
-                            mimeType: isImg ? 'image/jpeg' : (att.mimeType || 'application/octet-stream'),
-                            content: res.content,
-                            data: res.data,
-                        };
-                    })
-                );
-                if (isAttachmentBudgetExceeded(attachments)) {
-                    throw new Error('ATTACHMENT_TOO_LARGE');
-                }
-            } catch (err: unknown) {
-                const code = err instanceof Error ? err.message : '';
-                const reason = code === 'ATTACHMENT_URI_MISSING'
-                    ? 'attachment_uri_missing'
-                    : code === 'ATTACHMENT_NOT_FOUND'
-                        ? 'attachment_not_found'
-                        : code === 'ATTACHMENT_TOO_LARGE'
-                            ? 'attachment_too_large'
-                            : code === 'ATTACHMENT_READ_FAILED'
-                                ? 'attachment_read_failed'
-                                : code === 'ATTACHMENT_READ_EMPTY'
-                                    ? 'attachment_read_empty'
-                                    : 'attachment_unknown_error';
-                recordOperation('chat_send', reason);
+            const hydrated = await this.hydrateAttachments(attachments);
+            if (!hydrated.ok) {
                 if (this.ws !== sendingSocket || this.sendingId !== nextItem.messageId) return;
-                this.sendingId = undefined;
-                const current = useAssistantStore.getState();
-                if (!current.pendingSendQueue.some(item => item.messageId === nextItem.messageId && !item.withdrawal)) return;
-                this.blockedAttachments.add(nextItem.messageId);
-                if (!current.messages.some(message => message.id === nextItem.messageId)) {
-                    current.addOrUpdateMessage({ id: nextItem.messageId, role: 'user', seq: 0,
-                        timestamp: Date.now(), status: 'sending', content: nextItem.content, attachments: nextItem.attachments });
-                }
+                this.markPendingMessageFailed(nextItem.messageId, hydrated.diagnosticReason, hydrated.errorMessage);
                 this.flushPendingSendQueue();
                 return;
             }
+            attachments = hydrated.attachments;
         }
 
         const current = useAssistantStore.getState();
         if (this.ws !== sendingSocket || this.sendingId !== nextItem.messageId) return;
         if (current.connectionState !== 'connected' || current.isServerUpgrading ||
-            !current.pendingSendQueue.some(q => q.messageId === nextItem.messageId && !q.withdrawal)) {
+            !current.pendingSendQueue.some(q => q.messageId === nextItem.messageId && !q.withdrawal && !q.failed)) {
             this.sendingId = undefined;
             return;
         }
         if (!nextItem.attempted) current.addToPendingSendQueue({ ...nextItem, attempted: true });
-        this.scheduleSendRetry(10000);
+        this.inFlightSentId = nextItem.messageId;
+        let sent = false;
         try {
-            this.sendRaw({ type: 'chat', sessionId: nextItem.sessionId, messageId: nextItem.messageId,
-                content: nextItem.content, attachments });
+            sent = this.sendRaw({
+                type: 'chat',
+                sessionId: nextItem.sessionId,
+                messageId: nextItem.messageId,
+                content: nextItem.content,
+                attachments,
+            });
         } catch {
             /* The same ID remains in the outbox for retry. */
             recordOperation('chat_send', 'send_raw_failed');
+            sent = false;
+        }
+        if (this.ws !== sendingSocket || this.sendingId !== nextItem.messageId) return;
+        if (!sent) {
+            this.inFlightSentId = undefined;
+            this.handleRetryableSendFailure(nextItem.messageId, 'send_raw_failed', false);
+            return;
+        }
+        const timeoutMs = SEND_ACK_TIMEOUTS_MS[
+            Math.min(this.sendRetries.get(nextItem.messageId) ?? 0, SEND_ACK_TIMEOUTS_MS.length - 1)
+        ];
+        clearTimeout(this.retryTimer);
+        this.retryTimer = setTimeout(() => {
+            if (this.ws !== sendingSocket || this.sendingId !== nextItem.messageId) return;
+            this.inFlightSentId = undefined;
+            this.handleRetryableSendFailure(nextItem.messageId, 'send_ack_timeout', true);
+        }, timeoutMs);
+    }
+
+    public async retryPendingMessage(messageId: string): Promise<{ ok: boolean; errorMessage?: string }> {
+        if (this.retryingIds.has(messageId)) return { ok: true };
+        const initialItem = useAssistantStore.getState().pendingSendQueue.find(
+            q => q.messageId === messageId && !q.withdrawal && q.failed
+        );
+        if (!initialItem) return { ok: true };
+
+        this.retryingIds.add(messageId);
+        try {
+            let resolvedAttachments = initialItem.attachments;
+            if (resolvedAttachments && resolvedAttachments.length > 0) {
+                const hydrated = await this.hydrateAttachments(resolvedAttachments);
+                if (!hydrated.ok) {
+                    recordOperation('chat_send', hydrated.diagnosticReason);
+                    const stillFailed = useAssistantStore.getState().pendingSendQueue.some(
+                        q => q.messageId === messageId && !q.withdrawal && q.failed
+                    );
+                    return stillFailed ? { ok: false, errorMessage: hydrated.errorMessage } : { ok: true };
+                }
+                resolvedAttachments = hydrated.attachments;
+            }
+
+            const store = useAssistantStore.getState();
+            const latest = store.pendingSendQueue.find(
+                q => q.messageId === messageId && !q.withdrawal && q.failed
+            );
+            if (!latest) return { ok: true };
+
+            this.sendRetries.delete(messageId);
+            store.addToPendingSendQueue({ ...latest, attachments: resolvedAttachments, failed: undefined });
+            const existing = store.messages.find(m => m.id === messageId);
+            store.addOrUpdateMessage({
+                id: messageId,
+                seq: existing?.seq ?? 0,
+                role: 'user',
+                content: existing?.content ?? latest.content,
+                timestamp: existing?.timestamp ?? Date.now(),
+                status: 'sending',
+                errorMessage: undefined,
+                attachments: resolvedAttachments,
+            });
+            const isConnected = this.ws && this.ws.readyState === WebSocket.OPEN && store.connectionState === 'connected';
+            if (isConnected) this.flushPendingSendQueue();
+            else if (!this.ws || this.ws.readyState === WebSocket.CLOSED) this.connect();
+            return { ok: true };
+        } finally {
+            this.retryingIds.delete(messageId);
         }
     }
 
@@ -824,16 +989,20 @@ export class AssistantClient {
         const store = useAssistantStore.getState();
         const item = store.pendingSendQueue.find(q => q.messageId === messageId && !q.withdrawal);
         if (!item) return;
+        this.sendRetries.delete(messageId);
+        if (this.inFlightSentId === messageId) {
+            this.inFlightSentId = undefined;
+        }
         if (this.sendingId === messageId) {
             this.sendingId = undefined;
             clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
         }
-        this.blockedAttachments.delete(messageId);
         if (item.attempted === false) {
             if (action === 'cancel') store.removeMessage(messageId);
-            else store.addToPendingSendQueue({ ...item, withdrawal: 'draft' });
+            else store.addToPendingSendQueue({ ...item, withdrawal: 'draft', failed: undefined });
         } else {
-            store.addToPendingSendQueue({ ...item, withdrawal: action });
+            store.addToPendingSendQueue({ ...item, withdrawal: action, failed: undefined });
             this.flushPendingCancelQueue();
         }
         this.flushPendingSendQueue();
@@ -1070,7 +1239,9 @@ export class AssistantClient {
                 this.logConnection('sync_received', { messageCount: msg.messages.length, payloadChars });
                 this.clearPhaseTimeout();
                 this.sendingId = undefined;
+                this.inFlightSentId = undefined;
                 clearTimeout(this.retryTimer);
+                this.retryTimer = undefined;
                 this.serverSynced = true;
                 store.markChatAuthoritative();
                 const replaceCache = this.awaitingFullSnapshot;
@@ -1111,6 +1282,7 @@ export class AssistantClient {
                 // 服务端下发的有效消息优先覆盖更新
                 for (const m of validServerMessages) {
                     msgMap.set(m.id, m);
+                    this.sendRetries.delete(m.id);
                     if (pendingIds.has(m.id)) {
                         store.removeFromPendingSendQueue(m.id);
                     }
@@ -1120,6 +1292,7 @@ export class AssistantClient {
                 if (msg.deletedMessageIds && msg.deletedMessageIds.length > 0) {
                     for (const delId of msg.deletedMessageIds) {
                         msgMap.delete(delId);
+                        this.sendRetries.delete(delId);
                         store.removeFromPendingCancelQueue(delId);
                         const item = store.pendingSendQueue.find(q => q.messageId === delId);
                         if (item?.withdrawal === 'edit' || item?.withdrawal === 'draft') {
@@ -1156,9 +1329,15 @@ export class AssistantClient {
                 if (this.sendingId === msg.messageId) {
                     this.sendingId = undefined;
                     clearTimeout(this.retryTimer);
+                    this.retryTimer = undefined;
                 }
+                if (this.inFlightSentId === msg.messageId) {
+                    this.inFlightSentId = undefined;
+                }
+                const pendingItem = store.pendingSendQueue.find((item) => item.messageId === msg.messageId);
                 // 服务端在优雅停机排空期拒绝新任务：客户端将其重新加入本地排队队列并置为升级中态，不向用户报错
                 if (isError && msg.error === 'service_upgrading') {
+                    if (pendingItem?.withdrawal) break;
                     store.setIsServerUpgrading(true);
                     this.reconnectAttempts = 0;
                     store.addOrUpdateMessage({
@@ -1175,19 +1354,27 @@ export class AssistantClient {
                         messageId: msg.messageId,
                         content: existing ? existing.content : (msg.content || ''),
                         attachments: existing?.attachments,
+                        failed: undefined,
                     });
                     break;
                 }
 
                 if (isError && msg.seq === 0) {
-                    if (existing && !store.pendingSendQueue.some(item => item.messageId === msg.messageId)) {
-                        store.addToPendingSendQueue({ sessionId: 'main', messageId: msg.messageId,
-                            content: existing.content, attachments: existing.attachments, attempted: true });
+                    if (pendingItem?.withdrawal || pendingItem?.failed) break;
+                    if (!pendingItem && existing) {
+                        store.addToPendingSendQueue({
+                            sessionId: 'main',
+                            messageId: msg.messageId,
+                            content: existing.content,
+                            attachments: existing.attachments,
+                            attempted: true,
+                        });
                     }
-                    if (!this.sendingId) this.scheduleSendRetry(3000);
+                    this.handleRetryableSendFailure(msg.messageId, 'server_rejected', false);
                     break;
                 }
 
+                this.sendRetries.delete(msg.messageId);
                 const isQueued = msg.status === 'queued';
                 // 受理后以服务端时刻为准：显示不再依赖设备时钟，跨端显示一致
                 const acceptedAt = typeof msg.timestamp === 'number' && msg.timestamp > 0
@@ -1300,6 +1487,7 @@ export class AssistantClient {
             }
 
             case 'message_deleted': {
+                this.sendRetries.delete(msg.messageId);
                 const item = store.pendingSendQueue.find(q => q.messageId === msg.messageId);
                 if (item?.withdrawal === 'edit' || item?.withdrawal === 'draft') {
                     store.addToPendingSendQueue({ ...item, withdrawal: 'draft' });

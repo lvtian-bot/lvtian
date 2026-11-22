@@ -37,9 +37,12 @@ describe('AssistantClient attachment budget across retry hydration', () => {
         expect(sendRaw).toHaveBeenCalledTimes(1);
         expect(sendRaw).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'later' }));
         expect(useAssistantStore.getState().messages).toEqual([expect.objectContaining({
-            id: 'oversize', content: 'original', attachments, status: 'sending',
+            id: 'oversize', content: 'original', attachments, status: 'error', errorMessage: i18n.t('chat.attachmentTooLarge'),
         })]);
-        expect(useAssistantStore.getState().pendingSendQueue.map((item) => item.messageId)).toEqual(['oversize', 'later']);
+        expect(useAssistantStore.getState().pendingSendQueue).toEqual([
+            expect.objectContaining({ messageId: 'oversize', failed: true }),
+            expect.objectContaining({ messageId: 'later' }),
+        ]);
     });
 
     it('keeps the same guard for already hydrated queued attachments', async () => {
@@ -49,15 +52,23 @@ describe('AssistantClient attachment budget across retry hydration', () => {
         await client.flushPendingSendQueue();
         expect(read).not.toHaveBeenCalled();
         expect(sendRaw).not.toHaveBeenCalled();
-        expect(useAssistantStore.getState().messages[0].status).toBe('sending');
+        expect(useAssistantStore.getState().messages[0].status).toBe('error');
+        expect(useAssistantStore.getState().pendingSendQueue[0].failed).toBe(true);
     });
 
     it('does not send a queued attachment whose original file is unavailable', async () => {
-        const attachments: ChatAttachment[] = [{ type: 'file', name: 'missing.txt' }];
-        useAssistantStore.setState({ pendingSendQueue: [{ messageId: 'missing', sessionId: 'main', content: 'file', attachments }] });
-        await client.flushPendingSendQueue();
-        expect(sendRaw).not.toHaveBeenCalled();
-        expect(useAssistantStore.getState().messages[0]).toMatchObject({ id: 'missing', status: 'sending' });
-        expect(useAssistantStore.getState().pendingSendQueue[0].messageId).toBe('missing');
+        jest.useFakeTimers();
+        try {
+            const attachments: ChatAttachment[] = [{ type: 'file', name: 'missing.txt' }];
+            useAssistantStore.setState({ pendingSendQueue: [{ messageId: 'missing', sessionId: 'main', content: 'file', attachments }] });
+            await client.flushPendingSendQueue();
+            expect(sendRaw).not.toHaveBeenCalled();
+            expect(useAssistantStore.getState().messages[0]).toMatchObject({ id: 'missing', status: 'error' });
+            expect(useAssistantStore.getState().pendingSendQueue[0]).toMatchObject({ messageId: 'missing', failed: true });
+            jest.advanceTimersByTime(30000);
+            expect(sendRaw).not.toHaveBeenCalled();
+        } finally {
+            jest.useRealTimers();
+        }
     });
 });

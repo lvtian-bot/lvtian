@@ -500,14 +500,17 @@ async function initializeOutbox(): Promise<void> {
         for (const id of cancelled) messages.delete(id);
         if (cacheSuperseded) {
             for (const message of current.messages) {
-                if (message.status === 'sent' || message.status === 'queued') messages.delete(message.id);
+                if (message.status === 'sent' || message.status === 'queued'
+                    || (message.status === 'error' && (message.seq ?? 0) > 0)) {
+                    messages.delete(message.id);
+                }
             }
         }
         const pendingSendQueue = Array.from(messages.values());
         const displayed = new Set(current.messages.map(message => message.id));
         const pendingMessages: AssistantMessage[] = pendingSendQueue.filter(item => !item.withdrawal && !displayed.has(item.messageId)).map(item => ({
             id: item.messageId, seq: 0, role: 'user', content: item.content, timestamp: Date.now(),
-            status: 'sending', attachments: item.attachments,
+            status: item.failed ? 'error' : 'sending', attachments: item.attachments,
         }));
         useAssistantStore.setState({
             messages: [...current.messages, ...pendingMessages], pendingSendQueue,
