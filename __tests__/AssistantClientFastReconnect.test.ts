@@ -112,43 +112,48 @@ describe('AssistantClient connection recovery', () => {
         expect(TestSocket.instances).toHaveLength(2);
     });
 
-    it('replaces a stale handshake immediately on foreground resume', async () => {
+    it.each(['handshake', 'authentication', 'sync'] as const)(
+        'preserves an in-progress %s across network and foreground events up to its original deadline', async phase => {
+            await client.connect();
+            const ws = TestSocket.instances[0];
+            if (phase !== 'handshake') ws.open();
+            if (phase === 'sync') ws.receive({ type: 'auth_result', success: true });
+            const deadline = phase === 'sync' ? 20000 : 8000;
+            appChange('background');
+            jest.advanceTimersByTime(deadline - 500);
+            appChange('active');
+            networkChange(cellular);
+            jest.advanceTimersByTime(499);
+            expect(ws.close).not.toHaveBeenCalled();
+            jest.advanceTimersByTime(1);
+            expect(ws.close).toHaveBeenCalledTimes(1);
+            jest.advanceTimersByTime(50);
+            expect(TestSocket.instances).toHaveLength(2);
+        }
+    );
+
+    it('replaces an expired handshake when background timers were suspended', async () => {
         await client.connect();
-        const ws = TestSocket.instances[0];
         appChange('background');
-        jest.advanceTimersByTime(5000);
+        jest.setSystemTime(Date.now() + 9000);
         appChange('active');
-        expect(ws.close).toHaveBeenCalledTimes(1);
+        expect(TestSocket.instances[0].close).toHaveBeenCalledTimes(1);
         expect(TestSocket.instances).toHaveLength(2);
     });
 
-    it('keeps a recently started handshake across a short background visit', async () => {
-        await client.connect();
-        appChange('background');
-        jest.advanceTimersByTime(1000);
-        appChange('active');
-        expect(TestSocket.instances).toHaveLength(1);
-        expect(TestSocket.instances[0].close).not.toHaveBeenCalled();
-    });
-
-    it('replaces a stale authentication wait when returning to the foreground', async () => {
-        await client.connect();
-        const ws = TestSocket.instances[0];
-        ws.open();
-        appChange('background');
-        jest.advanceTimersByTime(4000);
-        appChange('active');
-        expect(ws.close).toHaveBeenCalledTimes(1);
-        expect(TestSocket.instances).toHaveLength(2);
-    });
-
-    it('rebuilds a ready socket after a longer background stay', async () => {
+    it('continues chatting on the same socket after a longer background stay', async () => {
         const ws = await ready();
         appChange('background');
         jest.advanceTimersByTime(5000);
+        ws.send.mockClear();
         appChange('active');
-        expect(ws.close).toHaveBeenCalledTimes(1);
-        expect(TestSocket.instances).toHaveLength(2);
+        expect(ws.send.mock.calls).toEqual([[JSON.stringify({ type: 'ping' })]]);
+        const id = client.sendMessage('after resume');
+        ws.receive({ type: 'message_ack', messageId: id, seq: 1, status: 'sent', role: 'user' });
+        jest.advanceTimersByTime(3500);
+        expect(useAssistantStore.getState().pendingSendQueue).toEqual([]);
+        expect(TestSocket.instances).toHaveLength(1);
+        expect(ws.close).not.toHaveBeenCalled();
     });
 
     it('queues messages until reconciliation completes and retains them until ack', async () => {
@@ -223,22 +228,48 @@ describe('AssistantClient connection recovery', () => {
         expect(TestSocket.instances).toHaveLength(2);
     });
 
-    it('coalesces network switching events and resumes immediately on foreground', async () => {
+    it('shares one probe when network changes coincide with foreground recovery', async () => {
         const ws = await ready();
+        ws.send.mockClear();
         networkChange(cellular);
-        networkChange(cellular);
+        networkChange(wifi);
         client.handleAppForeground();
-        expect(ws.close).toHaveBeenCalledTimes(1);
-        expect(TestSocket.instances).toHaveLength(2);
-        jest.advanceTimersByTime(250);
-        expect(TestSocket.instances).toHaveLength(2);
+        expect(ws.send.mock.calls).toEqual([[JSON.stringify({ type: 'ping' })]]);
+        ws.receive({ type: 'pong' });
+        jest.advanceTimersByTime(3500);
+        expect(ws.close).not.toHaveBeenCalled();
+        expect(useAssistantStore.getState().connectionState).toBe('connected');
+        expect(TestSocket.instances).toHaveLength(1);
     });
 
-    it('reconnects on a switch from Wi-Fi to mobile data without waiting for heartbeat', async () => {
+    it('reconnects once after a silent network switch and replays unacknowledged chat', async () => {
         const ws = await ready();
         networkChange(cellular);
+        const id = client.sendMessage('pending');
+        jest.advanceTimersByTime(3000);
+        networkChange(wifi);
+        expect(ws.close).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(500);
         expect(ws.close).toHaveBeenCalledTimes(1);
-        jest.advanceTimersByTime(250);
+        jest.advanceTimersByTime(50);
+        expect(TestSocket.instances).toHaveLength(2);
+        const replacement = TestSocket.instances[1];
+        replacement.open();
+        replacement.receive({ type: 'auth_result', success: true });
+        replacement.receive(sync);
+        expect(replacement.send).toHaveBeenCalledWith(JSON.stringify({
+            type: 'chat', sessionId: 'main', messageId: id, content: 'pending',
+        }));
+        replacement.receive({ type: 'message_ack', messageId: id, seq: 1, status: 'sent', role: 'user' });
+        expect(useAssistantStore.getState().pendingSendQueue).toEqual([]);
+    });
+
+    it('recovers when sending the probe fails synchronously', async () => {
+        const ws = await ready();
+        ws.send.mockImplementationOnce(() => { throw new Error('socket closed'); });
+        networkChange(cellular);
+        expect(ws.close).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(50);
         expect(TestSocket.instances).toHaveLength(2);
     });
 
