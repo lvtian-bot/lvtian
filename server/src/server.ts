@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AutonomousJobReply } from './autonomousJobReplyBridge.js';
 import path from 'node:path';
 import { NativeTaskReporting, TaskReportStore, reportMessageId, taskReportPrompt, type TaskReport } from './nativeTaskReporting.js';
@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import type { WebSocketServer } from 'ws';
 import { ServerConfig } from './config.js';
+import { ChatSyncPush, createChatSyncPush, isChatPushToken } from './chatSyncPush.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload, type EngineFailure } from './acpEngineManager.js';
@@ -35,6 +36,7 @@ import {
     ToolCallState,
     TaskExecutionState,
     ChatAttachment,
+    ChatSyncCursor,
 } from './protocol.js';
 
 const require = createRequire(import.meta.url);
@@ -81,6 +83,7 @@ export class LvtianServer {
         });
         this.sessionManager.persistDurableMessage(sessionId, id);
         this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
+        if (sessionId === 'main') this.chatSyncPush?.wakeDevices();
     }
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;
@@ -93,6 +96,7 @@ export class LvtianServer {
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     private consolidationInterval: ReturnType<typeof setInterval> | null = null;
     private nextConnectionId = 0;
+    private readonly chatSyncEpoch = randomUUID();
     private isDraining = false;
     private taskReporting?: NativeTaskReporting;
     private taskReportStore?: TaskReportStore;
@@ -107,7 +111,8 @@ export class LvtianServer {
         contextConsolidator?: ContextConsolidator,
         private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'> & Partial<Pick<NativeTaskRuntime, 'watchChanges'>>,
         skillManager?: SkillManager,
-        googleCalendar?: GoogleCalendarConnector
+        googleCalendar?: GoogleCalendarConnector,
+        private readonly chatSyncPush: ChatSyncPush | undefined = createChatSyncPush(config.dataDir),
     ) {
         this.config = config;
         this.sessionManager = sessionManager;
@@ -199,6 +204,20 @@ export class LvtianServer {
         res.end(JSON.stringify({ error: message, code: 'UNKNOWN_ERROR' }));
     }
 
+    private chatSync(sessionId: string, clearedSeq: number, cursor?: ChatSyncCursor): Extract<ServerMessage, { type: 'sync_result' }> {
+        const { currentSeq } = this.sessionManager.getOrCreateSession(sessionId);
+        const canResume = cursor?.epoch === this.chatSyncEpoch
+            && Number.isSafeInteger(cursor.seq) && cursor.seq >= 0 && cursor.seq <= currentSeq;
+        const boundary = Number.isSafeInteger(clearedSeq) && clearedSeq > 0 && clearedSeq <= currentSeq ? clearedSeq : 0;
+        const lastSeq = canResume ? Math.max(boundary, cursor.seq) : boundary;
+        return {
+            type: 'sync_result', sessionId,
+            ...this.sessionManager.getReconcileData(sessionId, lastSeq, canResume || boundary > 0),
+            syncEpoch: this.chatSyncEpoch,
+            replaceCache: !canResume && boundary === 0,
+        };
+    }
+
     private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         let urlObj: URL;
         try {
@@ -257,6 +276,33 @@ export class LvtianServer {
         if (isNativeTaskPath(pathname)) {
             await handleNativeTaskHttp(req, res, urlObj, this.nativeTasks?.service,
                 () => this.readJsonBody<unknown>(req, 128 * 1024), this.isDraining);
+            return;
+        }
+
+        if (pathname === '/api/chat/sync' && req.method === 'GET') {
+            const epoch = urlObj.searchParams.get('epoch');
+            const seq = Number(urlObj.searchParams.get('seq') ?? Number.NaN);
+            const clearedSeq = Number(urlObj.searchParams.get('clearedSeq') ?? 0);
+            const snapshot = this.chatSync('main', clearedSeq, epoch ? { epoch, seq } : undefined);
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify(snapshot));
+            return;
+        }
+
+        if (pathname === '/api/chat/sync-device' && req.method === 'POST') {
+            if (!this.chatSyncPush) {
+                res.writeHead(503).end();
+                return;
+            }
+            let registration: { token?: unknown; remove?: unknown } | undefined;
+            try { registration = await this.readJsonBody(req, 8192); } catch { /* invalid body */ }
+            if (!isChatPushToken(registration?.token)) {
+                res.writeHead(400).end();
+                return;
+            }
+            if (registration.remove === true) this.chatSyncPush.unregister(registration.token);
+            else this.chatSyncPush.register(registration.token);
+            res.writeHead(204).end();
             return;
         }
 
@@ -650,17 +696,7 @@ export class LvtianServer {
                 const sessionId = rawSessionId;
                 ws.sessionId = sessionId;
                 if (this.sessionManager.getOrCreateSession(sessionId).messages.some(m => m.status === 'queued')) this.scheduleProcessQueue(sessionId);
-                const reconcile = this.sessionManager.getReconcileData(sessionId, msg.lastSeq);
-                this.send(ws, {
-                    type: 'sync_result',
-                    sessionId,
-                    messages: reconcile.messages,
-                    deletedMessageIds: reconcile.deletedMessageIds,
-                    taskState: reconcile.taskState,
-                    pendingApprovals: reconcile.pendingApprovals,
-                    pendingApproval: reconcile.pendingApproval,
-                    currentSeq: reconcile.currentSeq,
-                });
+                this.send(ws, this.chatSync(sessionId, msg.lastSeq, msg.cursor));
                 break;
             }
 
@@ -1083,6 +1119,7 @@ export class LvtianServer {
                     completedAt,
                 });
 
+                if (completedAt && sessionId === 'main') this.chatSyncPush?.wakeDevices();
                 // 本轮结束，检查会话排队队列并推进下一项
                 this.scheduleProcessQueue(sessionId);
             },
@@ -1216,8 +1253,8 @@ export class LvtianServer {
             this.sessionManager.persistDurableMessage(sessionId, messageId);
             store.delivered(report.id);
             // Full state reconciles both currently-online and reconnecting clients. No internal input is exposed.
-            const reconcile = this.sessionManager.getReconcileData(sessionId, 0);
-            this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...reconcile });
+            this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
+            this.chatSyncPush?.wakeDevices();
             this.scheduleProcessQueue(sessionId);
             return true;
         } catch {

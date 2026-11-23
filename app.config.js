@@ -167,6 +167,9 @@ module.exports = {
         },
         android: {
             package: "com.lvtian",
+            ...(process.env.LVTIAN_GOOGLE_SERVICES_FILE && {
+                googleServicesFile: process.env.LVTIAN_GOOGLE_SERVICES_FILE,
+            }),
             versionCode: 24,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
@@ -181,6 +184,7 @@ module.exports = {
             policy: "appVersion"
         },
         extra: {
+            chatBackgroundSync: Boolean(process.env.LVTIAN_GOOGLE_SERVICES_FILE),
             eas: {
                 projectId: "9b2d91e1-6f12-4695-8d6c-c2ee5b45d459"
             }
@@ -194,6 +198,7 @@ module.exports = {
                     }
                 }
             ],
+            ...(process.env.LVTIAN_GOOGLE_SERVICES_FILE ? ["expo-notifications"] : []),
             "expo-font",
             "expo-asset",
             "expo-image",

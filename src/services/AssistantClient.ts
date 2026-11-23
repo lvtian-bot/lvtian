@@ -1,7 +1,7 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import * as Network from 'expo-network';
 import i18n from '../i18n';
-import { useAssistantStore } from '../store/useAssistantStore';
+import { useAssistantStore, waitForChatCache, waitForChatCacheWrite } from '../store/useAssistantStore';
 import { fsService } from './FileSystemService';
 import { classifySocketError, recordConnectionEvent, type ConnectionEventDetails } from './connectionDiagnostics';
 import { recordOperation, type OperationReasons } from './operationDiagnostics';
@@ -20,6 +20,7 @@ const MAX_AUTO_SEND_RETRIES = 3;
 const SEND_ACK_TIMEOUTS_MS = [6000, 6000, 8000, 10000] as const;
 const SEND_RETRY_DELAYS_MS = [3000, 6000, 10000] as const;
 type ConnectionPhase = keyof typeof PHASE_TIMEOUT_MS;
+type ChatSyncResult = Extract<ServerMessage, { type: 'sync_result' }>;
 
 export class AssistantClient {
     private static instance: AssistantClient | null = null;
@@ -51,6 +52,7 @@ export class AssistantClient {
     private sendRetries = new Map<string, number>();
     private retryingIds = new Set<string>();
     private awaitingFullSnapshot = false;
+    private backgroundSync?: Promise<boolean>;
 
     private constructor() {
         this.setupAppStateListener();
@@ -556,9 +558,9 @@ export class AssistantClient {
                 if (token) {
                     this.sendRaw({ type: 'auth', token });
                 }
-                const lastSeq = useAssistantStore.getState().clearedSeq ?? 0;
+                const { clearedSeq: lastSeq, chatSyncCursor: cursor } = useAssistantStore.getState();
                 this.awaitingFullSnapshot = lastSeq === 0;
-                this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq });
+                this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq, ...(cursor && { cursor }) });
             };
 
             ws.onmessage = (event) => {
@@ -1212,6 +1214,145 @@ export class AssistantClient {
         }
     }
 
+    public syncInBackground(): Promise<boolean> {
+        if (!this.backgroundSync) {
+            this.backgroundSync = this.fetchBackgroundChat().finally(() => { this.backgroundSync = undefined; });
+        }
+        return this.backgroundSync;
+    }
+
+    private async fetchBackgroundChat(): Promise<boolean> {
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<false>(resolve => {
+            timer = setTimeout(() => { controller.abort(); resolve(false); }, 12000);
+        });
+        try {
+            const ready = await Promise.race([waitForChatCache().then(() => true as const), deadline]);
+            if (!ready || this.isExplicitlyClosed) return false;
+            const before = useAssistantStore.getState();
+            const socket = this.ws;
+            const request = this.connectionRequest;
+            const appState = this.currentAppState;
+            if (!before.serverUrl || !before.serverToken || before.credentialsStatus !== 'ready'
+                || (socket && (appState === 'active' || !this.serverSynced || this.sendingId))) return false;
+
+            const query = new URLSearchParams({ clearedSeq: String(before.clearedSeq) });
+            if (before.chatSyncCursor) {
+                query.set('epoch', before.chatSyncCursor.epoch);
+                query.set('seq', String(before.chatSyncCursor.seq));
+            }
+            const response = await fetch(`${AssistantClient.toHttpUrl(before.serverUrl)}/api/chat/sync?${query}`, {
+                headers: { Authorization: `Bearer ${before.serverToken}` },
+                signal: controller.signal,
+            });
+            if (!response.ok) return false;
+            const msg = await response.json() as ChatSyncResult;
+            const current = useAssistantStore.getState();
+            if (controller.signal.aborted || request !== this.connectionRequest || appState !== this.currentAppState
+                || current.credentialsStatus !== 'ready' || current.serverUrl !== before.serverUrl
+                || current.serverToken !== before.serverToken || current.messages !== before.messages
+                || current.chatSyncCursor !== before.chatSyncCursor || current.currentSeq !== before.currentSeq
+                || current.clearedSeq !== before.clearedSeq || (socket && this.sendingId)
+                || msg?.type !== 'sync_result' || msg.sessionId !== 'main'
+                || typeof msg.syncEpoch !== 'string' || !Number.isSafeInteger(msg.currentSeq)
+                || typeof msg.replaceCache !== 'boolean' || !Array.isArray(msg.messages)) return false;
+
+            if (!msg.replaceCache && msg.currentSeq === before.chatSyncCursor?.seq) return false;
+            if (socket && msg.syncEpoch === before.chatSyncCursor?.epoch && msg.currentSeq <= before.currentSeq) return false;
+            if (socket && (msg.messages.length || msg.deletedMessageIds?.length || msg.replaceCache)) {
+                // A snapshot can be ahead of this socket's queued text deltas. Retire
+                // the old transport before applying it; foreground will reconnect.
+                this.cleanUpWs();
+                current.setConnectionState('disconnected');
+            } else if (socket) {
+                return false;
+            }
+            this.applyChatSync(msg, msg.replaceCache);
+            this.logConnection('background_sync_applied', { messageCount: msg.messages.length });
+            return await Promise.race([waitForChatCacheWrite().then(() => true as const), deadline]);
+        } catch {
+            return false; // The next foreground connection reconciles missed background work.
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    private applyChatSync(msg: ChatSyncResult, replaceCache: boolean, keepCursor = false): void {
+        const store = useAssistantStore.getState();
+        store.markChatAuthoritative();
+        // 队列字段优先；回退兼容仅返回单审批的旧服务端
+        const approvals = msg.pendingApprovals ?? (msg.pendingApproval ? [msg.pendingApproval] : []);
+        store.setPendingApprovals(
+            approvals.map((a) => ({
+                approvalId: a.approvalId,
+                prompt: a.prompt,
+                toolName: a.toolName,
+                params: a.params,
+                status: 'pending',
+            }))
+        );
+
+        // 过滤掉小于等于 clearedSeq 的历史消息（用户已清空的历史边界）
+        const validServerMessages = msg.messages.filter(
+            (m) => (m.seq ?? 0) > (store.clearedSeq ?? 0)
+        );
+        const serverIdSet = new Set(validServerMessages.map((m) => m.id));
+        const localMessages = store.messages;
+        const pendingIds = new Set(store.pendingSendQueue.map((q) => q.messageId));
+
+        const msgMap = new Map<string, AssistantMessage>();
+        for (const m of localMessages) {
+            if (replaceCache && m.status !== 'sending' && !pendingIds.has(m.id)
+                && (m.status !== 'error' || (msg.syncEpoch && (m.seq ?? 0) > 0))) continue;
+            if (m.role === 'user' && m.status === 'sending' && !serverIdSet.has(m.id) && !pendingIds.has(m.id)) {
+                store.addToPendingSendQueue({ sessionId: msg.sessionId, messageId: m.id,
+                    content: m.content, attachments: m.attachments, attempted: true });
+            }
+            msgMap.set(m.id, m);
+        }
+        // 服务端下发的有效消息优先覆盖更新
+        for (const m of validServerMessages) {
+            msgMap.set(m.id, m);
+            this.sendRetries.delete(m.id);
+            if (pendingIds.has(m.id)) {
+                store.removeFromPendingSendQueue(m.id);
+            }
+        }
+
+        // 服务端增量删除对账：剔除服务端已删除的排队消息，并同步清理本地待发队列与撤销暂存副本
+        if (msg.deletedMessageIds && msg.deletedMessageIds.length > 0) {
+            for (const delId of msg.deletedMessageIds) {
+                msgMap.delete(delId);
+                this.sendRetries.delete(delId);
+                store.removeFromPendingCancelQueue(delId);
+                const item = store.pendingSendQueue.find(q => q.messageId === delId);
+                if (item?.withdrawal === 'edit' || item?.withdrawal === 'draft') {
+                    store.addToPendingSendQueue({ ...item, withdrawal: 'draft' });
+                } else store.removeFromPendingSendQueue(delId);
+                this.cancellingMessages.delete(delId);
+            }
+        }
+
+        // 位置按服务端时间排序：已受理消息采用服务端受理/创建时刻，同一毫秒保持到达顺序。
+        // 尚未受理的本地消息仍用设备时间，但不参与整段排序，按原顺序置于末尾，避免设备时钟污染历史。
+        const merged = Array.from(msgMap.values());
+        const sequenced = merged
+            .map((message, index) => ({ message, index }))
+            .filter(({ message }) => typeof message.seq === 'number' && message.seq > 0)
+            .sort((a, b) => (a.message.timestamp - b.message.timestamp) || (a.index - b.index))
+            .map(({ message }) => message);
+        const unsequenced = merged.filter((m) => !(typeof m.seq === 'number' && m.seq > 0));
+        useAssistantStore.setState({
+            messages: [...sequenced, ...unsequenced],
+            chatSyncCursor: msg.syncEpoch
+                ? { epoch: msg.syncEpoch, seq: msg.currentSeq }
+                : keepCursor ? store.chatSyncCursor : undefined,
+            currentSeq: msg.currentSeq,
+            taskState: msg.taskState,
+        });
+    }
+
     /**
      * 处理服务端下发的事件报文
      */
@@ -1255,76 +1396,14 @@ export class AssistantClient {
                 this.logConnection('sync_received', { messageCount: msg.messages.length, payloadChars });
                 this.clearPhaseTimeout();
                 this.releaseSendLock();
+                const alreadySynced = this.serverSynced;
                 this.serverSynced = true;
-                store.markChatAuthoritative();
-                const replaceCache = this.awaitingFullSnapshot;
+                const replaceCache = msg.replaceCache ?? this.awaitingFullSnapshot;
                 this.awaitingFullSnapshot = false;
-                // 重连并完成对账，服务端已恢复正常，解除升级态
                 store.setIsServerUpgrading(false);
-                store.setCurrentSeq(msg.currentSeq);
-                store.setTaskState(msg.taskState);
-                // 队列字段优先；回退兼容仅返回单审批的旧服务端
-                const approvals = msg.pendingApprovals ?? (msg.pendingApproval ? [msg.pendingApproval] : []);
-                store.setPendingApprovals(
-                    approvals.map((a) => ({
-                        approvalId: a.approvalId,
-                        prompt: a.prompt,
-                        toolName: a.toolName,
-                        params: a.params,
-                        status: 'pending',
-                    }))
-                );
-
-                // 过滤掉小于等于 clearedSeq 的历史消息（用户已清空的历史边界）
-                const validServerMessages = msg.messages.filter(
-                    (m) => (m.seq ?? 0) > (store.clearedSeq ?? 0)
-                );
-                const serverIdSet = new Set(validServerMessages.map((m) => m.id));
-                const localMessages = store.messages;
-                const pendingIds = new Set(store.pendingSendQueue.map((q) => q.messageId));
-
-                const msgMap = new Map<string, AssistantMessage>();
-                for (const m of localMessages) {
-                    if (replaceCache && m.status !== 'sending' && m.status !== 'error' && !pendingIds.has(m.id)) continue;
-                    if (m.role === 'user' && m.status === 'sending' && !serverIdSet.has(m.id) && !pendingIds.has(m.id)) {
-                        store.addToPendingSendQueue({ sessionId: msg.sessionId, messageId: m.id,
-                            content: m.content, attachments: m.attachments, attempted: true });
-                    }
-                    msgMap.set(m.id, m);
-                }
-                // 服务端下发的有效消息优先覆盖更新
-                for (const m of validServerMessages) {
-                    msgMap.set(m.id, m);
-                    this.sendRetries.delete(m.id);
-                    if (pendingIds.has(m.id)) {
-                        store.removeFromPendingSendQueue(m.id);
-                    }
-                }
-
-                // 服务端增量删除对账：剔除服务端已删除的排队消息，并同步清理本地待发队列与撤销暂存副本
-                if (msg.deletedMessageIds && msg.deletedMessageIds.length > 0) {
-                    for (const delId of msg.deletedMessageIds) {
-                        msgMap.delete(delId);
-                        this.sendRetries.delete(delId);
-                        store.removeFromPendingCancelQueue(delId);
-                        const item = store.pendingSendQueue.find(q => q.messageId === delId);
-                        if (item?.withdrawal === 'edit' || item?.withdrawal === 'draft') {
-                            store.addToPendingSendQueue({ ...item, withdrawal: 'draft' });
-                        } else store.removeFromPendingSendQueue(delId);
-                        this.cancellingMessages.delete(delId);
-                    }
-                }
-
-                // 位置按服务端时间排序：已受理消息采用服务端受理/创建时刻，同一毫秒保持到达顺序。
-                // 尚未受理的本地消息仍用设备时间，但不参与整段排序，按原顺序置于末尾，避免设备时钟污染历史。
-                const merged = Array.from(msgMap.values());
-                const sequenced = merged
-                    .map((message, index) => ({ message, index }))
-                    .filter(({ message }) => typeof message.seq === 'number' && message.seq > 0)
-                    .sort((a, b) => (a.message.timestamp - b.message.timestamp) || (a.index - b.index))
-                    .map(({ message }) => message);
-                const unsequenced = merged.filter((m) => !(typeof m.seq === 'number' && m.seq > 0));
-                store.setMessages([...sequenced, ...unsequenced]);
+                // Unsolicited legacy snapshots refresh recent rows without replacing
+                // the applied cursor or clearing already loaded history.
+                this.applyChatSync(msg, replaceCache, alreadySynced);
 
                 this.logConnection('sync_applied');
                 store.setConnectionState('connected');

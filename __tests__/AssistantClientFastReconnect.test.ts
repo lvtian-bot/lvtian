@@ -68,7 +68,7 @@ describe('AssistantClient connection recovery', () => {
             serverUrl: 'https://server.test', serverToken: 'private-token',
             credentialsStatus: 'ready', credentialsError: null, outboxStatus: 'ready',
             connectionState: 'disconnected', isServerUpgrading: false,
-            messages: [], pendingSendQueue: [], pendingCancelQueue: [], currentSeq: 0, clearedSeq: 0,
+            messages: [], pendingSendQueue: [], pendingCancelQueue: [], currentSeq: 0, clearedSeq: 0, chatSyncCursor: undefined,
         });
     });
 
@@ -89,6 +89,70 @@ describe('AssistantClient connection recovery', () => {
         ws.receive(sync);
         return ws;
     }
+
+    it('resumes chat by the last applied sync after reconnecting', async () => {
+        const ws = await ready();
+        const firstReply = { id: 'first', role: 'assistant' as const, status: 'done' as const,
+            content: 'old reply', timestamp: 1, seq: 10 };
+        ws.receive({ ...sync, replaceCache: true, syncEpoch: 'epoch', currentSeq: 10, messages: [firstReply] });
+        await client.connect(true);
+
+        const next = TestSocket.instances[1];
+        next.open();
+        expect(next.send).toHaveBeenCalledWith(JSON.stringify({
+            type: 'sync', sessionId: 'main', lastSeq: 0, cursor: { epoch: 'epoch', seq: 10 },
+        }));
+        next.receive({ ...sync, replaceCache: false, syncEpoch: 'epoch', currentSeq: 12,
+            messages: [{ ...firstReply, id: 'second', content: 'new reply', timestamp: 2, seq: 12 }] });
+        expect(useAssistantStore.getState().messages.map(m => m.content)).toEqual(['old reply', 'new reply']);
+    });
+
+    it('prefetches a completed reply in the background and keeps it through the next reconnect', async () => {
+        const ws = await ready();
+        ws.receive({ ...sync, replaceCache: true, syncEpoch: 'epoch', currentSeq: 10 });
+        appChange('background');
+        const reply = { id: 'finished', role: 'assistant' as const, status: 'done' as const,
+            content: 'result from the server', timestamp: 2, seq: 11 };
+        const fetch = jest.spyOn(global, 'fetch').mockResolvedValue({
+            ok: true, json: async () => ({ ...sync, replaceCache: false, syncEpoch: 'epoch', currentSeq: 12, messages: [reply] }),
+        } as Response);
+
+        await expect(client.syncInBackground()).resolves.toBe(true);
+        expect(fetch).toHaveBeenCalledWith('https://server.test/api/chat/sync?clearedSeq=0&epoch=epoch&seq=10',
+            expect.objectContaining({ headers: { Authorization: 'Bearer private-token' } }));
+        expect(useAssistantStore.getState().messages).toEqual([reply]);
+        expect(ws.close).toHaveBeenCalledTimes(1);
+
+        appChange('active');
+        const next = TestSocket.instances[1];
+        next.open();
+        expect(next.send).toHaveBeenCalledWith(JSON.stringify({
+            type: 'sync', sessionId: 'main', lastSeq: 0, cursor: { epoch: 'epoch', seq: 12 },
+        }));
+        next.receive({ ...sync, replaceCache: false, syncEpoch: 'epoch', currentSeq: 12 });
+        expect(useAssistantStore.getState().messages).toEqual([reply]);
+    });
+
+    it('discards a background response if the foreground socket already moved the chat forward', async () => {
+        const ws = await ready();
+        ws.receive({ ...sync, replaceCache: true, syncEpoch: 'epoch', currentSeq: 10 });
+        appChange('background');
+        let finish!: (response: Response) => void;
+        const request = new Promise<Response>(resolve => { finish = resolve; });
+        const fetch = jest.spyOn(global, 'fetch').mockReturnValue(request);
+        const pulling = client.syncInBackground();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(fetch).toHaveBeenCalledTimes(1);
+
+        appChange('active');
+        ws.receive({ ...sync, syncEpoch: 'epoch', replaceCache: false, currentSeq: 13 });
+        finish({ ok: true, json: async () => ({
+            ...sync, syncEpoch: 'epoch', replaceCache: false, currentSeq: 12,
+        }) } as Response);
+        await expect(pulling).resolves.toBe(false);
+        expect(useAssistantStore.getState().chatSyncCursor?.seq).toBe(13);
+        expect(ws.close).not.toHaveBeenCalled();
+    });
 
     it('uses settled in-memory credentials without another storage read', async () => {
         const load = jest.spyOn(useAssistantStore.getState(), 'loadSavedCredentials');
