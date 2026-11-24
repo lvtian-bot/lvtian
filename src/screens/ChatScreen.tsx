@@ -52,6 +52,7 @@ import {
 import { useAssistantStore } from '../store/useAssistantStore';
 import { TypingIndicator } from '../components/TypingIndicator';
 import { AssistantClient } from '../services/AssistantClient';
+import { getChatTimeline, ChatTimelineMessage } from '../utils/chatTimeline';
 import { AssistantMessage, ChatAttachment } from '../types/assistantProtocol';
 import { getAssistantDisplayParts } from '../utils/assistantMessageParts';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
@@ -120,7 +121,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
     const { fontSize } = useSettingsStore();
     const metrics = useMemo(() => getFontSizeMetrics(fontSize), [fontSize]);
 
-    const flatListRef = useRef<FlatList<AssistantMessage>>(null);
+    const flatListRef = useRef<FlatList<ChatTimelineMessage>>(null);
     const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
     const contentInsetsRef = useRef<{ top: number; bottom: number }>({ top: 0, bottom: 0 });
     const extraContentPadding = useSharedValue(0);
@@ -406,14 +407,15 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
             const index = visible.findIndex(message => message.seq > 0 && message.timestamp < extraReply.timestamp);
             visible.splice(index < 0 ? visible.length : index, 0, extraReply);
         }
-        return visible;
+        return getChatTimeline(visible.reverse()).reverse();
     }, [messages, pendingById, extraReply]);
 
     const displayMessages = useMemo(() => {
         return reversedMessages.slice(0, renderedCount);
     }, [reversedMessages, renderedCount]);
 
-    const menuMessage = menu && reversedMessages.find(message => message.id === menu.id);
+    const menuMessage = menu && (messages.find(message => message.id === menu.id)
+        ?? (extraReply?.id === menu.id ? extraReply : undefined));
     const chooseMessageAction = (action: MessageAction) => {
         setMenu(undefined);
         if (!menuMessage) return;
@@ -816,7 +818,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                 ref={flatListRef}
                 data={displayMessages}
                 inverted={true}
-                keyExtractor={(item) => item.id}
+                keyExtractor={(item) => item.timelineKey ?? item.id}
                 contentContainerStyle={styles.messageList}
                 keyboardShouldPersistTaps="handled"
                 onScrollBeginDrag={handleScrollBeginDrag}
@@ -855,7 +857,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                     const sendFailed = isUser && Boolean(pendingItem?.failed);
                     const selectingHere = selecting === item.id;
                     // Data is newest-first, while each cell remains top-to-bottom.
-                    const showDate = startsChatDay(item.timestamp, displayMessages[index + 1]?.timestamp);
+                    const showDate = startsChatDay(item.timelineTimestamp ?? item.timestamp, displayMessages[index + 1]?.timelineTimestamp ?? displayMessages[index + 1]?.timestamp);
                     const hasProseBubble = isUser || Boolean(item.attachments?.length ||
                         item.errorMessage || (item.stopReason && item.stopReason !== 'end_turn'));
                     // 纯工具消息已移出聊天：不保留空行，只在跨天时保留日期分隔。
@@ -985,7 +987,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                         <View>
                         {showDate && <View style={styles.dateSeparator} testID={`chat-date-${item.id}`}>
                             <Text style={styles.dateSeparatorText}>
-                                {formatChatDate(item.timestamp, dateNow, chatI18n.language, t)}
+                                {formatChatDate(item.timelineTimestamp ?? item.timestamp, dateNow, chatI18n.language, t)}
                             </Text>
                         </View>}
                         {hasVisibleRow ? <ChatBubbleReveal

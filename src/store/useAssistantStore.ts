@@ -79,7 +79,10 @@ const isMessage = (value: unknown): boolean => isRecord(value)
         && typeof tool.id === 'string' && typeof tool.name === 'string'
         && ['running', 'done', 'failed'].includes(String(tool.status)))
     && validOptionalArray(value.toolCallPositions, (position) => isRecord(position)
-        && typeof position.toolCallId === 'string' && isCounter(position.textOffset));
+        && typeof position.toolCallId === 'string' && isCounter(position.textOffset))
+    && validOptionalArray(value.supplementBoundaries, (boundary) => isRecord(boundary)
+        && typeof boundary.messageId === 'string' && isCounter(boundary.timestamp)
+        && isCounter(boundary.textOffset) && Number.isInteger(boundary.textOffset));
 
 /** Validate cache containers/render-critical fields, not a second protocol schema. */
 function parseChatCache(value: unknown): Partial<AssistantState> {

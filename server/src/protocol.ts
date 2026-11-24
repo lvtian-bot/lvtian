@@ -49,6 +49,8 @@ export interface AssistantMessage {
     content: string;
     timestamp: number;
     completedAt?: number;
+    /** Actual supplement consumption boundaries, independent of tool events. */
+    supplementBoundaries?: Array<{ messageId: string; timestamp: number; textOffset: number }>;
     status: 'sending' | 'sent' | 'queued' | 'processing' | 'done' | 'error';
     toolCalls?: ToolCallState[];
     /** 工具首次出现时在 content 中的 UTF-16 偏移；状态更新不改变位置 */
@@ -136,6 +138,7 @@ export type ServerMessage =
       }
     | {
           type: 'event_chunk';
+          supplementBoundaries?: AssistantMessage['supplementBoundaries'];
           replyTo?: string;
           seq: number;
           sessionId: string;
