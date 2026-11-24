@@ -324,4 +324,62 @@ describe('bubble rendering', () => {
         const secondClock = secondProse.findByProps({ testID: 'inline-bubble-time' });
         expect(secondClock.props.children).toBe('12:11');
     });
+    it('renders consumed supplements between stable prose and the answer with the real completion clock', async () => {
+        jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
+        const started = new Date(2026, 9, 26, 12, 5).getTime();
+        const supplement = message({ id: 'supplement', role: 'user', content: 'extra', timestamp: started + 60000 });
+        const reply = message({ content: 'beforeafter', timestamp: started,
+            completedAt: started + 6 * 60000,
+            supplementBoundaries: [{ messageId: supplement.id, timestamp: supplement.timestamp, textOffset: 6 }],
+        });
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ serverUrl: 'http://localhost:8080', connectionState: 'connected',
+                messages: [reply, supplement], pendingApprovals: [] });
+            renderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const list = renderer!.root.findByType(FlatList);
+        const rows = list.props.data;
+        expect(rows.map((row: AssistantMessage) => row.content)).toEqual(['after', 'extra', 'before']);
+        expect(rows.map(list.props.keyExtractor)).toEqual(['reply:supplement:6', 'supplement', 'reply']);
+        const renderItem = list.props.renderItem;
+        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: rows[0], index: 0 })));
+        expect(renderer!.root.findByType(ChatBubbleText).props.time).toBe('12:11');
+        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: rows[2], index: 2 })));
+        expect(renderer!.root.findByType(ChatBubbleText).props.time).toBe('12:05');
+    });
+
+    it.each([
+        { tail: '', tools: false },
+        { tail: ' \n\t', tools: false },
+        { tail: '', tools: true },
+    ])('keeps the completion clock on existing prose when the consumed supplement has no visible answer: %j', async ({ tail, tools }) => {
+        jest.spyOn(AssistantClient.getInstance(), 'connect').mockImplementation(async () => {});
+        const started = new Date(2026, 9, 26, 12, 5).getTime();
+        const supplement = message({ id: 'supplement', role: 'user', content: 'extra', timestamp: started + 60000 });
+        const reply = message({ content: `before${tail}`, timestamp: started,
+            completedAt: started + 6 * 60000,
+            supplementBoundaries: [{ messageId: supplement.id, timestamp: supplement.timestamp, textOffset: 6 }],
+            toolCalls: tools ? [call('tail-tool')] : undefined,
+            toolCallPositions: tools ? [{ toolCallId: 'tail-tool', textOffset: 6 }] : undefined,
+        });
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ serverUrl: 'http://localhost:8080', connectionState: 'connected',
+                messages: [reply, supplement], pendingApprovals: [] });
+            renderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const list = renderer!.root.findByType(FlatList);
+        const rows = list.props.data;
+        expect(rows.filter((row: AssistantMessage) => row.content.trim()).map((row: AssistantMessage) => row.content))
+            .toEqual(['extra', 'before']);
+        expect(list.props.keyExtractor(rows[2])).toBe('reply');
+        const renderItem = list.props.renderItem;
+        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: rows[0], index: 0 })));
+        expect(renderer!.root.findAllByType(ChatBubbleText)).toHaveLength(0);
+        expect(renderer!.root.findAllByType(ChatMarkdownBubble)).toHaveLength(0);
+        await ReactTestRenderer.act(async () => renderer!.update(renderItem({ item: rows[2], index: 2 })));
+        const prose = renderer!.root.findByType(ChatBubbleText);
+        expect(prose.props.text).toBe('before');
+        expect(prose.findByProps({ testID: 'inline-bubble-time' }).props.children).toBe('12:11');
+    });
+
 });

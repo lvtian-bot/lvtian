@@ -1042,6 +1042,17 @@ export class LvtianServer {
                 this.broadcastSession(sessionId, { type: 'message_ack', messageId: next.id,
                     seq: next.seq, role: 'user', status: 'sent', content: next.content, timestamp: next.timestamp,
                     replyTo });
+                // Capture exactly the prose already delivered when the engine takes this input.
+                // A tool boundary is not a reliable boundary for the subsequent answer.
+                const updated = this.sessionManager.updateMessage(sessionId, assistantMessageId, message => {
+                    message.supplementBoundaries = [...(message.supplementBoundaries ?? []), {
+                        messageId: next.id, timestamp: next.timestamp, textOffset: message.content.length,
+                    }];
+                });
+                if (updated) this.broadcastSession(sessionId, {
+                    type: 'event_chunk', sessionId, messageId: assistantMessageId, seq: updated.seq,
+                    supplementBoundaries: updated.supplementBoundaries,
+                });
                 const remaining = this.sessionManager.getOrCreateSession(sessionId).messages.filter(m => m.status === 'queued').length;
                 return { ...next, remaining };
             },

@@ -1523,6 +1523,12 @@ export class AssistantClient {
                     store.appendDeltaToMessage(msg.messageId, msg.delta);
                 }
 
+                if (msg.supplementBoundaries) {
+                    const current = useAssistantStore.getState().messages.find(m => m.id === msg.messageId);
+                    if (current) store.addOrUpdateMessage({ ...current, seq: msg.seq,
+                        supplementBoundaries: msg.supplementBoundaries });
+                }
+
                 if (msg.toolCall) {
                     store.setToolCallForMessage(msg.messageId, msg.toolCall);
                 }
