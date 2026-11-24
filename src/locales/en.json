@@ -7,7 +7,13 @@
     "files": "Files",
     "browser": "Notes",
     "settings": "Settings",
-    "me": "Me"
+    "chatNotifications": {
+    "title": "Lvtian",
+    "enabled": "Message notifications",
+    "preview": "Show message previews",
+    "newMessage": "You have a new message"
+  },
+  "me": "Me"
   },
   "me": {
     "avatar": {

@@ -1,7 +1,12 @@
 import { NavigatorScreenParams } from '@react-navigation/native';
 
+export interface ChatNotificationTarget {
+    messageId: string;
+    serverIdentity: string;
+}
+
 export type MainTabParamList = {
-    Chat: undefined;
+    Chat: NavigatorScreenParams<ChatStackParamList> | undefined;
     Flash: undefined;
     Todo: undefined;
     Moments: undefined;
@@ -9,7 +14,7 @@ export type MainTabParamList = {
 };
 
 export type ChatStackParamList = {
-    ChatScreen: undefined;
+    ChatScreen: { notificationTarget?: ChatNotificationTarget } | undefined;
     WorkRecords: undefined;
 };
 

@@ -35,6 +35,10 @@ interface SettingsState {
 
     markdownTheme: MarkdownThemeKey;
     setMarkdownTheme: (theme: MarkdownThemeKey) => void;
+    chatNotificationsEnabled: boolean;
+    setChatNotificationsEnabled: (enabled: boolean) => void;
+    chatNotificationPreview: boolean;
+    setChatNotificationPreview: (enabled: boolean) => void;
     hasHydrated: boolean;
     setHasHydrated: (state: boolean) => void;
 }
@@ -70,6 +74,10 @@ export const useSettingsStore = create<SettingsState>()(
 
             markdownTheme: 'default',
             setMarkdownTheme: (theme) => set({ markdownTheme: theme }),
+            chatNotificationsEnabled: false,
+            setChatNotificationsEnabled: (enabled) => set({ chatNotificationsEnabled: enabled }),
+            chatNotificationPreview: true,
+            setChatNotificationPreview: (enabled) => set({ chatNotificationPreview: enabled }),
             hasHydrated: false,
             setHasHydrated: (state) => set({ hasHydrated: state }),
         }),

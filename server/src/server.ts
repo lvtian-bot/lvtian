@@ -83,7 +83,7 @@ export class LvtianServer {
         });
         this.sessionManager.persistDurableMessage(sessionId, id);
         this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
-        if (sessionId === 'main') this.chatSyncPush?.wakeDevices();
+        if (sessionId === 'main') this.chatSyncPush?.wakeDevices(id);
     }
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;
@@ -286,6 +286,19 @@ export class LvtianServer {
             const snapshot = this.chatSync('main', clearedSeq, epoch ? { epoch, seq } : undefined);
             res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
             res.end(JSON.stringify(snapshot));
+            return;
+        }
+
+        if (pathname === '/api/chat/reply' && req.method === 'GET') {
+            const id = urlObj.searchParams.get('id');
+            const message = id && this.sessionManager.getOrCreateSession('main').messages
+                .find(m => m.id === id && m.role === 'assistant' && m.status === 'done');
+            if (!message) {
+                res.writeHead(404).end();
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify(message));
             return;
         }
 
@@ -1119,7 +1132,7 @@ export class LvtianServer {
                     completedAt,
                 });
 
-                if (completedAt && sessionId === 'main') this.chatSyncPush?.wakeDevices();
+                if (completedAt && sessionId === 'main') this.chatSyncPush?.wakeDevices(assistantMessageId);
                 // 本轮结束，检查会话排队队列并推进下一项
                 this.scheduleProcessQueue(sessionId);
             },
@@ -1254,7 +1267,7 @@ export class LvtianServer {
             store.delivered(report.id);
             // Full state reconciles both currently-online and reconnecting clients. No internal input is exposed.
             this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
-            this.chatSyncPush?.wakeDevices();
+            this.chatSyncPush?.wakeDevices(messageId);
             this.scheduleProcessQueue(sessionId);
             return true;
         } catch {

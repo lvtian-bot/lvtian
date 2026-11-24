@@ -1,5 +1,5 @@
 import React, { type ComponentProps, type PropsWithChildren } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, Switch } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
@@ -24,6 +24,7 @@ interface SettingsRowProps {
     last?: boolean;
     /** 右侧当前值处的小型加载指示（如远端切换进行中） */
     busy?: boolean;
+    toggle?: { value: boolean; onChange: (value: boolean) => void };
 }
 
 export const SettingsRow: React.FC<SettingsRowProps> = ({
@@ -34,6 +35,7 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
     onPress,
     last,
     busy,
+    toggle,
 }) => {
     const font = useSettingsFont();
     const body = (
@@ -49,6 +51,14 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
                     {value}
                 </Text>
             ) : null}
+            {toggle && (
+                <Switch
+                    accessibilityLabel={title}
+                    value={toggle.value}
+                    disabled={busy}
+                    onValueChange={toggle.onChange}
+                />
+            )}
             {onPress ? (
                 <MaterialCommunityIcons
                     name="chevron-right"

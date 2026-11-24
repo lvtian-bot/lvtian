@@ -1,23 +1,11 @@
-import { requireOptionalNativeModule } from 'expo';
 import type { NotificationTaskPayload } from 'expo-notifications';
-import { AppState, Platform } from 'react-native';
+import { AppState } from 'react-native';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from './AssistantClient';
+import { pushModules } from './chatPushModules';
+import { notifyPushedChatReplies, pushedReplyIds } from './chatNotifications';
 
 const TASK = 'lvtian-chat-background-sync';
-// The installed APK owns Firebase configuration across OTA updates. Load the
-// JS wrappers only when the corresponding native packages exist in that APK.
-function loadPushModules() {
-    if (Platform.OS !== 'android' || !requireOptionalNativeModule('ExpoPushTokenManager')
-        || !requireOptionalNativeModule('ExpoBackgroundNotificationTasksModule')
-        || !requireOptionalNativeModule('ExpoTaskManager')) return;
-    return {
-        notifications: require('expo-notifications') as typeof import('expo-notifications'),
-        taskManager: require('expo-task-manager') as typeof import('expo-task-manager'),
-    };
-}
-
-const pushModules = loadPushModules();
 
 if (pushModules) {
     const { notifications, taskManager } = pushModules;
@@ -26,6 +14,7 @@ if (pushModules) {
             return notifications.BackgroundNotificationTaskResult.NoData;
         }
         const updated = await AssistantClient.getInstance().syncInBackground();
+        await notifyPushedChatReplies(pushedReplyIds(data.data.messageIds));
         return updated ? notifications.BackgroundNotificationTaskResult.NewData : notifications.BackgroundNotificationTaskResult.NoData;
     });
 }

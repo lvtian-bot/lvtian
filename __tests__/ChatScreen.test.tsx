@@ -7,6 +7,7 @@ import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
 import i18n from '../src/i18n';
+import * as chatNotifications from '../src/services/chatNotifications';
 
 const mockSetOptions = jest.fn();
 const mockNavigate = jest.fn();
@@ -48,6 +49,28 @@ describe('ChatScreen 输入区与操作菜单', () => {
             currentRenderer = undefined;
         }
         jest.restoreAllMocks();
+    });
+
+    it('adds the exact older reply to the chat window when its notification is tapped', async () => {
+        const serverUrl = 'http://localhost:8080';
+        const serverToken = 'selected-server';
+        const target = { messageId: 'from-notification',
+            serverIdentity: chatNotifications.chatServerIdentity(serverUrl, serverToken) };
+        const older = { id: target.messageId, role: 'assistant', status: 'done',
+            content: 'The exact reply', seq: 1, timestamp: 1 } as const;
+        const recent = { ...older, id: 'more-recent', seq: 2, timestamp: 2 };
+        const getReply = jest.spyOn(chatNotifications, 'readNotificationReply').mockResolvedValue(older);
+        const scroll = jest.spyOn(FlatList.prototype, 'scrollToIndex').mockImplementation(() => {});
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ serverUrl, serverToken, credentialsStatus: 'ready', messages: [recent] });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen route={{
+                name: 'ChatScreen', key: 'main-chat', params: { notificationTarget: target },
+            }} />);
+        });
+        expect(getReply).toHaveBeenCalledWith(target, expect.anything());
+        expect(currentRenderer!.root.findByType(FlatList).props.data).toEqual([recent, older]);
+        await ReactTestRenderer.act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+        expect(scroll).toHaveBeenCalledWith({ index: 1, viewPosition: 0.5, animated: false });
     });
 
     it('长按待发气泡可编辑，收件后菜单即时更新，整条复制与局部选择共享原文', async () => {
