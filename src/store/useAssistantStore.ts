@@ -17,6 +17,7 @@ import {
     ApprovalRequest,
     ToolCallState,
     AgentSkill,
+    ChatSyncCursor,
 } from '../types/assistantProtocol';
 
 // Defer disposable cache writes until its first read finishes; server connection
@@ -26,6 +27,10 @@ const CHAT_CACHE_KEY = 'lvtian-chat-cache-v2';
 let chatHydrationSucceeded = false;
 let cacheIdentityStarted = '';
 let cacheSuperseded = false;
+let cacheRead: Promise<unknown> = Promise.resolve();
+let cacheRepair = Promise.resolve();
+let outboxRead = Promise.resolve();
+let cacheWrite = Promise.resolve();
 let outboxGeneration = 0;
 const outboxWrites = new Map<string, Promise<void>>();
 let operationTail: Promise<unknown> = Promise.resolve();
@@ -35,13 +40,22 @@ function serialize<T>(operation: () => Promise<T>): Promise<T> {
     return result;
 }
 
+let lastCacheValue: string | undefined;
+
 const chatStorage = {
     getItem: (name: string) => AsyncStorage.getItem(name),
     setItem: async (name: string, value: string): Promise<void> => {
         if (!credentialsInitialized || !chatHydrationSucceeded) return;
-        try {
-            await AsyncStorage.setItem(name, value);
-        } catch { /* disposable cache; the server remains authoritative */ }
+        if (value === lastCacheValue) return cacheWrite;
+        lastCacheValue = value;
+        cacheWrite = cacheWrite.then(async () => {
+            try {
+                await AsyncStorage.setItem(name, value);
+            } catch {
+                if (lastCacheValue === value) lastCacheValue = undefined;
+            }
+        });
+        await cacheWrite;
     },
     removeItem: (name: string) => AsyncStorage.removeItem(name),
 };
@@ -87,6 +101,7 @@ interface AssistantState {
     /** 待审批队列：同一会话并发多个工具各自请求审批时按序展示与应答 */
     pendingApprovals: ApprovalRequest[];
     currentSeq: number;
+    chatSyncCursor?: ChatSyncCursor;
     credentialsStatus: 'loading' | 'ready' | 'error';
     credentialsError: CredentialsErrorCode | null;
     outboxStatus: 'loading' | 'ready';
@@ -146,6 +161,7 @@ export const useAssistantStore = create<AssistantState>()(
                 taskState: 'idle',
                 pendingApprovals: [],
                 currentSeq: 0,
+                chatSyncCursor: undefined,
                 clearedSeq: 0,
                 credentialsStatus: 'loading',
                 credentialsError: null,
@@ -188,6 +204,7 @@ export const useAssistantStore = create<AssistantState>()(
                                 outboxStatus: 'loading',
                                 messages: [],
                                 currentSeq: 0,
+                                chatSyncCursor: undefined,
                                 clearedSeq: 0,
                                 taskState: 'idle',
                                 pendingApprovals: [],
@@ -232,7 +249,7 @@ export const useAssistantStore = create<AssistantState>()(
                             credentialsError: null,
                             ...(identityChanged ? {
                                 outboxStatus: 'loading' as const,
-                                messages: [], currentSeq: 0, clearedSeq: 0,
+                                messages: [], currentSeq: 0, chatSyncCursor: undefined, clearedSeq: 0,
                                 pendingSendQueue: [], pendingCancelQueue: [], pendingApprovals: [],
                                 taskState: 'idle' as const, isServerUpgrading: false,
                                 skills: [], agentModelSelection: null, agentModelOptions: [],
@@ -357,6 +374,7 @@ export const useAssistantStore = create<AssistantState>()(
                         return {
                             messages: [],
                             currentSeq: 0,
+                            chatSyncCursor: undefined,
                             clearedSeq: maxSeq,
                             taskState: 'idle',
                             pendingApprovals: [],
@@ -406,48 +424,61 @@ export const useAssistantStore = create<AssistantState>()(
                 if (cacheSuperseded || current.messages.length > 0 || !isRecord(persisted)
                     || persisted.identity !== outboxKey(current.serverUrl, current.serverToken)) return current;
                 const saved = parseChatCache(persisted);
-                return { ...current, messages: saved.messages ?? [] };
+                const cursor = saved.chatSyncCursor;
+                const chatSyncCursor = cursor && typeof cursor.epoch === 'string'
+                    && Number.isSafeInteger(cursor.seq) && cursor.seq >= 0 ? cursor : undefined;
+                return { ...current, messages: saved.messages ?? [], chatSyncCursor };
             },
             partialize: (state) => {
                 const cacheableMessages = state.messages
-                    .filter((m) => m.status === 'sent' || m.status === 'queued' || m.status === 'done')
-                    .map((m) => {
-                        if (!m.attachments || m.attachments.length === 0) {
-                            return m;
-                        }
-                        // 移除 base64 data 与超长 raw content，保留轻量元数据与本地文件路径 uri，
-                        // 既能在冷启动重启后按 uri 重新读取附件以支持重试，又避免将庞大 Base64 塞入 AsyncStorage 突破 2MB 限制
-                        const sanitizedAttachments = m.attachments.map((att) => ({
-                            type: att.type,
-                            name: att.name,
-                            mimeType: att.mimeType,
-                            size: att.size,
-                            uri: att.uri,
-                        }));
-                        return {
-                            ...m,
-                            attachments: sanitizedAttachments,
-                        };
-                    });
+                    .filter((m) => m.status === 'sent' || m.status === 'queued' || m.status === 'done'
+                        || (m.status === 'error' && (m.seq ?? 0) > 0))
+                    .slice(-100);
+                const stripsImageData = cacheableMessages.some(m =>
+                    m.attachments?.some(attachment => attachment.type === 'image' && Boolean(attachment.data))
+                );
+                const sanitizedMessages = cacheableMessages.map((m) => {
+                    if (!m.attachments || m.attachments.length === 0) {
+                        return m;
+                    }
+                    // 移除 base64 data 与超长 raw content，保留轻量元数据与本地文件路径 uri，
+                    // 既能在冷启动重启后按 uri 重新读取附件以支持重试，又避免将庞大 Base64 塞入 AsyncStorage 突破 2MB 限制
+                    const sanitizedAttachments = m.attachments.map((att) => ({
+                        type: att.type,
+                        name: att.name,
+                        mimeType: att.mimeType,
+                        size: att.size,
+                        uri: att.uri,
+                    }));
+                    return {
+                        ...m,
+                        attachments: sanitizedAttachments,
+                    };
+                });
                 // Keep the newest complete messages within a conservative size
                 // budget, avoiding oversized Android AsyncStorage rows.
                 const persistedMessages: AssistantMessage[] = [];
                 let cacheCharacters = 0;
-                for (let i = cacheableMessages.length - 1; i >= 0; i -= 1) {
-                    const size = JSON.stringify(cacheableMessages[i]).length;
+                for (let i = sanitizedMessages.length - 1; i >= 0; i -= 1) {
+                    const size = JSON.stringify(sanitizedMessages[i]).length;
                     if (cacheCharacters + size > 128 * 1024) break;
                     cacheCharacters += size;
-                    persistedMessages.unshift(cacheableMessages[i]);
+                    persistedMessages.unshift(sanitizedMessages[i]);
                 }
                 return {
                     identity: outboxKey(state.serverUrl, state.serverToken),
                     messages: persistedMessages,
+                    // A sender's file URI may belong to another device. Fetch a
+                    // new snapshot whenever the disk cache drops image data.
+                    chatSyncCursor: persistedMessages.length === cacheableMessages.length
+                        && !stripsImageData && !state.messages.some(m => m.status === 'processing')
+                        && state.clearedSeq === 0 ? state.chatSyncCursor : undefined,
                 };
             },
             onRehydrateStorage: () => {
                 chatHydrationSucceeded = false;
                 return (_state, error) => {
-                    Promise.resolve().then(async () => {
+                    cacheRepair = Promise.resolve().then(async () => {
                         if (error) {
                             recordOperation('chat_storage', 'cache_rehydrate_failed');
                             try { await AsyncStorage.removeItem(CHAT_CACHE_KEY); } catch { /* cache is disposable */ }
@@ -468,8 +499,8 @@ function startChatStorage(url: string, token: string): void {
     if (cacheIdentityStarted !== identity) {
         cacheIdentityStarted = identity;
         cacheSuperseded = false;
-        Promise.resolve(useAssistantStore.persist.rehydrate()).catch(() => {});
-        initializeOutbox().catch(() => {});
+        cacheRead = Promise.resolve(useAssistantStore.persist.rehydrate()).catch(() => {});
+        outboxRead = initializeOutbox().catch(() => {});
     }
 }
 
@@ -539,4 +570,15 @@ useAssistantStore.subscribe((state, previous) => {
 
 // The retired mixed record is disposable and is not read or migrated.
 Promise.resolve().then(() => AsyncStorage.removeItem('lvtian-assistant-storage')).catch(() => undefined);
-Promise.resolve().then(() => useAssistantStore.getState().loadSavedCredentials()).catch(() => undefined);
+const initialCredentials = Promise.resolve()
+    .then(() => useAssistantStore.getState().loadSavedCredentials()).catch(() => undefined);
+
+export async function waitForChatCache(): Promise<void> {
+    await initialCredentials;
+    await cacheRead;
+    await Promise.all([cacheRepair, outboxRead]);
+}
+
+export function waitForChatCacheWrite(): Promise<void> {
+    return cacheWrite;
+}

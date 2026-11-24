@@ -78,14 +78,58 @@ describe('independent credentials, disposable chat cache, and durable outbox', (
         expect(store.getState().messages.map(m => m.id)).toEqual(['server']);
     });
 
+    it('persists the applied cursor with the exact chat cache it resumes from', async () => {
+        const first = setup({ [CONFIG]: config });
+        const cursor = { epoch: 'server-epoch', seq: 9 };
+        const store = first.start();
+        await flush();
+        store.setState({
+            messages: [{ ...message, role: 'assistant', status: 'done', seq: 9 }],
+            chatSyncCursor: cursor,
+        });
+        await flush();
+        const saved = first.data.get(CACHE)!;
+        expect(JSON.parse(saved).state.chatSyncCursor).toEqual(cursor);
+
+        const second = setup({ [CONFIG]: config, [CACHE]: saved });
+        const restarted = second.start();
+        await flush();
+        expect(restarted.getState().chatSyncCursor).toEqual(cursor);
+        expect(restarted.getState().messages.map(m => m.id)).toEqual([message.id]);
+    });
+
+    it('requests a fresh snapshot after caching an image whose URI belongs to the sender', async () => {
+        const first = setup({ [CONFIG]: config });
+        const store = first.start();
+        await flush();
+        const image = { type: 'image' as const, name: 'other-phone.jpg',
+            uri: 'file:///data/user/0/com.lvtian/cache/other-phone.jpg', data: 'ZGF0YQ==' };
+        store.setState({
+            messages: [{ ...message, role: 'user', status: 'sent', attachments: [image] }],
+            chatSyncCursor: { epoch: 'server-epoch', seq: 9 },
+        });
+        await flush();
+        const saved = first.data.get(CACHE)!;
+        const { data: _data, ...metadata } = image;
+        expect(JSON.parse(saved).state.messages[0].attachments).toEqual([metadata]);
+        expect(JSON.parse(saved).state).not.toHaveProperty('chatSyncCursor');
+
+        const restarted = setup({ [CONFIG]: config, [CACHE]: saved }).start();
+        await flush();
+        expect(restarted.getState().chatSyncCursor).toBeUndefined();
+    });
+
     it('limits cached chat size and does not store connection or outbox fields', async () => {
         const { start, data } = setup({ [CONFIG]: config });
         const store = start();
         await flush();
-        store.getState().setMessages([
-            { ...message, role: 'assistant', status: 'done', id: 'large', content: 'x'.repeat(140000) },
-            { ...message, role: 'assistant', status: 'done', id: 'recent' },
-        ]);
+        store.setState({
+            messages: [
+                { ...message, role: 'assistant', status: 'done', id: 'large', content: 'x'.repeat(140000) },
+                { ...message, role: 'assistant', status: 'done', id: 'recent' },
+            ],
+            chatSyncCursor: { epoch: 'server-epoch', seq: 9 },
+        });
         await flush();
         const raw = data.get(CACHE)!;
         const cached = JSON.parse(raw).state;
@@ -93,6 +137,7 @@ describe('independent credentials, disposable chat cache, and durable outbox', (
         expect(cached).not.toHaveProperty('pendingSendQueue');
         expect(cached).not.toHaveProperty('serverToken');
         expect(cached).not.toHaveProperty('currentSeq');
+        expect(cached).not.toHaveProperty('chatSyncCursor');
         expect(raw.length).toBeLessThan(128 * 1024);
     });
 

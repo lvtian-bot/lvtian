@@ -61,9 +61,14 @@ export interface AssistantMessage {
 }
 
 // 客户端发往服务端的报文
+export interface ChatSyncCursor {
+    epoch: string;
+    seq: number;
+}
+
 export type ClientMessage =
     | { type: 'auth'; token: string }
-    | { type: 'sync'; sessionId: string; lastSeq: number }
+    | { type: 'sync'; sessionId: string; lastSeq: number; cursor?: ChatSyncCursor }
     | {
           type: 'chat';
           sessionId: string;
@@ -113,6 +118,8 @@ export type ServerMessage =
           /** 待审批队列全量：同一会话并发多个工具各自请求审批时按序展示 */
           pendingApprovals?: ApprovalRequest[];
           currentSeq: number;
+          syncEpoch?: string;
+          replaceCache?: boolean;
       }
     | {
           type: 'message_ack';

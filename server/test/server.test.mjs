@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import * as acp from '@agentclientprotocol/sdk';
+import { ChatSyncPush } from '../dist/chatSyncPush.js';
 import { SessionManager } from '../dist/sessionManager.js';
 import { LvtianServer } from '../dist/server.js';
 import { MemoryManager } from '../dist/memoryManager.js';
@@ -51,6 +52,74 @@ test('SessionManager handles final lossless text update and advances sequence', 
     assert.equal(reconcile.messages[0].content, fullText);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('background chat sync uses the same cursor and authenticated result as WebSocket reconnect', async t => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-chat-sync-'));
+    const sessions = new SessionManager(dataDir);
+    const memory = new MemoryManager(dataDir);
+    const engine = new AcpEngineManager(dataDir, memory, sessions);
+    const requests = [];
+    const push = new ChatSyncPush(dataDir, { sendEachForMulticast: async message => {
+        requests.push(message);
+        return { responses: [{ success: true }], failureCount: 0 };
+    } });
+    const token = 'test-chat-sync-token';
+    const server = new LvtianServer({
+        port: 0, host: '127.0.0.1', token, workspace: dataDir, dataDir, assistantName: 'TestBot',
+    }, sessions, memory, engine, undefined, undefined, undefined, undefined, undefined, push);
+    await server.start();
+    const address = server.httpServer.address().port;
+    const endpoint = `http://127.0.0.1:${address}/api/chat`;
+    const headers = { Authorization: `Bearer ${token}` };
+    const socket = new WebSocket(`ws://127.0.0.1:${address}`);
+    t.after(async () => {
+        socket.terminate();
+        await server.stop();
+        fs.rmSync(dataDir, { recursive: true, force: true });
+    });
+
+    assert.equal((await fetch(`${endpoint}/sync`)).status, 401);
+    const deviceToken = 'test-fcm:token-with-lvtian-012345';
+    assert.equal((await fetch(`${endpoint}/sync-device`, { method: 'POST', headers,
+        body: JSON.stringify({ token: deviceToken }) })).status, 204);
+
+    const previous = sessions.addMessage('main', {
+        id: 'old', role: 'assistant', status: 'done', content: 'previous', timestamp: 1,
+    });
+    const initial = await (await fetch(`${endpoint}/sync`, { headers })).json();
+    assert.equal(initial.replaceCache, true);
+    assert.deepEqual(initial.messages, [previous]);
+    server.publishAutonomousJobReply('main', { engineSessionId: 'session', turn: 2, text: 'result' });
+    assert.deepEqual(requests[0].data, { type: 'lvtian_chat_sync' });
+    assert.deepEqual(requests[0].tokens, [deviceToken]);
+    assert.equal(requests[0].android.priority, 'normal');
+
+    const cursor = { epoch: initial.syncEpoch, seq: initial.currentSeq };
+    const incremental = await (await fetch(`${endpoint}/sync?epoch=${cursor.epoch}&seq=${cursor.seq}`, { headers })).json();
+    assert.equal(incremental.replaceCache, false);
+    assert.deepEqual(incremental.messages.map(m => m.content), ['result']);
+    const wsResult = await new Promise((resolve, reject) => {
+        function sendSync() {
+            socket.send(JSON.stringify({ type: 'auth', token }));
+            socket.send(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: 0, cursor }));
+        }
+        socket.on('error', reject);
+        socket.on('message', raw => {
+            const data = JSON.parse(raw);
+            if (data.type === 'sync_result') resolve(data);
+        });
+        if (socket.readyState === WebSocket.OPEN) sendSync();
+        else socket.once('open', sendSync);
+    });
+    assert.deepEqual(wsResult, incremental);
+
+    sessions.deleteMessage('main', previous.id);
+    const deleted = await (await fetch(`${endpoint}/sync?epoch=${cursor.epoch}&seq=${incremental.currentSeq}`, { headers })).json();
+    assert.deepEqual(deleted.deletedMessageIds, ['old']);
+    const stale = await (await fetch(`${endpoint}/sync?epoch=expired&seq=${deleted.currentSeq}`, { headers })).json();
+    assert.equal(stale.replaceCache, true);
+    assert.deepEqual(stale.messages.map(m => m.content), ['result']);
 });
 
 test('LvtianServer handles WebSocket connection error without crash', { timeout: 15000 }, async (t) => {

@@ -864,7 +864,8 @@ export class SessionManager {
 
     public getReconcileData(
         sessionId: string,
-        lastSeq: number
+        lastSeq: number,
+        incremental = lastSeq > 0,
     ): {
         messages: AssistantMessage[];
         deletedMessageIds?: string[];
@@ -876,11 +877,11 @@ export class SessionManager {
     } {
         const session = this.getOrCreateSession(sessionId);
         // 如果客户端是初次同步（lastSeq <= 0），返回最近 100 条消息窗口切片；如果增量同步，返回当前会话中大于 lastSeq 的消息
-        const messages = lastSeq > 0
+        const messages = incremental
             ? session.messages.filter((m) => (m.seq ?? 0) > lastSeq)
             : session.messages.slice(-100);
 
-        const deletedMessageIds = lastSeq > 0 && session.deletedMessages
+        const deletedMessageIds = incremental && session.deletedMessages
             ? session.deletedMessages.filter((d) => d.seq > lastSeq).map((d) => d.id)
             : undefined;
 

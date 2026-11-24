@@ -167,6 +167,9 @@ module.exports = {
         },
         android: {
             package: "com.lvtian",
+            ...(process.env.LVTIAN_GOOGLE_SERVICES_FILE && {
+                googleServicesFile: process.env.LVTIAN_GOOGLE_SERVICES_FILE,
+            }),
             versionCode: 24,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
@@ -194,6 +197,7 @@ module.exports = {
                     }
                 }
             ],
+            ...(process.env.LVTIAN_GOOGLE_SERVICES_FILE ? ["expo-notifications"] : []),
             "expo-font",
             "expo-asset",
             "expo-image",

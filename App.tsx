@@ -15,6 +15,7 @@ import { cloudService } from './src/services/CloudService';
 import { useShareStore } from './src/store/useShareStore';
 import { RootStackParamList } from './src/types/navigation';
 import { SHARE_RECEIVED_EVENT, flashNoteService } from './src/services/FlashNoteService';
+import { startChatBackgroundPush } from './src/services/chatBackgroundPush';
 import { FlashNoteInputModal } from './src/components/FlashNoteInputModal'; // Global Modal
 
 
@@ -22,6 +23,8 @@ import { FlashNoteInputModal } from './src/components/FlashNoteInputModal'; // G
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function App(props: { sharedText?: string }): React.JSX.Element | null {
+  useEffect(startChatBackgroundPush, []);
+
   // Global Modal State
   const [isGlobalModalVisible, setIsGlobalModalVisible] = React.useState(false);
   const [globalShareContent, setGlobalShareContent] = React.useState<string>('');
