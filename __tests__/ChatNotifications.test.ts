@@ -103,3 +103,12 @@ it('parses only bounded message IDs from the data-only push', () => {
     expect(pushedReplyIds('["reply",42,null,""]')).toEqual(['reply']);
     expect(pushedReplyIds('bad-json')).toEqual([]);
 });
+
+it('provides notification copy in both supported UI languages', () => {
+    const zh = i18n.getFixedT('zh');
+    const en = i18n.getFixedT('en');
+    expect(zh('chatNotifications.title')).toBe('绿天');
+    expect(zh('chatNotifications.newMessage')).toBe('你有一条新消息');
+    expect(en('chatNotifications.title')).toBe('Lvtian');
+    expect(en('chatNotifications.newMessage')).toBe('You have a new message');
+});

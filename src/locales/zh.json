@@ -7,13 +7,14 @@
     "files": "系统文件",
     "browser": "笔记",
     "settings": "设置",
-    "chatNotifications": {
+    "me": "我"
+  },
+  "chatNotifications": {
+    "settings": "通知",
     "title": "绿天",
     "enabled": "消息通知",
     "preview": "显示消息预览",
     "newMessage": "你有一条新消息"
-  },
-  "me": "我"
   },
   "me": {
     "avatar": {

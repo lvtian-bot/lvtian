@@ -7,7 +7,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import * as ImagePicker from 'expo-image-picker';
 
-import { chatNotificationsAvailable, setChatNotificationPermission } from '../services/chatNotifications';
+import { chatNotificationsAvailable } from '../services/chatNotifications';
 import { fsService } from '../services/FileSystemService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
@@ -23,15 +23,7 @@ export const MeScreen = () => {
     const { t } = useTranslation();
     const navigation = useNavigation<SettingsScreenNavigationProp>();
 
-    const { userAvatar, setUserAvatar, chatNotificationsEnabled, chatNotificationPreview,
-        setChatNotificationPreview } = useSettingsStore();
-    const [notificationBusy, setNotificationBusy] = useState(false);
-    const changeNotifications = async (enabled: boolean) => {
-        setNotificationBusy(true);
-        try { await setChatNotificationPermission(enabled); }
-        catch { /* System permission or settings can be unavailable. */ }
-        finally { setNotificationBusy(false); }
-    };
+    const { userAvatar, setUserAvatar } = useSettingsStore();
     const { serverUrl, connectionState } = useAssistantStore();
 
     const isConnected = connectionState === 'connected';
@@ -203,25 +195,6 @@ export const MeScreen = () => {
                     </SettingsGroup>
                 </View>
 
-                {chatNotificationsAvailable && (
-                    <View style={styles.cardWrapper}>
-                        <SettingsGroup>
-                            <SettingsRow
-                                title={t('chatNotifications.enabled')}
-                                icon="bell-outline"
-                                toggle={{ value: chatNotificationsEnabled, onChange: changeNotifications }}
-                                busy={notificationBusy}
-                            />
-                            <SettingsRow
-                                title={t('chatNotifications.preview')}
-                                icon="message-text-outline"
-                                toggle={{ value: chatNotificationPreview, onChange: setChatNotificationPreview }}
-                                last
-                            />
-                        </SettingsGroup>
-                    </View>
-                )}
-
                 {/* 卡片三：设置与关于 */}
                 <View style={styles.cardWrapper}>
                     <SettingsGroup>
@@ -235,6 +208,13 @@ export const MeScreen = () => {
                             icon="tune"
                             onPress={() => navigation.navigate('AppSettings')}
                         />
+                        {chatNotificationsAvailable && (
+                            <SettingsRow
+                                title={t('chatNotifications.settings')}
+                                icon="bell-outline"
+                                onPress={() => navigation.navigate('NotificationSettings')}
+                            />
+                        )}
                         <SettingsRow
                             title={t('about.title', '关于')}
                             icon="information-outline"

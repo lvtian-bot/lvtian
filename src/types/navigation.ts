@@ -29,6 +29,7 @@ export type RootStackParamList = {
     AssistantConfig: undefined; // 服务端连接配置页面
     AgentConfig: undefined; // AI 智能体配置页面
     Connectors: undefined;
+    NotificationSettings: undefined;
     AppSettings: undefined; // APP 设置页面（字体大小与 Markdown 样式）
     ServerFileList: { initialPath?: string } | undefined; // 系统文件（由「我」页进入）
     CloudFileList: { prefix?: string } | undefined; // 云盘文件（由「我」页进入）
