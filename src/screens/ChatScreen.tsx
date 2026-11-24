@@ -182,6 +182,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
         connectionError,
         isServerUpgrading,
         messages,
+        clearedSeq,
         taskState,
         pendingApprovals,
         pendingSendQueue,
@@ -355,7 +356,6 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
         setSelecting(undefined);
         setMenu({ id, x, y });
     }, []);
-    const menuMessage = menu && messages.find(m => m.id === menu.id);
     const pendingById = useMemo(() => new Map(pendingSendQueue.map(item => [item.messageId, item])), [pendingSendQueue]);
     useEffect(() => {
         if (!selecting) return;
@@ -381,14 +381,6 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
         updatePendingAttachments(previous?.attachments ?? []);
     };
 
-    const chooseMessageAction = (action: MessageAction) => {
-        setMenu(undefined);
-        if (!menuMessage) return;
-        if (action === 'copy') Clipboard.setStringAsync(menuMessage.content).catch(() => {});
-        else if (action === 'select') setSelecting(menuMessage.id);
-        else AssistantClient.getInstance().withdrawPending(menuMessage.id, action);
-    };
-
     const target = route?.params?.notificationTarget;
     const notificationTarget = target && serverUrl && serverToken && credentialsStatus === 'ready'
         && target.serverIdentity === chatServerIdentity(serverUrl, serverToken) ? target : undefined;
@@ -407,7 +399,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
 
     // Preserve the normal message order while displaying an older tapped reply.
     const extraReply = !targetInChat && notificationTarget && fetchedReply?.target === notificationTarget
-        ? fetchedReply.message : undefined;
+        && fetchedReply.message.seq > clearedSeq ? fetchedReply.message : undefined;
     const reversedMessages = useMemo(() => {
         const visible = messages.filter(m => !pendingById.get(m.id)?.withdrawal).reverse();
         if (extraReply) {
@@ -420,6 +412,15 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
     const displayMessages = useMemo(() => {
         return reversedMessages.slice(0, renderedCount);
     }, [reversedMessages, renderedCount]);
+
+    const menuMessage = menu && reversedMessages.find(message => message.id === menu.id);
+    const chooseMessageAction = (action: MessageAction) => {
+        setMenu(undefined);
+        if (!menuMessage) return;
+        if (action === 'copy') Clipboard.setStringAsync(menuMessage.content).catch(() => {});
+        else if (action === 'select') setSelecting(menuMessage.id);
+        else AssistantClient.getInstance().withdrawPending(menuMessage.id, action);
+    };
 
     const targetIndex = notificationTarget
         ? reversedMessages.findIndex(message => message.id === notificationTarget.messageId) : -1;
