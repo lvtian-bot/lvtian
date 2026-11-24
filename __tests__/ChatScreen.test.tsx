@@ -7,6 +7,7 @@ import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { AssistantClient } from '../src/services/AssistantClient';
 import i18n from '../src/i18n';
+import * as chatNotifications from '../src/services/chatNotifications';
 
 const mockSetOptions = jest.fn();
 const mockNavigate = jest.fn();
@@ -48,6 +49,44 @@ describe('ChatScreen 输入区与操作菜单', () => {
             currentRenderer = undefined;
         }
         jest.restoreAllMocks();
+    });
+
+    it('opens and copies the exact older reply when its notification is tapped', async () => {
+        const serverUrl = 'http://localhost:8080';
+        const serverToken = 'selected-server';
+        const target = { messageId: 'from-notification',
+            serverIdentity: chatNotifications.chatServerIdentity(serverUrl, serverToken) };
+        const older = { id: target.messageId, role: 'assistant', status: 'done',
+            content: 'The exact reply', seq: 1, timestamp: 1 } as const;
+        const recent = { ...older, id: 'more-recent', seq: 2, timestamp: 2 };
+        const getReply = jest.spyOn(chatNotifications, 'readNotificationReply').mockResolvedValue(older);
+        const scroll = jest.spyOn(FlatList.prototype, 'scrollToIndex').mockImplementation(() => {});
+        const copy = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ serverUrl, serverToken, credentialsStatus: 'ready', messages: [recent] });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen route={{
+                name: 'ChatScreen', key: 'main-chat', params: { notificationTarget: target },
+            }} />);
+        });
+        expect(getReply).toHaveBeenCalledWith(target, expect.anything());
+        expect(currentRenderer!.root.findByType(FlatList).props.data).toEqual([recent, older]);
+        await ReactTestRenderer.act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+        expect(scroll).toHaveBeenCalledWith({ index: 1, viewPosition: 0.5, animated: false });
+        const root = currentRenderer!.root;
+        const renderRow = () => root.findByType(FlatList).props.renderItem({ item: older, index: 1 });
+        let row!: ReactTestRenderer.ReactTestRenderer;
+        await ReactTestRenderer.act(async () => { row = ReactTestRenderer.create(renderRow()); });
+        const press = () => ReactTestRenderer.act(async () => row.root
+            .findAll(node => typeof node.props.onLongPress === 'function')[0]
+            .props.onLongPress({ nativeEvent: { pageX: 50, pageY: 75 } }));
+        await press();
+        await ReactTestRenderer.act(async () => root.findByType(ChatMessageMenu).props.choose('copy'));
+        expect(copy).toHaveBeenCalledWith(older.content);
+        await press();
+        await ReactTestRenderer.act(async () => root.findByType(ChatMessageMenu).props.choose('select'));
+        await ReactTestRenderer.act(async () => row.update(renderRow()));
+        expect(row.root.findAllByType(Text).some(node => node.props.selectable && node.props.children === older.content)).toBe(true);
+        await ReactTestRenderer.act(async () => row.unmount());
     });
 
     it('长按待发气泡可编辑，收件后菜单即时更新，整条复制与局部选择共享原文', async () => {

@@ -91,7 +91,12 @@ test('background chat sync uses the same cursor and authenticated result as WebS
     assert.equal(initial.replaceCache, true);
     assert.deepEqual(initial.messages, [previous]);
     server.publishAutonomousJobReply('main', { engineSessionId: 'session', turn: 2, text: 'result' });
-    assert.deepEqual(requests[0].data, { type: 'lvtian_chat_sync' });
+    assert.equal(requests[0].data.type, 'lvtian_chat_sync');
+    const [targetId] = JSON.parse(requests[0].data.messageIds);
+    assert.equal((await fetch(`${endpoint}/reply?id=${targetId}`)).status, 401);
+    const target = await (await fetch(`${endpoint}/reply?id=${targetId}`, { headers })).json();
+    assert.equal(target.content, 'result');
+    assert.equal((await fetch(`${endpoint}/reply?id=missing`, { headers })).status, 404);
     assert.deepEqual(requests[0].tokens, [deviceToken]);
     assert.equal(requests[0].android.priority, 'normal');
 

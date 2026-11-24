@@ -13,6 +13,10 @@ jest.mock('expo-task-manager', () => ({
     defineTask: jest.fn(),
     isTaskRegisteredAsync: jest.fn().mockResolvedValue(false),
 }));
+jest.mock('../src/services/chatNotifications', () => ({
+    pushedReplyIds: jest.fn(() => []),
+    notifyPushedChatReplies: jest.fn(),
+}));
 jest.mock('../src/services/AssistantClient', () => ({
     AssistantClient: { getInstance: jest.fn(), toHttpUrl: (url: string) => url },
 }));

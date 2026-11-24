@@ -7,6 +7,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import * as ImagePicker from 'expo-image-picker';
 
+import { chatNotificationsAvailable } from '../services/chatNotifications';
 import { fsService } from '../services/FileSystemService';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAssistantStore } from '../store/useAssistantStore';
@@ -207,6 +208,13 @@ export const MeScreen = () => {
                             icon="tune"
                             onPress={() => navigation.navigate('AppSettings')}
                         />
+                        {chatNotificationsAvailable && (
+                            <SettingsRow
+                                title={t('chatNotifications.settings')}
+                                icon="bell-outline"
+                                onPress={() => navigation.navigate('NotificationSettings')}
+                            />
+                        )}
                         <SettingsRow
                             title={t('about.title', '关于')}
                             icon="information-outline"

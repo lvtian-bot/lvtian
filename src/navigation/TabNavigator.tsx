@@ -42,12 +42,15 @@ const baseStackScreenOptions = {
     headerStyle: { backgroundColor: theme.colors.background },
 };
 
+const getMainChatId = () => 'main-chat';
+
 const ChatStackScreen = () => {
     const { t } = useTranslation();
     return (
         <ChatStack.Navigator screenOptions={baseStackScreenOptions}>
             <ChatStack.Screen
                 name="ChatScreen"
+                getId={getMainChatId}
                 component={ChatScreen}
                 options={({ navigation }) => ({
                     title: t('tabs.chat'),

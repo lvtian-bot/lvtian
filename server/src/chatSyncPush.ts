@@ -14,7 +14,7 @@ export function isChatPushToken(value: unknown): value is string {
 export class ChatSyncPush {
     private devices = new Map<string, number>();
     private delivering = false;
-    private pending = false;
+    private pending = new Set<string>();
     private readonly filename: string;
 
     constructor(dataDir: string, private readonly sender: Pick<Messaging, 'sendEachForMulticast'>) {
@@ -48,25 +48,34 @@ export class ChatSyncPush {
         this.save(devices);
     }
 
-    wakeDevices(): void {
-        this.pending = true;
+    wakeDevices(messageId: string): void {
+        this.pending.add(messageId);
         if (this.delivering) return;
         this.delivering = true;
-        void this.deliver().finally(() => {
+        void this.drain().finally(() => {
             this.delivering = false;
-            if (this.pending) this.wakeDevices();
+            const next = this.pending.values().next();
+            if (!next.done) this.wakeDevices(next.value);
         });
     }
 
-    private async deliver(): Promise<void> {
-        this.pending = false;
+    private async drain(): Promise<void> {
+        while (this.pending.size > 0) {
+            // Keep the FCM payload small even when several replies arrive during a send.
+            const messageIds = Array.from(this.pending).slice(0, 20);
+            for (const id of messageIds) this.pending.delete(id);
+            await this.deliver(messageIds);
+        }
+    }
+
+    private async deliver(messageIds: string[]): Promise<void> {
         const registrations = Array.from(this.devices).filter(([, at]) => at > Date.now() - DEVICE_TTL_MS);
         if (registrations.length === 0) return;
         try {
             const result = await this.sender.sendEachForMulticast({
                 tokens: registrations.map(([token]) => token),
-                data: { type: 'lvtian_chat_sync' },
-                android: { priority: 'normal', collapseKey: 'lvtian-chat-sync', ttl: 15 * 60 * 1000 },
+                data: { type: 'lvtian_chat_sync', messageIds: JSON.stringify(messageIds) },
+                android: { priority: 'normal', ttl: 15 * 60 * 1000 },
             });
             const devices = new Map(this.devices);
             result.responses.forEach(({ error }, index) => {

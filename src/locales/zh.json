@@ -9,6 +9,13 @@
     "settings": "设置",
     "me": "我"
   },
+  "chatNotifications": {
+    "settings": "通知",
+    "title": "绿天",
+    "enabled": "消息通知",
+    "preview": "显示消息预览",
+    "newMessage": "你有一条新消息"
+  },
   "me": {
     "avatar": {
       "title": "绿天助理形象",

@@ -1,6 +1,6 @@
 import 'react-native-get-random-values';
 import './src/i18n'; // Initialize i18next
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -13,8 +13,9 @@ import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
 
 import { useShareStore } from './src/store/useShareStore';
-import { RootStackParamList } from './src/types/navigation';
+import { ChatNotificationTarget, RootStackParamList } from './src/types/navigation';
 import { SHARE_RECEIVED_EVENT, flashNoteService } from './src/services/FlashNoteService';
+import { startChatNotifications } from './src/services/chatNotifications';
 import { startChatBackgroundPush } from './src/services/chatBackgroundPush';
 import { FlashNoteInputModal } from './src/components/FlashNoteInputModal'; // Global Modal
 
@@ -24,6 +25,20 @@ const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function App(props: { sharedText?: string }): React.JSX.Element | null {
   useEffect(startChatBackgroundPush, []);
+  const pendingReply = useRef<ChatNotificationTarget>(undefined);
+  const openPendingReply = useCallback(() => {
+    if (!navigationRef.isReady() || !pendingReply.current) return;
+    const notificationTarget = pendingReply.current;
+    pendingReply.current = undefined;
+    navigationRef.navigate('MainTabs', {
+      screen: 'Chat',
+      params: { screen: 'ChatScreen', params: { notificationTarget } },
+    }, { pop: true });
+  }, []);
+  useEffect(() => startChatNotifications(
+    () => navigationRef.getCurrentRoute()?.name === 'ChatScreen',
+    target => { pendingReply.current = target; openPendingReply(); },
+  ), [openPendingReply]);
 
   // Global Modal State
   const [isGlobalModalVisible, setIsGlobalModalVisible] = React.useState(false);
@@ -97,7 +112,7 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
         {/* edge-to-edge 下状态栏透明，底色由各页头部背景透出 */}
         <StatusBar barStyle="dark-content" />
         <SafeAreaProvider>
-          <NavigationContainer ref={navigationRef}>
+          <NavigationContainer ref={navigationRef} onReady={openPendingReply}>
             <AppNavigator />
           </NavigationContainer>
 

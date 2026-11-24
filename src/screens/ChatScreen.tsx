@@ -32,7 +32,7 @@ import {
     type KeyboardChatScrollViewProps,
 } from 'react-native-keyboard-controller';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, type RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -58,11 +58,12 @@ import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import { ChatMessageMenu, type MessageAction, type MessageMenuAnchor } from '../components/ChatMessageMenu';
 import { ChatBubbleText } from '../components/ChatBubbleText';
 import { formatChatDate, formatChatTime, isPlainChatText, startsChatDay } from '../utils/chatDate';
-import { RootStackParamList } from '../types/navigation';
+import { ChatStackParamList, RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics, auxFontSizes } from '../utils/fontSize';
 import i18n from '../i18n';
 import { connectionErrorKey } from '../utils/connectionErrorPresentation';
+import { chatServerIdentity, readNotificationReply } from '../services/chatNotifications';
 import { ConnectionConfigError } from '../services/connectionConfig';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -103,7 +104,7 @@ const ChatScrollView = forwardRef<
 });
 ChatScrollView.displayName = 'ChatScrollView';
 
-export const ChatScreen = () => {
+export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'ChatScreen'> } = {}) => {
     const { t, i18n: chatI18n } = useTranslation();
     const [dateNow, setDateNow] = useState(Date.now);
     useEffect(() => {
@@ -181,6 +182,7 @@ export const ChatScreen = () => {
         connectionError,
         isServerUpgrading,
         messages,
+        clearedSeq,
         taskState,
         pendingApprovals,
         pendingSendQueue,
@@ -354,7 +356,6 @@ export const ChatScreen = () => {
         setSelecting(undefined);
         setMenu({ id, x, y });
     }, []);
-    const menuMessage = menu && messages.find(m => m.id === menu.id);
     const pendingById = useMemo(() => new Map(pendingSendQueue.map(item => [item.messageId, item])), [pendingSendQueue]);
     useEffect(() => {
         if (!selecting) return;
@@ -380,6 +381,39 @@ export const ChatScreen = () => {
         updatePendingAttachments(previous?.attachments ?? []);
     };
 
+    const target = route?.params?.notificationTarget;
+    const notificationTarget = target && serverUrl && serverToken && credentialsStatus === 'ready'
+        && target.serverIdentity === chatServerIdentity(serverUrl, serverToken) ? target : undefined;
+    const targetInChat = messages.some(message => message.id === notificationTarget?.messageId);
+    const [fetchedReply, setFetchedReply] = useState<{ target: typeof target; message: AssistantMessage }>();
+    useEffect(() => {
+        if (!notificationTarget || targetInChat) return;
+        const controller = new AbortController();
+        readNotificationReply(notificationTarget, controller.signal).then(message => {
+            if (message && !controller.signal.aborted) {
+                setFetchedReply({ target: notificationTarget, message });
+            }
+        });
+        return () => controller.abort();
+    }, [notificationTarget, targetInChat, connectionState]);
+
+    // Preserve the normal message order while displaying an older tapped reply.
+    const extraReply = !targetInChat && notificationTarget && fetchedReply?.target === notificationTarget
+        && fetchedReply.message.seq > clearedSeq ? fetchedReply.message : undefined;
+    const reversedMessages = useMemo(() => {
+        const visible = messages.filter(m => !pendingById.get(m.id)?.withdrawal).reverse();
+        if (extraReply) {
+            const index = visible.findIndex(message => message.seq > 0 && message.timestamp < extraReply.timestamp);
+            visible.splice(index < 0 ? visible.length : index, 0, extraReply);
+        }
+        return visible;
+    }, [messages, pendingById, extraReply]);
+
+    const displayMessages = useMemo(() => {
+        return reversedMessages.slice(0, renderedCount);
+    }, [reversedMessages, renderedCount]);
+
+    const menuMessage = menu && reversedMessages.find(message => message.id === menu.id);
     const chooseMessageAction = (action: MessageAction) => {
         setMenu(undefined);
         if (!menuMessage) return;
@@ -388,17 +422,39 @@ export const ChatScreen = () => {
         else AssistantClient.getInstance().withdrawPending(menuMessage.id, action);
     };
 
-    // 倒序排列：第 0 项为最新消息（处于倒序视口最底部），数组末尾为最早历史消息
-    const reversedMessages = useMemo(() => {
-        return messages.filter(m => !pendingById.get(m.id)?.withdrawal).reverse();
-    }, [messages, pendingById]);
+    const targetIndex = notificationTarget
+        ? reversedMessages.findIndex(message => message.id === notificationTarget.messageId) : -1;
+    const openedTarget = useRef<typeof target>(undefined);
+    const retryTargetScroll = useRef<((info: { index: number; averageItemLength: number }) => void) | undefined>(undefined);
+    useEffect(() => {
+        if (!notificationTarget || targetIndex < 0 || openedTarget.current === notificationTarget) return;
+        if (targetIndex >= renderedCount) {
+            setRenderedCount(targetIndex + 1);
+            return;
+        }
+        let retries = 0;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const scroll = () => {
+            const list = flatListRef.current;
+            if (!list) return;
+            openedTarget.current = notificationTarget;
+            list.scrollToIndex({ index: targetIndex, viewPosition: 0.5, animated: false });
+        };
+        retryTargetScroll.current = ({ index, averageItemLength }) => {
+            if (index !== targetIndex || retries >= 4) return;
+            retries += 1;
+            flatListRef.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
+            clearTimeout(timer);
+            timer = setTimeout(scroll, 100);
+        };
+        const frame = requestAnimationFrame(scroll);
+        return () => {
+            cancelAnimationFrame(frame);
+            clearTimeout(timer);
+            retryTargetScroll.current = undefined;
+        };
+    }, [notificationTarget, targetIndex, renderedCount]);
 
-    // 视口开窗：冷启动与初始状态仅切片装载最新批次，绝不预加载全量历史
-    const displayMessages = useMemo(() => {
-        return reversedMessages.slice(0, renderedCount);
-    }, [reversedMessages, renderedCount]);
-
-    // 用户往上翻阅历史（触达倒序列表末尾）时，增量开窗加载更早记录
     const handleLoadEarlier = useCallback(() => {
         if (renderedCount < reversedMessages.length) {
             setRenderedCount((prev) => Math.min(prev + WINDOW_BATCH_SIZE, reversedMessages.length));
@@ -772,6 +828,7 @@ export const ChatScreen = () => {
                 }}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
+                onScrollToIndexFailed={info => retryTargetScroll.current?.(info)}
                 onEndReached={handleLoadEarlier}
                 onEndReachedThreshold={0.3}
                 initialNumToRender={15}

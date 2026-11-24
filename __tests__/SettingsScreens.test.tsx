@@ -7,6 +7,8 @@ import { SettingsRow, SettingsToast } from '../src/components/settings';
 import { AboutScreen } from '../src/screens/AboutScreen';
 import { MeScreen } from '../src/screens/MeScreen';
 import { AppSettingsScreen } from '../src/screens/AppSettingsScreen';
+import { NotificationSettingsScreen } from '../src/screens/NotificationSettingsScreen';
+import { setChatNotificationPermission } from '../src/services/chatNotifications';
 import { useSettingsStore } from '../src/store/useSettingsStore';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 
@@ -23,6 +25,11 @@ jest.mock('@react-navigation/native', () => {
         }),
     };
 });
+
+jest.mock('../src/services/chatNotifications', () => ({
+    chatNotificationsAvailable: true,
+    setChatNotificationPermission: jest.fn(),
+}));
 
 describe('MeScreen 与 AppSettingsScreen', () => {
     let currentRenderer: ReactTestRenderer.ReactTestRenderer | undefined;
@@ -73,6 +80,28 @@ describe('MeScreen 与 AppSettingsScreen', () => {
         // 验证缓存管理已被彻底移除
         expect(allTexts).not.toContain('本地缓存管理');
         expect(allTexts).not.toContain('缓存管理');
+    });
+
+    it('groups both notification preferences under one entry on the Me screen', async () => {
+        await ReactTestRenderer.act(async () => {
+            useSettingsStore.setState({ chatNotificationsEnabled: false, chatNotificationPreview: true });
+            currentRenderer = ReactTestRenderer.create(<MeScreen />);
+        });
+        const rows = currentRenderer!.root.findAllByType(SettingsRow);
+        const entry = rows.filter(row => row.props.title === '通知');
+        expect(entry).toHaveLength(1);
+        expect(rows.some(row => row.props.toggle)).toBe(false);
+        await ReactTestRenderer.act(async () => entry[0].props.onPress());
+        expect(mockNavigate).toHaveBeenCalledWith('NotificationSettings');
+
+        await ReactTestRenderer.act(async () => currentRenderer!.update(<NotificationSettingsScreen />));
+        const [enabled, preview] = currentRenderer!.root.findAllByType(SettingsRow);
+        expect([enabled.props.title, preview.props.title]).toEqual(['消息通知', '显示消息预览']);
+        expect([enabled.props.toggle.value, preview.props.toggle.value]).toEqual([false, true]);
+        await ReactTestRenderer.act(async () => enabled.props.toggle.onChange(true));
+        expect(setChatNotificationPermission).toHaveBeenCalledWith(true);
+        await ReactTestRenderer.act(async () => preview.props.toggle.onChange(false));
+        expect(useSettingsStore.getState().chatNotificationPreview).toBe(false);
     });
 
     it('MeScreen 不再显示日志导出入口，关于保持为卡片最后一行', async () => {

@@ -12,6 +12,7 @@ import { PermissionInfoScreen } from '../screens/PermissionInfoScreen';
 import { AssistantConfigScreen } from '../screens/AssistantConfigScreen';
 import { AgentConfigScreen } from '../screens/AgentConfigScreen';
 import { AppSettingsScreen } from '../screens/AppSettingsScreen';
+import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
 import { ConnectorsScreen } from '../screens/ConnectorsScreen';
 import { RootStackParamList } from '../types/navigation';
 import { useTranslation } from 'react-i18next';
@@ -52,6 +53,11 @@ export const AppNavigator = () => {
                     headerShown: true,
                     title: t('settings.appSettings', 'APP 设置')
                 }}
+            />
+            <Stack.Screen
+                name="NotificationSettings"
+                component={NotificationSettingsScreen}
+                options={{ title: t('chatNotifications.settings') }}
             />
             {/* 关于页面 */}
             <Stack.Screen

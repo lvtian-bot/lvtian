@@ -9,6 +9,13 @@
     "settings": "Settings",
     "me": "Me"
   },
+  "chatNotifications": {
+    "settings": "Notifications",
+    "title": "Lvtian",
+    "enabled": "Message notifications",
+    "preview": "Show message previews",
+    "newMessage": "You have a new message"
+  },
   "me": {
     "avatar": {
       "title": "Assistant Profile Picture",
