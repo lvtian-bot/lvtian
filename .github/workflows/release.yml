@@ -50,6 +50,36 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > keystore/simplejournal.keystore
           printf '%s' "$KEYSTORE_PROPERTIES" | tr -d '\r' > keystore/keystore.properties
 
+      - name: 还原 Android 推送配置
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.LVTIAN_GOOGLE_SERVICES_JSON }}
+        run: |
+          if [[ -z "$GOOGLE_SERVICES_JSON" ]]; then
+            if [[ "$GITHUB_REPOSITORY" == 'lvtian-bot/lvtian' ]]; then
+              echo '::error::缺少安卓推送配置 LVTIAN_GOOGLE_SERVICES_JSON'
+              exit 1
+            fi
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('node:fs');
+          const raw = process.env.GOOGLE_SERVICES_JSON;
+          try {
+            const config = JSON.parse(raw);
+            const client = config.client.find(entry =>
+              entry.client_info?.android_client_info?.package_name === 'com.lvtian');
+            if (config.private_key || !config.project_info?.project_id ||
+                !client?.client_info?.mobilesdk_app_id || !client.api_key?.some(entry => entry.current_key)) {
+              throw new Error();
+            }
+          } catch {
+            console.error('::error::安卓推送配置无效，请使用 com.lvtian 的 google-services.json');
+            process.exit(1);
+          }
+          fs.writeFileSync('google-services.json', raw, { mode: 0o600 });
+          NODE
+          echo 'LVTIAN_GOOGLE_SERVICES_FILE=./google-services.json' >> "$GITHUB_ENV"
+
       - name: 安装依赖与 eas-cli
         run: |
           npm install
