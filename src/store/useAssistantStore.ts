@@ -433,42 +433,45 @@ export const useAssistantStore = create<AssistantState>()(
                 const cacheableMessages = state.messages
                     .filter((m) => m.status === 'sent' || m.status === 'queued' || m.status === 'done'
                         || (m.status === 'error' && (m.seq ?? 0) > 0))
-                    .slice(-100)
-                    .map((m) => {
-                        if (!m.attachments || m.attachments.length === 0) {
-                            return m;
-                        }
-                        // 移除 base64 data 与超长 raw content，保留轻量元数据与本地文件路径 uri，
-                        // 既能在冷启动重启后按 uri 重新读取附件以支持重试，又避免将庞大 Base64 塞入 AsyncStorage 突破 2MB 限制
-                        const sanitizedAttachments = m.attachments.map((att) => ({
-                            type: att.type,
-                            name: att.name,
-                            mimeType: att.mimeType,
-                            size: att.size,
-                            uri: att.uri,
-                        }));
-                        return {
-                            ...m,
-                            attachments: sanitizedAttachments,
-                        };
-                    });
+                    .slice(-100);
+                const stripsImageData = cacheableMessages.some(m =>
+                    m.attachments?.some(attachment => attachment.type === 'image' && Boolean(attachment.data))
+                );
+                const sanitizedMessages = cacheableMessages.map((m) => {
+                    if (!m.attachments || m.attachments.length === 0) {
+                        return m;
+                    }
+                    // 移除 base64 data 与超长 raw content，保留轻量元数据与本地文件路径 uri，
+                    // 既能在冷启动重启后按 uri 重新读取附件以支持重试，又避免将庞大 Base64 塞入 AsyncStorage 突破 2MB 限制
+                    const sanitizedAttachments = m.attachments.map((att) => ({
+                        type: att.type,
+                        name: att.name,
+                        mimeType: att.mimeType,
+                        size: att.size,
+                        uri: att.uri,
+                    }));
+                    return {
+                        ...m,
+                        attachments: sanitizedAttachments,
+                    };
+                });
                 // Keep the newest complete messages within a conservative size
                 // budget, avoiding oversized Android AsyncStorage rows.
                 const persistedMessages: AssistantMessage[] = [];
                 let cacheCharacters = 0;
-                for (let i = cacheableMessages.length - 1; i >= 0; i -= 1) {
-                    const size = JSON.stringify(cacheableMessages[i]).length;
+                for (let i = sanitizedMessages.length - 1; i >= 0; i -= 1) {
+                    const size = JSON.stringify(sanitizedMessages[i]).length;
                     if (cacheCharacters + size > 128 * 1024) break;
                     cacheCharacters += size;
-                    persistedMessages.unshift(cacheableMessages[i]);
+                    persistedMessages.unshift(sanitizedMessages[i]);
                 }
                 return {
                     identity: outboxKey(state.serverUrl, state.serverToken),
                     messages: persistedMessages,
-                    // A delta cannot recover rows or image data omitted from the cache.
+                    // A sender's file URI may belong to another device. Fetch a
+                    // new snapshot whenever the disk cache drops image data.
                     chatSyncCursor: persistedMessages.length === cacheableMessages.length
-                        && !state.messages.slice(-100).some(m => m.status === 'processing'
-                            || m.attachments?.some(a => a.type === 'image' && a.data && !a.uri))
+                        && !stripsImageData && !state.messages.some(m => m.status === 'processing')
                         && state.clearedSeq === 0 ? state.chatSyncCursor : undefined,
                 };
             },

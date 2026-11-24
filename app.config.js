@@ -184,7 +184,6 @@ module.exports = {
             policy: "appVersion"
         },
         extra: {
-            chatBackgroundSync: Boolean(process.env.LVTIAN_GOOGLE_SERVICES_FILE),
             eas: {
                 projectId: "9b2d91e1-6f12-4695-8d6c-c2ee5b45d459"
             }

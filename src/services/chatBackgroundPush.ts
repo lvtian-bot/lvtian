@@ -1,20 +1,32 @@
-import Constants from 'expo-constants';
-import * as Notifications from 'expo-notifications';
-import * as TaskManager from 'expo-task-manager';
+import { requireOptionalNativeModule } from 'expo';
+import type { NotificationTaskPayload } from 'expo-notifications';
 import { AppState, Platform } from 'react-native';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { AssistantClient } from './AssistantClient';
 
 const TASK = 'lvtian-chat-background-sync';
-const ENABLED = Platform.OS === 'android' && Constants.expoConfig?.extra?.chatBackgroundSync === true;
+// The installed APK owns Firebase configuration across OTA updates. Load the
+// JS wrappers only when the corresponding native packages exist in that APK.
+function loadPushModules() {
+    if (Platform.OS !== 'android' || !requireOptionalNativeModule('ExpoPushTokenManager')
+        || !requireOptionalNativeModule('ExpoBackgroundNotificationTasksModule')
+        || !requireOptionalNativeModule('ExpoTaskManager')) return;
+    return {
+        notifications: require('expo-notifications') as typeof import('expo-notifications'),
+        taskManager: require('expo-task-manager') as typeof import('expo-task-manager'),
+    };
+}
 
-if (ENABLED) {
-    TaskManager.defineTask<Notifications.NotificationTaskPayload>(TASK, async ({ data, error }) => {
+const pushModules = loadPushModules();
+
+if (pushModules) {
+    const { notifications, taskManager } = pushModules;
+    taskManager.defineTask<NotificationTaskPayload>(TASK, async ({ data, error }) => {
         if (error || !data || !('data' in data) || data.data?.type !== 'lvtian_chat_sync') {
-            return Notifications.BackgroundNotificationTaskResult.NoData;
+            return notifications.BackgroundNotificationTaskResult.NoData;
         }
         const updated = await AssistantClient.getInstance().syncInBackground();
-        return updated ? Notifications.BackgroundNotificationTaskResult.NewData : Notifications.BackgroundNotificationTaskResult.NoData;
+        return updated ? notifications.BackgroundNotificationTaskResult.NewData : notifications.BackgroundNotificationTaskResult.NoData;
     });
 }
 
@@ -43,7 +55,8 @@ async function updateDevice(registration: Registration, remove = false): Promise
 }
 
 export function startChatBackgroundPush(): (() => void) | undefined {
-    if (!ENABLED) return;
+    if (!pushModules) return;
+    const { notifications, taskManager } = pushModules;
     let active = true;
     let registration: Registration | undefined;
     let registeredAt = 0;
@@ -63,9 +76,10 @@ export function startChatBackgroundPush(): (() => void) | undefined {
             }
             if (!serverUrl || !serverToken) return;
 
-            if (!await TaskManager.isTaskRegisteredAsync(TASK)) await Notifications.registerTaskAsync(TASK);
-            const deviceToken = token ?? (await Notifications.getDevicePushTokenAsync()).data;
+            const deviceToken = token ?? (await notifications.getDevicePushTokenAsync()).data;
             if (!active || typeof deviceToken !== 'string') return;
+            if (!await taskManager.isTaskRegisteredAsync(TASK)) await notifications.registerTaskAsync(TASK);
+            if (!active) return;
             const next = { url: serverUrl, auth: serverToken, token: deviceToken };
             if (await updateDevice(next)) {
                 registration = next;
@@ -81,7 +95,7 @@ export function startChatBackgroundPush(): (() => void) | undefined {
             || (state.connectionState === 'connected' && before.connectionState !== 'connected'))) refresh();
     });
     const appState = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
-    const tokenChanges = Notifications.addPushTokenListener(token => {
+    const tokenChanges = notifications.addPushTokenListener(token => {
         if (token.type === 'android' && typeof token.data === 'string') refresh(token.data);
     });
     refresh();

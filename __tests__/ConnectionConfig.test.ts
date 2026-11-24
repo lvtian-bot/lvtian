@@ -98,6 +98,27 @@ describe('independent credentials, disposable chat cache, and durable outbox', (
         expect(restarted.getState().messages.map(m => m.id)).toEqual([message.id]);
     });
 
+    it('requests a fresh snapshot after caching an image whose URI belongs to the sender', async () => {
+        const first = setup({ [CONFIG]: config });
+        const store = first.start();
+        await flush();
+        const image = { type: 'image' as const, name: 'other-phone.jpg',
+            uri: 'file:///data/user/0/com.lvtian/cache/other-phone.jpg', data: 'ZGF0YQ==' };
+        store.setState({
+            messages: [{ ...message, role: 'user', status: 'sent', attachments: [image] }],
+            chatSyncCursor: { epoch: 'server-epoch', seq: 9 },
+        });
+        await flush();
+        const saved = first.data.get(CACHE)!;
+        const { data: _data, ...metadata } = image;
+        expect(JSON.parse(saved).state.messages[0].attachments).toEqual([metadata]);
+        expect(JSON.parse(saved).state).not.toHaveProperty('chatSyncCursor');
+
+        const restarted = setup({ [CONFIG]: config, [CACHE]: saved }).start();
+        await flush();
+        expect(restarted.getState().chatSyncCursor).toBeUndefined();
+    });
+
     it('limits cached chat size and does not store connection or outbox fields', async () => {
         const { start, data } = setup({ [CONFIG]: config });
         const store = start();
