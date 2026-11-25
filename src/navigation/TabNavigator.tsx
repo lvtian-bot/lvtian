@@ -10,7 +10,6 @@ import { ChatScreen } from '../screens/ChatScreen';
 import { WorkRecordsScreen } from '../screens/WorkRecordsScreen';
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
-import { MomentsScreen } from '../screens/MomentsScreen';
 import { MeScreen } from '../screens/MeScreen';
 import { ChatStackParamList, MainTabParamList } from '../types/navigation';
 
@@ -20,7 +19,6 @@ import { TabBarHeightContext } from './TabBarHeightContext';
 const ChatStack = createNativeStackNavigator<ChatStackParamList>();
 const FlashStack = createNativeStackNavigator();
 const TodoStack = createNativeStackNavigator();
-const MomentsStack = createNativeStackNavigator();
 const MeStack = createNativeStackNavigator();
 
 const WorkRecordsHeaderButton: React.FC<{ label: string; onPress: () => void }> = ({ label, onPress }) => (
@@ -98,19 +96,6 @@ const TodoStackScreen = () => {
     );
 };
 
-const MomentsStackScreen = () => {
-    const { t } = useTranslation();
-    return (
-        <MomentsStack.Navigator screenOptions={baseStackScreenOptions}>
-            <MomentsStack.Screen
-                name="MomentsScreen"
-                component={MomentsScreen}
-                options={{ title: t('tabs.moments') }}
-            />
-        </MomentsStack.Navigator>
-    );
-};
-
 const MeStackScreen = () => {
     return (
         <MeStack.Navigator screenOptions={baseStackScreenOptions}>
@@ -135,10 +120,6 @@ const FlashIcon = ({ color }: { color: string }) => (
 
 const TodoIcon = ({ color }: { color: string }) => (
     <Icon name="task-alt" color={color} size={24} />
-);
-
-const MomentsIcon = ({ color }: { color: string }) => (
-    <Icon name="dynamic-feed" color={color} size={24} />
 );
 
 const MeIcon = ({ color }: { color: string }) => (
@@ -215,14 +196,6 @@ export const TabNavigator = () => {
                 options={{
                     title: t('tabs.todo'),
                     tabBarIcon: TodoIcon,
-                }}
-            />
-            <Tab.Screen
-                name="Moments"
-                component={MomentsStackScreen}
-                options={{
-                    title: t('tabs.moments'),
-                    tabBarIcon: MomentsIcon,
                 }}
             />
             <Tab.Screen

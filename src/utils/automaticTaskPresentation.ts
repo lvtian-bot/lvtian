@@ -28,6 +28,10 @@ export function taskZoneLabel(task: AutomaticTask, language: string): string {
     } catch { return timeZone ?? 'UTC'; }
 }
 
+function taskClock(time: string): string {
+    return time.replace(/^(\d{2}:\d{2}:\d{2})\.0+$/, '$1').replace(/^(\d{2}:\d{2}):00$/, '$1');
+}
+
 export function taskFrequency(task: AutomaticTask, t: TFunction): string {
     switch (task.kind) {
         case 'at': case 'after': return t('automaticTasks.ruleAt');
@@ -36,9 +40,9 @@ export function taskFrequency(task: AutomaticTask, t: TFunction): string {
             if (task.everySeconds % 60 === 0) return t('automaticTasks.ruleEveryMinutes', { count: task.everySeconds / 60 });
             return t('automaticTasks.ruleEvery', { seconds: task.everySeconds });
         }
-        case 'daily': return t('automaticTasks.ruleDaily', { time: task.time });
+        case 'daily': return t('automaticTasks.ruleDaily', { time: taskClock(task.time) });
         case 'weekly': return t('automaticTasks.ruleWeekly', {
-            time: task.time,
+            time: taskClock(task.time),
             days: [...task.weekdays].sort((a, b) => a - b).map(day => t(`automaticTasks.weekday${day}`)).join(t('automaticTasks.separator')),
         });
         case 'cron': return t('automaticTasks.ruleCustom');

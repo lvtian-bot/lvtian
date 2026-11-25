@@ -38,7 +38,7 @@ jest.mock('react-i18next', () => {
 });
 
 const task: AutomaticTask = { id: 'a', sessionId: 'session-a', title: '服务器任务', prompt: '真实执行指令',
-    status: 'active', kind: 'daily', time: '09:00', timeZone: 'Asia/Shanghai', scheduledAt: '2026-11-01T09:00:00+08:00' };
+    status: 'active', kind: 'daily', time: '09:00:00.000', timeZone: 'Asia/Shanghai', scheduledAt: '2026-11-01T09:00:00+08:00' };
 const delivery = { messageId: 'm1', scheduledAt: task.scheduledAt, deliveredAt: '2026-11-01T01:00:01Z' };
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -74,8 +74,8 @@ describe('TodoScreen 服务器只读自动任务', () => {
         await mount();
         expect(mockNavigation.setOptions).toHaveBeenCalledWith({ title: '任务' });
         expect(texts()).toContain('服务器任务');
-        expect(texts().some(text => text.startsWith('每天 09:00'))).toBe(true);
-        expect(texts().some(text => text.includes('中国标准时间'))).toBe(true);
+        expect(texts()).toContain('每天 09:00 · 中国标准时间');
+        expect(texts()).toContain('下次执行：2026年11月1日 09:00');
         expect(texts()).not.toContain(task.prompt);
         expect(texts()).not.toContain('已结束排程');
         expect(texts()).not.toContain('排程已结束（不代表执行完成）');

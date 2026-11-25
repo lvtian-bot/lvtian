@@ -1,4 +1,5 @@
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import Icon from '@expo/vector-icons/MaterialIcons';
 import { ActivityIndicator, AppState, FlatList, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as Network from 'expo-network';
@@ -26,6 +27,7 @@ export const TodoScreen = () => {
     const navigation = useNavigation();
     const metrics = getFontSizeMetrics(useSettingsStore(state => state.fontSize));
     const body = { fontSize: metrics.flashBody, lineHeight: metrics.flashLineHeight };
+    const metadata = { fontSize: metrics.flashBody - 2, lineHeight: metrics.flashLineHeight - 2 };
     const renderIdentity = useAssistantStore(state => JSON.stringify([state.serverUrl, state.serverToken, state.credentialsStatus]));
     const [tasks, setTasks] = useState<AutomaticTask[]>([]);
     const [viewIdentity, setViewIdentity] = useState(renderIdentity);
@@ -167,10 +169,17 @@ export const TodoScreen = () => {
                 accessibilityHint={t('automaticTasks.openDetail')} style={styles.row} onPress={() => { setSelectedId(item.id); }}>
                 <View style={styles.rowContent}>
                     <Text numberOfLines={2} style={[body, styles.title]}>{item.title}</Text>
-                    <Text style={[body, styles.secondary]}>{t('automaticTasks.frequencyWithZone', { frequency: taskFrequency(item, t), zone: taskZoneLabel(item, i18n.language) })}</Text>
-                    <Text style={[body, styles.secondary]}>{t('automaticTasks.nextRun', { time: taskDateTime(item.scheduledAt, i18n.language, taskTimeZone(item)) })}</Text>
+                    <Text style={[metadata, styles.secondary]}>
+                        {t('automaticTasks.frequencyWithZone', { frequency: taskFrequency(item, t), zone: taskZoneLabel(item, i18n.language) })}
+                    </Text>
+                    <View style={styles.nextRunRow}>
+                        <Icon accessible={false} name="schedule" size={16} color={theme.colors.primaryDark} />
+                        <Text style={[metadata, styles.nextRun]}>
+                            {t('automaticTasks.nextRun', { time: taskDateTime(item.scheduledAt, i18n.language, taskTimeZone(item)) })}
+                        </Text>
+                    </View>
                 </View>
-                <Text accessible={false} style={styles.chevron}>›</Text>
+                <Icon accessible={false} name="chevron-right" size={20} color={theme.colors.textTertiary} />
             </TouchableOpacity>} />
         <Modal visible={!!selected} animationType="slide" onRequestClose={closeDetail}>
             {selected && <AutomaticTaskDetail key={`${service.generation}:${selected.id}`} task={selected} onClose={closeDetail}
@@ -181,13 +190,14 @@ export const TodoScreen = () => {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: theme.colors.surface },
-    content: { paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.xl, flexGrow: 1 },
-    row: { flexDirection: 'row', alignItems: 'center', paddingVertical: theme.spacing.lg, minHeight: 88 },
+    content: { paddingHorizontal: theme.spacing.lg, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.xl, flexGrow: 1 },
+    row: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, paddingVertical: theme.spacing.md },
     rowContent: { flex: 1, minWidth: 0, gap: theme.spacing.xs },
     title: { color: theme.colors.text, fontWeight: '600' },
     secondary: { color: theme.colors.textSecondary },
-    chevron: { color: theme.colors.textSecondary, fontSize: 28, paddingLeft: theme.spacing.md },
-    separator: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.divider },
+    nextRunRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.xs },
+    nextRun: { flexShrink: 1, color: theme.colors.text, fontWeight: '500' },
+    separator: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.hairline },
     notice: { paddingTop: theme.spacing.md },
     action: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', paddingVertical: theme.spacing.sm },
     link: { color: theme.colors.primaryDark },
