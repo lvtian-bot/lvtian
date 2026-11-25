@@ -7,6 +7,16 @@ on:
     paths:
       - 'server/**'
   workflow_dispatch:
+    inputs:
+      deploy_sha:
+        description: "要部署的当前 main 完整提交 SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
   group: server-deploy
@@ -17,43 +27,18 @@ jobs:
     name: 部署至生产服务器
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      deploy_sha: ${{ steps.verify.outputs.deploy_sha }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
 
-      - name: 生产环境部署安全门禁（核验提交来源）
+      - name: 生产环境部署安全门禁（核验合并与检查）
+        id: verify
         env:
-          COMMITS_JSON: ${{ toJson(github.event.commits) }}
-          EVENT_NAME: ${{ github.event_name }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ "$ACTOR" != "lvtian-bot" ]; then
-              echo "❌ 拒绝非仓库拥有者手动触发生产部署！"
-              exit 1
-            fi
-            echo "✅ 手动触发部署通过身份核验 ($ACTOR)"
-            exit 0
-          fi
-
-          node -e '
-            const commits = JSON.parse(process.env.COMMITS_JSON || "[]");
-            const trustedEmails = ["xingzhisuozhi@gmail.com", "noreply@github.com"];
-            const trustedAuthors = ["lvtian-bot", "兴之所志"];
-            for (const c of commits) {
-              const email = (c.author && c.author.email) || "";
-              const name = (c.author && c.author.name) || "";
-              const isTrusted = trustedEmails.some(e => email.toLowerCase().includes(e.toLowerCase())) ||
-                                trustedAuthors.includes(name);
-              if (!isTrusted) {
-                console.error(`❌ 安全拦截：检测到非白名单作者的提交 [${name} <${email}>]！`);
-                console.error("出于对生产 VPS 服务器的安全防护，已自动终止自动部署。");
-                console.error("请人工审查代码后，在 Actions 页面手动触发 workflow_dispatch 部署。");
-                process.exit(1);
-              }
-            }
-            console.log(`✅ 提交安全核验通过，共核对 ${commits.length} 个提交，均来自白名单作者。`);
-          '
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ inputs.deploy_sha }}
+        run: node .github/scripts/verify-server-deploy.mjs
 
       - name: 配置 SSH 专用通道
         env:
@@ -69,13 +54,15 @@ jobs:
 
       - name: 远程拉取、构建并优雅重启
         env:
+          DEPLOY_SHA: ${{ steps.verify.outputs.deploy_sha }}
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_PORT: ${{ secrets.SERVER_PORT || '22' }}
           SERVER_USER: ${{ secrets.SERVER_USER || 'ubuntu' }}
         run: |
-          ssh -i ~/.ssh/id_rsa -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" 'bash -s' -- "$SERVER_USER" << 'EOF'
+          ssh -i ~/.ssh/id_rsa -p "$SERVER_PORT" -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" 'bash -s' -- "$SERVER_USER" "$DEPLOY_SHA" << 'EOF'
             set -euo pipefail
             SERVER_USER="${1:-ubuntu}"
+            DEPLOY_SHA="${2:?缺少已核验的部署提交 SHA}"
             if [ -d "/home/${SERVER_USER}/lvtian-server" ]; then
               DEPLOY_DIR="/home/${SERVER_USER}/lvtian-server"
             else
@@ -84,14 +71,18 @@ jobs:
             echo "=== 进入部署目录: ${DEPLOY_DIR} ==="
             cd "${DEPLOY_DIR}"
 
-            echo "=== 同步主分支代码 ==="
+            echo "=== 获取主分支并检出已核验提交 ${DEPLOY_SHA} ==="
+            PREVIOUS_SHA=$(git rev-parse HEAD)
             git fetch origin main
-            git reset --hard origin/main
+            git cat-file -e "${DEPLOY_SHA}^{commit}"
+            git merge-base --is-ancestor "${DEPLOY_SHA}" origin/main
+            git reset --hard "${DEPLOY_SHA}"
+            test "$(git rev-parse HEAD)" = "${DEPLOY_SHA}"
 
             echo "=== 构建服务端产物 ==="
             cd "${DEPLOY_DIR}/server"
             # 避免使用会整体清空已运行 node_modules 的 npm ci；优先判断依赖变动，必要时执行安全的增量安装
-            if [ -d "node_modules" ] && git diff --quiet HEAD@{1} HEAD -- package.json package-lock.json 2>/dev/null; then
+            if [ -d "node_modules" ] && git diff --quiet "${PREVIOUS_SHA}" "${DEPLOY_SHA}" -- package.json package-lock.json 2>/dev/null; then
               echo "依赖未变动，复用现有依赖加速构建"
             else
               echo "检测到依赖变动或首次构建，执行安全增量安装"
