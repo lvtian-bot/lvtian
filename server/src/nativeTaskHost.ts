@@ -22,7 +22,17 @@ export interface NativeTaskHostOptions {
     onUnexpectedExit?: () => void;
 }
 
-const managedOverlay = '- id: session-log-deepseek\n  disabled: true\n- id: session-telemetry-otel\n  disabled: true\n';
+const legacyManagedOverlay = '- id: session-log-deepseek\n  disabled: true\n- id: session-telemetry-otel\n  disabled: true\n';
+
+function managedOverlay(storageRoot: string, sessionsRoot: string): string {
+    return `- id: session-log-deepseek\n  disabled: true\n- id: session-telemetry-otel\n  disabled: true\n- id: storage-json\n  config:\n    root: ${JSON.stringify(storageRoot)}\n- id: session-persistence-jsonl\n  config:\n    root: ${JSON.stringify(sessionsRoot)}\n`;
+}
+
+async function replaceManagedOverlay(target: string, content: string): Promise<void> {
+    const temporary = `${target}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, content, { mode: 0o600 });
+    await fs.rename(temporary, target);
+}
 
 /** Owns only a native Harness process. It never computes a task's execution time. */
 export class NativeTaskHost {
@@ -46,14 +56,23 @@ export class NativeTaskHost {
         const root = path.resolve(this.options.root);
         const home = path.join(root, 'home');
         const agents = path.join(root, 'agents');
+        const workspaceData = path.join(path.resolve(this.options.workspace), '.lvtian', 'native-tasks');
+        const storageRoot = path.join(workspaceData, 'storages');
+        const sessionsRoot = path.join(workspaceData, 'sessions');
         await fs.mkdir(root, { recursive: true, mode: 0o700 });
         await fs.mkdir(agents, { recursive: true, mode: 0o700 });
         try {
             const overlay = path.join(root, 'managed-host.patch.yml');
-            try { await fs.writeFile(overlay, managedOverlay, { flag: 'wx', mode: 0o600 }); }
+            const overlayContent = managedOverlay(storageRoot, sessionsRoot);
+            try { await fs.writeFile(overlay, overlayContent, { flag: 'wx', mode: 0o600 }); }
             catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-                if (await fs.readFile(overlay, 'utf8') !== managedOverlay) throw new Error('native_host_overlay_conflict');
+                const existing = await fs.readFile(overlay, 'utf8');
+                if (existing === legacyManagedOverlay) {
+                    await replaceManagedOverlay(overlay, overlayContent);
+                } else if (existing !== overlayContent) {
+                    throw new Error('native_host_overlay_conflict');
+                }
             }
             const launcher = this.options.launcher ?? path.join(path.dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')), 'lib', 'bin.js');
             const runner = fileURLToPath(new URL('./nativeTaskHostRunner.js', import.meta.url));
@@ -68,7 +87,15 @@ export class NativeTaskHost {
                 DSH_HOME: home,
                 DSH_AGENTS_HOME: agents,
             };
-            const child = spawn(process.execPath, [runner, path.join(root, 'host-lease.sqlite'), launcher, '--profile', 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
+            const migration = JSON.stringify({
+                storageSource: path.join(home, 'storages'),
+                storageTarget: storageRoot,
+                storageState: path.join(root, 'storage-workspace-migration.json'),
+                sessionsSource: path.join(home, 'sessions'),
+                sessionsTarget: sessionsRoot,
+                sessionsState: path.join(root, 'sessions-workspace-migration.json'),
+            });
+            const child = spawn(process.execPath, [runner, path.join(root, 'host-lease.sqlite'), migration, launcher, '--profile', 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
                 cwd: this.options.workspace, env, stdio: ['pipe', 'pipe', 'pipe'],
             });
             this.child = child;
