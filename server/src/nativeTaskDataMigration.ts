@@ -49,6 +49,14 @@ async function assertMarker(directory: string, migrationId: string): Promise<voi
     }
 }
 
+async function ensureMarker(directory: string, migrationId: string): Promise<void> {
+    try { await fs.writeFile(markerPath(directory, migrationId), migrationId, { flag: 'wx', mode: 0o600 }); }
+    catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        await assertMarker(directory, migrationId);
+    }
+}
+
 async function writeState(stateFile: string, state: MigrationState): Promise<void> {
     const temporary = `${stateFile}.${process.pid}.tmp`;
     await fs.writeFile(temporary, `${JSON.stringify(state)}\n`, { mode: 0o600 });
@@ -91,6 +99,10 @@ export async function migrateNativeTaskDirectory(sourcePath: string, targetPath:
                 await fs.unlink(marker);
             }
             await fs.unlink(stateFile);
+        } else if (state?.phase === 'copying' && targetExists) {
+            await assertMarker(target, state.migrationId);
+            await fs.unlink(markerPath(target, state.migrationId));
+            await fs.unlink(stateFile);
         }
         else if (state) throw new Error('native_task_data_migration_state_conflict');
         if (!state && await exists(staging)) throw new Error('native_task_data_migration_staging_conflict');
@@ -109,18 +121,26 @@ export async function migrateNativeTaskDirectory(sourcePath: string, targetPath:
     }
     if (!state && await exists(staging)) throw new Error('native_task_data_migration_staging_conflict');
 
+    if (state?.phase === 'copying') await ensureMarker(source, state.migrationId);
     try {
         await fs.rename(source, target);
         if (state?.phase === 'copying') {
             await fs.rm(staging, { recursive: true, force: true });
+            await fs.unlink(markerPath(target, state.migrationId));
             await fs.unlink(stateFile);
         }
         return;
     } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+        if ((error as NodeJS.ErrnoException).code !== 'EXDEV') {
+            if (state?.phase === 'copying') await fs.unlink(markerPath(source, state.migrationId)).catch(() => undefined);
+            throw error;
+        }
     }
 
-    if (state?.phase === 'copying') await fs.rm(staging, { recursive: true, force: true });
+    if (state?.phase === 'copying') {
+        await fs.unlink(markerPath(source, state.migrationId));
+        await fs.rm(staging, { recursive: true, force: true });
+    }
     const migrationId = state?.migrationId ?? randomUUID();
     await writeState(stateFile, { version: 1, source, target, migrationId, phase: 'copying' });
     await fs.cp(source, staging, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });

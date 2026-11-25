@@ -137,3 +137,18 @@ test('upgrades the exact legacy managed overlay and moves native data into the w
     assert.match(await readFile(path.join(options.root, 'managed-host.patch.yml'), 'utf8'), /storage-json/);
   } finally { await host.stop(); }
 });
+
+test('does not charge migration time against the endpoint startup deadline', async () => {
+  const options = await fixture();
+  const runner = path.join(options.root, 'delayed-runner.mjs');
+  await writeFile(runner, `
+    process.stdout.write('http://127.0.0.1:34567/?token=test-private-token\\n');
+    setTimeout(() => {
+      process.stderr.write('LVTIAN_NATIVE_TASK_MIGRATION_COMPLETE\\n');
+    }, 100);
+    setInterval(() => {}, 1000);
+  `);
+  const host = new NativeTaskHost({ ...options, runner, migrationTimeoutMs: 1000, startupTimeoutMs: 50 });
+  try { assert.equal((await host.start()).token, 'test-private-token'); }
+  finally { await host.stop(); }
+});

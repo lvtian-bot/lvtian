@@ -22,6 +22,7 @@ let migration: NativeTaskDataMigrationPaths;
 try { migration = JSON.parse(migrationJson) as NativeTaskDataMigrationPaths; }
 catch { throw new Error('native_host_runner_migration_invalid'); }
 await migrateNativeTaskData(migration);
+process.stderr.write('LVTIAN_NATIVE_TASK_MIGRATION_COMPLETE\n');
 // Capture the database in a live listener so runtimes may not finalize the
 // lease if a synthetic launcher returns while other handles keep the host alive.
 process.stdin.once('end', () => {

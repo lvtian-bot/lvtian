@@ -84,3 +84,20 @@ test('does not delete the old root when an unrelated target lacks the commit mar
   assert.equal(await readFile(path.join(source, 'schedule.json'), 'utf8'), 'old');
   assert.equal(await readFile(path.join(target, 'schedule.json'), 'utf8'), 'unrelated');
 });
+
+test('finishes recovery after an atomic move committed before copying-state cleanup', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'lvtian-data-atomic-commit-'));
+  const source = path.join(root, 'private', 'sessions');
+  const target = path.join(root, 'workspace', 'sessions');
+  const state = path.join(root, 'private', 'migration.json');
+  const migrationId = '44444444-4444-4444-8444-444444444444';
+  await mkdir(target, { recursive: true });
+  await mkdir(path.dirname(state), { recursive: true });
+  await writeFile(path.join(target, 'session.jsonl'), 'complete');
+  await writeFile(path.join(target, `.lvtian-native-task-migration-${migrationId}`), migrationId);
+  await writeFile(state, `${JSON.stringify({ version: 1, source, target, migrationId, phase: 'copying' })}\n`);
+  await migrateNativeTaskDirectory(source, target, state);
+  assert.equal(await readFile(path.join(target, 'session.jsonl'), 'utf8'), 'complete');
+  await assert.rejects(access(path.join(target, `.lvtian-native-task-migration-${migrationId}`)));
+  await assert.rejects(access(state));
+});
