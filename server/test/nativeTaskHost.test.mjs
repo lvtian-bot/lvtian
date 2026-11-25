@@ -152,3 +152,33 @@ test('does not charge migration time against the endpoint startup deadline', asy
   try { assert.equal((await host.start()).token, 'test-private-token'); }
   finally { await host.stop(); }
 });
+
+test('restarts through the host after cleaning an interrupted committed migration', async () => {
+  const options = await fixture();
+  const taskRoot = path.join(options.workspace, '.lvtian', 'native-tasks');
+  const target = path.join(taskRoot, 'sessions');
+  const staging = `${target}.migration`;
+  const state = path.join(options.root, 'sessions-workspace-migration.json');
+  const migrationId = '77777777-7777-4777-8777-777777777777';
+  await mkdir(target, { recursive: true });
+  await mkdir(staging, { recursive: true });
+  await writeFile(path.join(target, 'session.jsonl'), 'complete');
+  await writeFile(path.join(staging, 'session.jsonl'), 'partial');
+  await writeFile(path.join(target, `.lvtian-native-task-migration-${migrationId}`), migrationId);
+  await writeFile(state, `${JSON.stringify({
+    version: 1,
+    source: path.join(options.root, 'home', 'sessions'),
+    target,
+    migrationId,
+    phase: 'copying',
+  })}\n`);
+  const host = new NativeTaskHost(options);
+  try {
+    await host.start();
+    await host.stop();
+    await host.start();
+    assert.equal(await readFile(path.join(target, 'session.jsonl'), 'utf8'), 'complete');
+    await assert.rejects(access(staging));
+    await assert.rejects(access(state));
+  } finally { await host.stop(); }
+});

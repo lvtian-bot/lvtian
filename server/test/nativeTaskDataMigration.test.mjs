@@ -89,15 +89,55 @@ test('finishes recovery after an atomic move committed before copying-state clea
   const root = await mkdtemp(path.join(os.tmpdir(), 'lvtian-data-atomic-commit-'));
   const source = path.join(root, 'private', 'sessions');
   const target = path.join(root, 'workspace', 'sessions');
+  const staging = `${target}.migration`;
   const state = path.join(root, 'private', 'migration.json');
   const migrationId = '44444444-4444-4444-8444-444444444444';
   await mkdir(target, { recursive: true });
+  await mkdir(staging, { recursive: true });
   await mkdir(path.dirname(state), { recursive: true });
   await writeFile(path.join(target, 'session.jsonl'), 'complete');
+  await writeFile(path.join(staging, 'session.jsonl'), 'partial');
   await writeFile(path.join(target, `.lvtian-native-task-migration-${migrationId}`), migrationId);
   await writeFile(state, `${JSON.stringify({ version: 1, source, target, migrationId, phase: 'copying' })}\n`);
   await migrateNativeTaskDirectory(source, target, state);
+  await migrateNativeTaskDirectory(source, target, state);
   assert.equal(await readFile(path.join(target, 'session.jsonl'), 'utf8'), 'complete');
+  await assert.rejects(access(staging));
   await assert.rejects(access(path.join(target, `.lvtian-native-task-migration-${migrationId}`)));
   await assert.rejects(access(state));
+});
+
+test('finishes copying cleanup interrupted between marker and state deletion', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'lvtian-data-cleanup-retry-'));
+  const source = path.join(root, 'private', 'sessions');
+  const target = path.join(root, 'workspace', 'sessions');
+  const state = path.join(root, 'private', 'migration.json');
+  const migrationId = '55555555-5555-4555-8555-555555555555';
+  await mkdir(target, { recursive: true });
+  await mkdir(path.dirname(state), { recursive: true });
+  await writeFile(path.join(target, 'session.jsonl'), 'complete');
+  await writeFile(state, `${JSON.stringify({ version: 1, source, target, migrationId, phase: 'copying' })}\n`);
+  await migrateNativeTaskDirectory(source, target, state);
+  await migrateNativeTaskDirectory(source, target, state);
+  assert.equal(await readFile(path.join(target, 'session.jsonl'), 'utf8'), 'complete');
+  await assert.rejects(access(state));
+});
+
+test('rejects an unmarked copying target while partial staging still exists', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'lvtian-data-copying-untrusted-'));
+  const source = path.join(root, 'private', 'sessions');
+  const target = path.join(root, 'workspace', 'sessions');
+  const staging = `${target}.migration`;
+  const state = path.join(root, 'private', 'migration.json');
+  const migrationId = '66666666-6666-4666-8666-666666666666';
+  await mkdir(target, { recursive: true });
+  await mkdir(staging, { recursive: true });
+  await mkdir(path.dirname(state), { recursive: true });
+  await writeFile(path.join(target, 'session.jsonl'), 'unrelated');
+  await writeFile(path.join(staging, 'session.jsonl'), 'partial');
+  await writeFile(state, `${JSON.stringify({ version: 1, source, target, migrationId, phase: 'copying' })}\n`);
+  await assert.rejects(migrateNativeTaskDirectory(source, target, state), /native_task_data_migration_marker_missing/);
+  assert.equal(await readFile(path.join(target, 'session.jsonl'), 'utf8'), 'unrelated');
+  await access(staging);
+  await access(state);
 });

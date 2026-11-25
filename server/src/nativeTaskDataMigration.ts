@@ -57,6 +57,24 @@ async function ensureMarker(directory: string, migrationId: string): Promise<voi
     }
 }
 
+async function finishCommittedCopying(target: string, staging: string, stateFile: string, migrationId: string): Promise<void> {
+    const marker = markerPath(target, migrationId);
+    const markerExists = await exists(marker);
+    if (markerExists) {
+        await assertMarker(target, migrationId);
+    } else if (await exists(staging)) {
+        // A copying target without its commit marker is not trusted while the
+        // partial staging tree still shows that cleanup never started.
+        throw new Error('native_task_data_migration_marker_missing');
+    }
+    await fs.rm(staging, { recursive: true, force: true });
+    if (markerExists) await fs.unlink(marker);
+    // Keep state until every other managed artifact is gone. If the process
+    // stopped after marker deletion, the absent staging tree is the cleanup
+    // witness that makes this final unlink safe to retry.
+    await fs.unlink(stateFile);
+}
+
 async function writeState(stateFile: string, state: MigrationState): Promise<void> {
     const temporary = `${stateFile}.${process.pid}.tmp`;
     await fs.writeFile(temporary, `${JSON.stringify(state)}\n`, { mode: 0o600 });
@@ -100,9 +118,7 @@ export async function migrateNativeTaskDirectory(sourcePath: string, targetPath:
             }
             await fs.unlink(stateFile);
         } else if (state?.phase === 'copying' && targetExists) {
-            await assertMarker(target, state.migrationId);
-            await fs.unlink(markerPath(target, state.migrationId));
-            await fs.unlink(stateFile);
+            await finishCommittedCopying(target, staging, stateFile, state.migrationId);
         }
         else if (state) throw new Error('native_task_data_migration_state_conflict');
         if (!state && await exists(staging)) throw new Error('native_task_data_migration_staging_conflict');
@@ -125,9 +141,7 @@ export async function migrateNativeTaskDirectory(sourcePath: string, targetPath:
     try {
         await fs.rename(source, target);
         if (state?.phase === 'copying') {
-            await fs.rm(staging, { recursive: true, force: true });
-            await fs.unlink(markerPath(target, state.migrationId));
-            await fs.unlink(stateFile);
+            await finishCommittedCopying(target, staging, stateFile, state.migrationId);
         }
         return;
     } catch (error) {
