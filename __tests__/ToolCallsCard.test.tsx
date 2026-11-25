@@ -1,3 +1,4 @@
+import { AssistantClient } from '../src/services/AssistantClient';
 import React from 'react';
 import { Text, TouchableOpacity } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
@@ -87,6 +88,22 @@ describe('ToolCallsCard', () => {
         expect(texts()).toContain(command.output);
         expect(buttons()[1].props.accessibilityLabel).toMatch(/失败|Failed/);
         expect(buttons()[0].props.accessibilityLabel).toMatch(/已完成|Completed/);
+    });
+
+    it('loads remote tool fields only after disclosure and keeps the resolved fields across a collapse', async () => {
+        const fetchDetail = jest.spyOn(AssistantClient.getInstance(), 'loadToolDetail')
+            .mockResolvedValue({ input: command.input, output: command.output });
+        const compact: ToolCallState = { id: command.id, name: command.name, status: 'done', summary: command.summary };
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(<ToolCallsCard toolCalls={[{ ...compact, detailMessageId: 'reply' }]} />);
+        });
+        expect(fetchDetail).not.toHaveBeenCalled();
+        await ReactTestRenderer.act(async () => buttons()[0].props.onPress());
+        expect(fetchDetail).toHaveBeenCalledWith('reply', command.id);
+        expect(texts()).toContain(command.output);
+        await ReactTestRenderer.act(async () => buttons()[0].props.onPress());
+        await ReactTestRenderer.act(async () => buttons()[0].props.onPress());
+        expect(fetchDetail).toHaveBeenCalledTimes(1);
     });
 
     it('renders empty tool lists safely', async () => {

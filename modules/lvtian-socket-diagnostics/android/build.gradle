@@ -1,0 +1,15 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.lvtian'
+version = '0.1.0'
+
+android {
+  namespace 'com.lvtian.socketdiagnostics'
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+}

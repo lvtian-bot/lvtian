@@ -17,6 +17,12 @@ export interface ConnectionEventDetails {
     retryDelayMs?: number;
     messageCount?: number;
     payloadChars?: number;
+    connectionTrace?: string;
+    hasCursor?: boolean;
+    snapshot?: boolean;
+    nativeObserved?: boolean;
+    nativeSyncAtMs?: number;
+    nativeSyncChars?: number;
 }
 
 interface ConnectionEvent extends ConnectionEventDetails {

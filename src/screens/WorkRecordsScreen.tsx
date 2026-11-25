@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatMarkdownBubble } from '../components/ChatMarkdownBubble';
 import { ToolCallsCard } from '../components/ToolCallsCard';
+import { AssistantClient } from '../services/AssistantClient';
 import { useAssistantStore } from '../store/useAssistantStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { buildChatTurns, groupTurnsByDay, type ChatTurn } from '../utils/chatTurns';
@@ -169,6 +170,7 @@ export const WorkRecordsScreen: React.FC = () => {
             <SectionList
                 sections={sections}
                 keyExtractor={(item) => item.id}
+                onEndReached={() => { AssistantClient.getInstance().loadEarlierChat(); }}
                 renderItem={renderRow}
                 renderSectionHeader={({ section }) => (
                     <Text style={styles.sectionTitle}>

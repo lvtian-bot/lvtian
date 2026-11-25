@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
+import { AssistantClient } from '../services/AssistantClient';
 import { ToolCallState } from '../types/assistantProtocol';
 import { theme } from '../utils/theme';
 
@@ -84,6 +85,20 @@ export function formatToolSummaryLocalized(
 function ToolCallCard({ tool }: { tool: ToolCallState }) {
     const { t } = useTranslation();
     const [expanded, setExpanded] = useState(false);
+    const [detail, setDetail] = useState<{ source: string; status: ToolCallState['status']; fields?: Pick<ToolCallState, 'input' | 'output'> }>();
+    const source = tool.detailMessageId;
+    const result = detail?.source === source && detail?.status === tool.status ? detail : undefined;
+    useEffect(() => {
+        if (!expanded || !source || result) return;
+        let active = true;
+        AssistantClient.getInstance().loadToolDetail(source, tool.id).then(fields => {
+            if (active) setDetail({ source, status: tool.status, fields });
+        });
+        return () => { active = false; };
+    }, [expanded, source, tool.id, tool.status, result]);
+    const input = tool.input ?? result?.fields?.input;
+    const output = tool.output ?? result?.fields?.output;
+
     const statusLabel = tool.status === 'running'
         ? t('assistant.runningAction')
         : tool.status === 'failed'
@@ -99,7 +114,10 @@ function ToolCallCard({ tool }: { tool: ToolCallState }) {
                 accessibilityRole="button"
                 accessibilityState={{ expanded }}
                 accessibilityLabel={`${formatToolSummaryLocalized(tool, t)} · ${statusLabel}`}
-                onPress={() => setExpanded((value) => !value)}
+                onPress={() => {
+                    if (!expanded && result && (!result.fields || tool.status === 'running')) setDetail(undefined);
+                    setExpanded(value => !value);
+                }}
             >
                 <View style={styles.toolCardHeaderLeft}>
                     <Text style={styles.toolCardHeaderTitle} numberOfLines={2} ellipsizeMode="tail">{formatToolSummaryLocalized(tool, t)}</Text>
@@ -123,16 +141,22 @@ function ToolCallCard({ tool }: { tool: ToolCallState }) {
                             <Text style={styles.toolCommandText} selectable>{tool.summary}</Text>
                         </View>
                     )}
-                    {tool.input !== undefined && (
+                    {source && !result && <ActivityIndicator size="small" />}
+                    {source && result && !result.fields && (
+                        <TouchableOpacity accessibilityRole="button" onPress={() => setDetail(undefined)}>
+                            <Text style={styles.toolItemName}>{t('common.retry', '重试')}</Text>
+                        </TouchableOpacity>
+                    )}
+                    {input !== undefined && (
                         <View style={styles.toolCommandBox}>
                             <Text style={styles.toolItemName}>{t('assistant.toolDetailInput')}</Text>
-                            <Text style={styles.toolCommandText} selectable>{JSON.stringify(tool.input, null, 2)}</Text>
+                            <Text style={styles.toolCommandText} selectable>{JSON.stringify(input, null, 2)}</Text>
                         </View>
                     )}
-                    {tool.output !== undefined && (
+                    {output !== undefined && (
                         <View style={styles.toolOutputBox}>
                             <Text style={styles.toolItemName}>{t('assistant.toolDetailOutput')}</Text>
-                            <Text style={styles.toolOutputText} selectable>{tool.output}</Text>
+                            <Text style={styles.toolOutputText} selectable>{output}</Text>
                         </View>
                     )}
                 </View>
