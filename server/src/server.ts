@@ -1,3 +1,4 @@
+import { CHAT_PAGE_BYTES, chatHistoryPage, compactChatMessage, compactChatTool } from './chatHistory.js';
 import http from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AutonomousJobReply } from './autonomousJobReplyBridge.js';
@@ -64,7 +65,8 @@ const DEFAULT_MODEL_OPTION: DshModelSelection = MODEL_OPTIONS[MODEL_OPTIONS.leng
 interface AuthenticatedSocket extends WebSocket {
     connectionId?: number;
     loggedAuthFailure?: boolean;
-    loggedSync?: boolean;
+    connectionTrace?: string;
+    compactHistory?: boolean;
     isAuthenticated?: boolean;
     isAlive?: boolean;
     sessionId?: string;
@@ -83,7 +85,7 @@ export class LvtianServer {
             id, role: 'assistant', source: 'autonomous_job_reply', content: reply.text, status: 'done', timestamp, completedAt: timestamp,
         });
         this.sessionManager.persistDurableMessage(sessionId, id);
-        this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
+        this.broadcastRecentMessage(sessionId, id);
         if (sessionId === 'main') this.chatSyncPush?.wakeDevices(id);
     }
     private sessionManager: SessionManager;
@@ -206,17 +208,24 @@ export class LvtianServer {
         res.end(JSON.stringify({ error: message, code: 'UNKNOWN_ERROR' }));
     }
 
-    private chatSync(sessionId: string, clearedSeq: number, cursor?: ChatSyncCursor): Extract<ServerMessage, { type: 'sync_result' }> {
-        const { currentSeq } = this.sessionManager.getOrCreateSession(sessionId);
+    private chatSync(
+        sessionId: string, clearedSeq: number, cursor?: ChatSyncCursor, compact = false,
+    ): Extract<ServerMessage, { type: 'sync_result' }> {
+        const { currentSeq, messages } = this.sessionManager.getOrCreateSession(sessionId);
         const canResume = cursor?.epoch === this.chatSyncEpoch
             && Number.isSafeInteger(cursor.seq) && cursor.seq >= 0 && cursor.seq <= currentSeq;
         const boundary = Number.isSafeInteger(clearedSeq) && clearedSeq > 0 && clearedSeq <= currentSeq ? clearedSeq : 0;
         const lastSeq = canResume ? Math.max(boundary, cursor.seq) : boundary;
+        const reconcile = this.sessionManager.getReconcileData(sessionId, lastSeq, canResume || boundary > 0);
+        const changes = compact && canResume ? reconcile.messages.map(compactChatMessage) : reconcile.messages;
+        const history = compact && (!canResume || Buffer.byteLength(JSON.stringify(changes)) > CHAT_PAGE_BYTES)
+            ? chatHistoryPage(messages, boundary) : undefined;
         return {
-            type: 'sync_result', sessionId,
-            ...this.sessionManager.getReconcileData(sessionId, lastSeq, canResume || boundary > 0),
+            type: 'sync_result', sessionId, ...reconcile,
+            ...(history && { historyBefore: history.historyBefore }),
+            messages: history?.messages ?? changes,
             syncEpoch: this.chatSyncEpoch,
-            replaceCache: !canResume && boundary === 0,
+            replaceCache: Boolean(history) || (!canResume && boundary === 0),
         };
     }
 
@@ -285,9 +294,41 @@ export class LvtianServer {
             const epoch = urlObj.searchParams.get('epoch');
             const seq = Number(urlObj.searchParams.get('seq') ?? Number.NaN);
             const clearedSeq = Number(urlObj.searchParams.get('clearedSeq') ?? 0);
-            const snapshot = this.chatSync('main', clearedSeq, epoch ? { epoch, seq } : undefined);
+            const compact = urlObj.searchParams.get('historyVersion') === '1';
+            const hasWindow = !compact || urlObj.searchParams.get('hasHistoryWindow') === '1';
+            const snapshot = this.chatSync('main', clearedSeq, epoch && hasWindow ? { epoch, seq } : undefined, compact);
             res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
             res.end(JSON.stringify(snapshot));
+            return;
+        }
+
+        if (pathname === '/api/chat/history' && req.method === 'GET') {
+            const id = urlObj.searchParams.get('beforeId');
+            const rawTime = urlObj.searchParams.get('beforeTime');
+            const timestamp = Number(rawTime);
+            const clearedSeq = Number(urlObj.searchParams.get('clearedSeq') ?? 0);
+            if (!id || !rawTime || !Number.isSafeInteger(timestamp) || !Number.isSafeInteger(clearedSeq) || clearedSeq < 0) {
+                res.writeHead(400).end();
+                return;
+            }
+            const { messages } = this.sessionManager.getOrCreateSession('main');
+            const page = chatHistoryPage(messages, clearedSeq, { id, timestamp });
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify(page));
+            return;
+        }
+
+        if (pathname === '/api/chat/tool-detail' && req.method === 'GET') {
+            const messageId = urlObj.searchParams.get('messageId');
+            const toolId = urlObj.searchParams.get('toolId');
+            const tool = this.sessionManager.getOrCreateSession('main').messages
+                .find(message => message.id === messageId)?.toolCalls?.find(call => call.id === toolId);
+            if (!tool) {
+                res.writeHead(404).end();
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify({ input: tool.input, output: tool.output }));
             return;
         }
 
@@ -618,8 +659,9 @@ export class LvtianServer {
 
         this.wss.on('connection', (ws: AuthenticatedSocket) => {
             ws.connectionId = ++this.nextConnectionId;
+            ws.connectionTrace = randomUUID();
             const openedAt = Date.now();
-            console.info('[Server:connection]', ws.connectionId, 'open');
+            console.info('[Server:connection]', ws.connectionId, 'open', { trace: ws.connectionTrace });
             ws.isAlive = true;
             ws.isAuthenticated = false;
             ws.sessionId = 'main';
@@ -645,7 +687,7 @@ export class LvtianServer {
             });
 
             ws.on('close', (code) => {
-                console.info('[Server:connection]', ws.connectionId, 'close', { code, elapsedMs: Date.now() - openedAt });
+                console.info('[Server:connection]', ws.connectionId, 'close', { trace: ws.connectionTrace, code, elapsedMs: Date.now() - openedAt });
             });
         });
 
@@ -654,7 +696,7 @@ export class LvtianServer {
             this.wss.clients.forEach((client: WebSocket) => {
                 const ws = client as AuthenticatedSocket;
                 if (!ws.isAlive) {
-                    console.info('[Server:connection]', ws.connectionId, 'heartbeat_timeout');
+                    console.info('[Server:connection]', ws.connectionId, 'heartbeat_timeout', { trace: ws.connectionTrace });
                     return ws.terminate();
                 }
                 ws.isAlive = false;
@@ -670,7 +712,7 @@ export class LvtianServer {
         if (!ws.isAuthenticated && !ws.loggedAuthFailure &&
             (msg.type !== 'auth' || msg.token !== this.config.token)) {
             ws.loggedAuthFailure = true;
-            console.info('[Server:connection]', ws.connectionId, 'authentication_failed');
+            console.info('[Server:connection]', ws.connectionId, 'authentication_failed', { trace: ws.connectionTrace });
         }
 
         // 未认证拦截
@@ -686,11 +728,12 @@ export class LvtianServer {
         switch (msg.type) {
             case 'auth': {
                 if (msg.token === this.config.token) {
-                    if (!ws.isAuthenticated) console.info('[Server:connection]', ws.connectionId, 'authenticated');
+                    if (!ws.isAuthenticated) console.info('[Server:connection]', ws.connectionId, 'authenticated', { trace: ws.connectionTrace });
                     ws.isAuthenticated = true;
                     this.send(ws, {
                         type: 'auth_result',
                         success: true,
+                        connectionTrace: ws.connectionTrace,
                         serverInfo: {
                             version: '0.1.0',
                             workspace: this.config.workspace,
@@ -721,7 +764,12 @@ export class LvtianServer {
                 const sessionId = rawSessionId;
                 ws.sessionId = sessionId;
                 if (this.sessionManager.getOrCreateSession(sessionId).messages.some(m => m.status === 'queued')) this.scheduleProcessQueue(sessionId);
-                this.send(ws, this.chatSync(sessionId, msg.lastSeq, msg.cursor));
+                ws.compactHistory = msg.historyVersion === 1;
+                console.info('[Server:connection]', ws.connectionId, 'sync_requested', {
+                    trace: ws.connectionTrace, compact: ws.compactHistory, hasCursor: Boolean(msg.cursor),
+                });
+                const cursor = !ws.compactHistory || msg.hasHistoryWindow === true ? msg.cursor : undefined;
+                this.send(ws, this.chatSync(sessionId, msg.lastSeq, cursor, ws.compactHistory));
                 break;
             }
 
@@ -1288,8 +1336,7 @@ export class LvtianServer {
             this.appendPendingReport(sessionId, `[后台任务报告 ${report.id}]`, existing?.content ?? report.reply!);
             this.sessionManager.persistDurableMessage(sessionId, messageId);
             store.delivered(report.id);
-            // Full state reconciles both currently-online and reconnecting clients. No internal input is exposed.
-            this.broadcastSession(sessionId, { type: 'sync_result', sessionId, ...this.sessionManager.getReconcileData(sessionId, 0) });
+            this.broadcastRecentMessage(sessionId, messageId);
             this.chatSyncPush?.wakeDevices(messageId);
             this.scheduleProcessQueue(sessionId);
             return true;
@@ -1339,33 +1386,60 @@ export class LvtianServer {
     }
 
     private send(ws: AuthenticatedSocket, msg: ServerMessage): void {
-        if (ws.readyState === WS.OPEN) {
-            try {
-                const payload = JSON.stringify(msg);
-                if (msg.type === 'sync_result' && !ws.loggedSync) {
-                    ws.loggedSync = true;
-                    console.info('[Server:connection]', ws.connectionId, 'sync_response_prepared', {
-                        messages: msg.messages.length, bytes: Buffer.byteLength(payload),
-                    });
-                }
-                ws.send(payload, (err) => {
-                    if (err) {
-                        console.warn(`[Server] 发送客户端消息失败: ${err.message}`);
-                    }
-                });
-            } catch (err) {
-                console.warn(`[Server] 调用 send 抛出异常: ${err}`);
-            }
+        const sync = msg.type === 'sync_result';
+        const trace = ws.connectionTrace;
+        if (ws.readyState !== WS.OPEN) {
+            if (sync) console.info('[Server:connection]', ws.connectionId, 'sync_write_skipped', { trace });
+            return;
         }
+        const startedAt = Date.now();
+        try {
+            const payload = JSON.stringify(msg);
+            if (sync) {
+                console.info('[Server:connection]', ws.connectionId, 'sync_response_prepared', {
+                    trace, messages: msg.messages.length, bytes: Buffer.byteLength(payload), snapshot: msg.replaceCache === true,
+                });
+            }
+            ws.send(payload, (err) => {
+                if (sync) {
+                    console.info('[Server:connection]', ws.connectionId, err ? 'sync_write_failed' : 'sync_write_complete', {
+                        trace, elapsedMs: Date.now() - startedAt,
+                    });
+                } else if (err) {
+                    console.warn(`[Server] 发送客户端消息失败: ${err.message}`);
+                }
+            });
+        } catch (err) {
+            if (sync) console.info('[Server:connection]', ws.connectionId, 'sync_write_failed', { trace, elapsedMs: Date.now() - startedAt });
+            else console.warn(`[Server] 调用 send 抛出异常: ${err}`);
+        }
+    }
+
+    private broadcastRecentMessage(sessionId: string, messageId: string): void {
+        const snapshot = this.sessionManager.getReconcileData(sessionId, 0);
+        const message = this.sessionManager.getOrCreateSession(sessionId).messages.find(item => item.id === messageId);
+        const compact = message ? [compactChatMessage(message)] : [];
+        this.wss.clients.forEach(client => {
+            const ws = client as AuthenticatedSocket;
+            if (ws.isAuthenticated && ws.sessionId === sessionId) {
+                this.send(ws, {
+                    type: 'sync_result', sessionId, ...snapshot,
+                    messages: ws.compactHistory ? compact : snapshot.messages,
+                });
+            }
+        });
     }
 
     private broadcastSession(sessionId: string, msg: ServerMessage): void {
         const payload = JSON.stringify(msg);
+        const compactPayload = msg.type === 'event_chunk' && msg.toolCall
+            ? JSON.stringify({ ...msg, toolCall: compactChatTool(msg.toolCall, msg.messageId) })
+            : payload;
         this.wss.clients.forEach((client: WebSocket) => {
             const ws = client as AuthenticatedSocket;
             if (ws.isAuthenticated && ws.sessionId === sessionId && ws.readyState === WS.OPEN) {
                 try {
-                    ws.send(payload, (err) => {
+                    ws.send(ws.compactHistory ? compactPayload : payload, (err) => {
                         if (err) {
                             console.warn(`[Server] 广播消息失败: ${err.message}`);
                         }

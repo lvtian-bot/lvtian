@@ -457,11 +457,32 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
         };
     }, [notificationTarget, targetIndex, renderedCount]);
 
+    const historyBefore = useAssistantStore(state => state.chatHistoryBefore);
+    const [loadingHistory, setLoadingHistory] = useState(false);
+    const [failedHistory, setFailedHistory] = useState<typeof historyBefore>();
+    const historyRequest = useRef<Promise<number> | null>(null);
+    const loadEarlierHistory = useCallback(() => {
+        if (!historyBefore || historyRequest.current) return;
+        setLoadingHistory(true);
+        setFailedHistory(undefined);
+        const request = AssistantClient.getInstance().loadEarlierChat();
+        historyRequest.current = request;
+        request.then(count => {
+            if (count > 0) setRenderedCount(previous => previous + WINDOW_BATCH_SIZE);
+            else if (useAssistantStore.getState().chatHistoryBefore === historyBefore) setFailedHistory(historyBefore);
+        }).finally(() => {
+            historyRequest.current = null;
+            setLoadingHistory(false);
+        });
+    }, [historyBefore]);
+
     const handleLoadEarlier = useCallback(() => {
         if (renderedCount < reversedMessages.length) {
             setRenderedCount((prev) => Math.min(prev + WINDOW_BATCH_SIZE, reversedMessages.length));
+        } else if (failedHistory !== historyBefore) {
+            loadEarlierHistory();
         }
-    }, [renderedCount, reversedMessages.length]);
+    }, [renderedCount, reversedMessages.length, failedHistory, historyBefore, loadEarlierHistory]);
 
     const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const offsetY = event.nativeEvent.contentOffset.y;
@@ -500,7 +521,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
     }, []);
 
     const renderListFooter = useCallback(() => {
-        if (renderedCount < reversedMessages.length) {
+        if (renderedCount < reversedMessages.length || loadingHistory) {
             return (
                 <View style={styles.loadMoreContainer}>
                     <ActivityIndicator size="small" color={theme.colors.textTertiary} />
@@ -510,8 +531,15 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                 </View>
             );
         }
+        if (historyBefore && failedHistory === historyBefore) {
+            return (
+                <TouchableOpacity style={styles.loadMoreContainer} onPress={loadEarlierHistory} accessibilityRole="button">
+                    <Text style={styles.loadMoreText}>{t('common.retry', '重试')}</Text>
+                </TouchableOpacity>
+            );
+        }
         return null;
-    }, [renderedCount, reversedMessages.length, t]);
+    }, [renderedCount, reversedMessages.length, loadingHistory, failedHistory, historyBefore, loadEarlierHistory, t]);
 
     useEffect(() => {
         // 自动连接

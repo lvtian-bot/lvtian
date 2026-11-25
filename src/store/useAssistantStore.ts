@@ -18,6 +18,7 @@ import {
     ToolCallState,
     AgentSkill,
     ChatSyncCursor,
+    ChatHistoryCursor,
 } from '../types/assistantProtocol';
 
 // Defer disposable cache writes until its first read finishes; server connection
@@ -105,6 +106,7 @@ interface AssistantState {
     pendingApprovals: ApprovalRequest[];
     currentSeq: number;
     chatSyncCursor?: ChatSyncCursor;
+    chatHistoryBefore?: ChatHistoryCursor | null;
     credentialsStatus: 'loading' | 'ready' | 'error';
     credentialsError: CredentialsErrorCode | null;
     outboxStatus: 'loading' | 'ready';
@@ -165,6 +167,7 @@ export const useAssistantStore = create<AssistantState>()(
                 pendingApprovals: [],
                 currentSeq: 0,
                 chatSyncCursor: undefined,
+                chatHistoryBefore: undefined,
                 clearedSeq: 0,
                 credentialsStatus: 'loading',
                 credentialsError: null,
@@ -208,6 +211,7 @@ export const useAssistantStore = create<AssistantState>()(
                                 messages: [],
                                 currentSeq: 0,
                                 chatSyncCursor: undefined,
+                                chatHistoryBefore: undefined,
                                 clearedSeq: 0,
                                 taskState: 'idle',
                                 pendingApprovals: [],
@@ -252,7 +256,7 @@ export const useAssistantStore = create<AssistantState>()(
                             credentialsError: null,
                             ...(identityChanged ? {
                                 outboxStatus: 'loading' as const,
-                                messages: [], currentSeq: 0, chatSyncCursor: undefined, clearedSeq: 0,
+                                messages: [], currentSeq: 0, chatSyncCursor: undefined, chatHistoryBefore: undefined, clearedSeq: 0,
                                 pendingSendQueue: [], pendingCancelQueue: [], pendingApprovals: [],
                                 taskState: 'idle' as const, isServerUpgrading: false,
                                 skills: [], agentModelSelection: null, agentModelOptions: [],
@@ -378,6 +382,7 @@ export const useAssistantStore = create<AssistantState>()(
                             messages: [],
                             currentSeq: 0,
                             chatSyncCursor: undefined,
+                            chatHistoryBefore: undefined,
                             clearedSeq: maxSeq,
                             taskState: 'idle',
                             pendingApprovals: [],
@@ -430,7 +435,11 @@ export const useAssistantStore = create<AssistantState>()(
                 const cursor = saved.chatSyncCursor;
                 const chatSyncCursor = cursor && typeof cursor.epoch === 'string'
                     && Number.isSafeInteger(cursor.seq) && cursor.seq >= 0 ? cursor : undefined;
-                return { ...current, messages: saved.messages ?? [], chatSyncCursor };
+                const before = saved.chatHistoryBefore;
+                const chatHistoryBefore = before === null || (before && typeof before.id === 'string'
+                    && Number.isSafeInteger(before.timestamp)) ? before : undefined;
+                return { ...current, messages: saved.messages ?? [], chatSyncCursor,
+                    chatHistoryBefore: chatSyncCursor ? chatHistoryBefore : undefined };
             },
             partialize: (state) => {
                 const cacheableMessages = state.messages
@@ -468,14 +477,17 @@ export const useAssistantStore = create<AssistantState>()(
                     cacheCharacters += size;
                     persistedMessages.unshift(sanitizedMessages[i]);
                 }
+                const completeCache = persistedMessages.length === cacheableMessages.length
+                    && (state.chatHistoryBefore === undefined || state.messages.filter(m => m.seq > 0).length === cacheableMessages.length)
+                    && !stripsImageData && !state.messages.some(m => m.status === 'processing')
+                    && state.clearedSeq === 0;
                 return {
                     identity: outboxKey(state.serverUrl, state.serverToken),
                     messages: persistedMessages,
                     // A sender's file URI may belong to another device. Fetch a
                     // new snapshot whenever the disk cache drops image data.
-                    chatSyncCursor: persistedMessages.length === cacheableMessages.length
-                        && !stripsImageData && !state.messages.some(m => m.status === 'processing')
-                        && state.clearedSeq === 0 ? state.chatSyncCursor : undefined,
+                    chatSyncCursor: completeCache ? state.chatSyncCursor : undefined,
+                    chatHistoryBefore: completeCache ? state.chatHistoryBefore : undefined,
                 };
             },
             onRehydrateStorage: () => {

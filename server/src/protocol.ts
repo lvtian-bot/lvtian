@@ -9,6 +9,7 @@ export interface ToolCallState {
     summary?: string;
     input?: Record<string, unknown>;
     output?: string;
+    detailMessageId?: string;
 }
 
 export interface ApprovalRequest {
@@ -63,6 +64,16 @@ export interface AssistantMessage {
 }
 
 // 客户端发往服务端的报文
+export interface ChatHistoryCursor {
+    timestamp: number;
+    id: string;
+}
+
+export interface ChatHistoryPage {
+    messages: AssistantMessage[];
+    historyBefore: ChatHistoryCursor | null;
+}
+
 export interface ChatSyncCursor {
     epoch: string;
     seq: number;
@@ -70,7 +81,7 @@ export interface ChatSyncCursor {
 
 export type ClientMessage =
     | { type: 'auth'; token: string }
-    | { type: 'sync'; sessionId: string; lastSeq: number; cursor?: ChatSyncCursor }
+    | { type: 'sync'; sessionId: string; lastSeq: number; cursor?: ChatSyncCursor; historyVersion?: 1; hasHistoryWindow?: true }
     | {
           type: 'chat';
           sessionId: string;
@@ -102,6 +113,7 @@ export type ServerMessage =
     | {
           type: 'auth_result';
           success: boolean;
+          connectionTrace?: string;
           error?: string;
           serverInfo?: {
               version: string;
@@ -122,6 +134,7 @@ export type ServerMessage =
           currentSeq: number;
           syncEpoch?: string;
           replaceCache?: boolean;
+          historyBefore?: ChatHistoryCursor | null;
       }
     | {
           type: 'message_ack';

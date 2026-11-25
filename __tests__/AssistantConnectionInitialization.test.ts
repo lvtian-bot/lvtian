@@ -101,7 +101,7 @@ describe('AssistantClient independent connection initialization', () => {
         });
         expect(socket.send.mock.calls.map(([value]) => JSON.parse(value as string) as unknown)).toEqual([
             { type: 'auth', token: 'saved-token' },
-            { type: 'sync', sessionId: 'main', lastSeq: 0 },
+            { type: 'sync', sessionId: 'main', lastSeq: 0, historyVersion: 1 },
         ]);
     });
 
@@ -111,7 +111,7 @@ describe('AssistantClient independent connection initialization', () => {
         expect(load).not.toHaveBeenCalled();
         const socket = TestSocket.instances[0];
         socket.open();
-        expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: 15 }));
+        expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'sync', sessionId: 'main', lastSeq: 15, historyVersion: 1 }));
     });
 
     it('connects as soon as credentials are ready even while cache is unsettled', async () => {
@@ -159,7 +159,7 @@ describe('AssistantClient independent connection initialization', () => {
             const socket = TestSocket.instances[0];
             socket.open();
             expect(socket.send.mock.calls.map(([value]) => JSON.parse(value as string) as unknown)).toEqual([
-                { type: 'sync', sessionId: 'main', lastSeq: 15 },
+                { type: 'sync', sessionId: 'main', lastSeq: 15, historyVersion: 1 },
             ]);
         } finally { stop(); }
     });

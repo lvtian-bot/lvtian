@@ -5,12 +5,15 @@ import { useAssistantStore, waitForChatCache, waitForChatCacheWrite } from '../s
 import { fsService } from './FileSystemService';
 import { classifySocketError, recordConnectionEvent, type ConnectionEventDetails } from './connectionDiagnostics';
 import { recordOperation, type OperationReasons } from './operationDiagnostics';
+import { trackSocketReceive } from './nativeSocketDiagnostics';
 import { isAttachmentBudgetExceeded } from '../utils/attachmentBudget';
 import {
     ClientMessage,
     ServerMessage,
     AssistantMessage,
     ChatAttachment,
+    ChatHistoryPage,
+    ToolCallState,
     AgentSkill,
     AgentModelOption,
 } from '../types/assistantProtocol';
@@ -35,6 +38,8 @@ export class AssistantClient {
     private connectionStartedAt = 0;
     private connectionRequest = 0;
     private connectionId = 0;
+    private connectionTrace?: string;
+    private nativeSocket?: ReturnType<typeof trackSocketReceive>;
     private networkState: Network.NetworkState | null = null;
     private networkSubscription: { remove: () => void } | null = null;
     private reconnectAttempts = 0;
@@ -53,6 +58,7 @@ export class AssistantClient {
     private retryingIds = new Set<string>();
     private awaitingFullSnapshot = false;
     private backgroundSync?: Promise<boolean>;
+    private olderChat?: { key: string; request: Promise<number> };
 
     private constructor() {
         this.setupAppStateListener();
@@ -160,7 +166,7 @@ export class AssistantClient {
         // Android may suspend JS timers in the background. Keep the original phase deadline.
         if (!this.connectionPhase) return false;
         if (Date.now() - this.phaseStartedAt < PHASE_TIMEOUT_MS[this.connectionPhase]) return true;
-        this.logConnection('timeout');
+        this.logConnection('timeout', this.nativeReceiveDetails());
         return false;
     }
 
@@ -183,7 +189,7 @@ export class AssistantClient {
         this.phaseStartedAt = Date.now();
         this.phaseTimer = setTimeout(() => {
             if (this.ws !== ws) return;
-            this.logConnection('timeout');
+            this.logConnection('timeout', this.nativeReceiveDetails());
             this.retryConnection();
         }, PHASE_TIMEOUT_MS[phase]);
     }
@@ -208,11 +214,16 @@ export class AssistantClient {
         this.scheduleReconnect();
     }
 
+    private nativeReceiveDetails(): ConnectionEventDetails {
+        if (this.connectionPhase !== 'sync') return {};
+        return this.nativeSocket?.snapshot() ?? { nativeObserved: false };
+    }
+
     /** Diagnostic fields are fixed labels and durations; never include URLs, tokens or message data. */
     private logConnection(event: string, details: ConnectionEventDetails = {}): void {
         recordConnectionEvent({
             time: new Date().toISOString(), network: this.networkState?.type ?? 'unknown',
-            retryAttempt: this.reconnectAttempts, ...details,
+            retryAttempt: this.reconnectAttempts, connectionTrace: this.connectionTrace, ...details,
             event, connectionId: this.connectionId, phase: this.connectionPhase,
             elapsedMs: this.connectionStartedAt ? Date.now() - this.connectionStartedAt : 0,
             phaseElapsedMs: this.connectionPhase ? Date.now() - this.phaseStartedAt : 0,
@@ -540,12 +551,14 @@ export class AssistantClient {
         store.setConnectionState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
         this.connectionId += 1;
+        this.connectionTrace = undefined;
         this.connectionStartedAt = Date.now();
         try {
             // 将 http/https 转换为 ws/wss，不再在 URL 查询参数中携带 token，避免在反向代理等访问日志中泄露长效凭据
             const wsUrl = url.replace(/^http:\/\//, 'ws://').replace(/^https:\/\//, 'wss://');
             const ws = new WebSocket(wsUrl);
             this.ws = ws;
+            this.nativeSocket = trackSocketReceive(ws);
             this.startPhaseTimeout(ws, 'handshake');
             this.logConnection('connect_start');
 
@@ -558,13 +571,23 @@ export class AssistantClient {
                 if (token) {
                     this.sendRaw({ type: 'auth', token });
                 }
-                const { clearedSeq: lastSeq, chatSyncCursor: cursor } = useAssistantStore.getState();
+                const { clearedSeq: lastSeq, chatSyncCursor: cursor, chatHistoryBefore } = useAssistantStore.getState();
                 this.awaitingFullSnapshot = lastSeq === 0;
-                this.sendRaw({ type: 'sync', sessionId: 'main', lastSeq, ...(cursor && { cursor }) });
+                const sent = this.sendRaw({
+                    type: 'sync', sessionId: 'main', lastSeq, ...(cursor && { cursor }), historyVersion: 1,
+                    ...(chatHistoryBefore !== undefined && { hasHistoryWindow: true }),
+                });
+                this.logConnection(sent ? 'sync_requested' : 'sync_request_failed', { hasCursor: Boolean(cursor) });
             };
 
             ws.onmessage = (event) => {
                 if (this.ws !== ws) return;
+                if (this.connectionPhase === 'sync') {
+                    this.logConnection('sync_frame_arrived', {
+                        payloadChars: typeof event.data === 'string' ? event.data.length : undefined,
+                        ...this.nativeReceiveDetails(),
+                    });
+                }
                 try {
                     const data = JSON.parse(event.data as string) as ServerMessage;
                     this.handleServerMessage(data, typeof event.data === 'string' ? event.data.length : undefined);
@@ -577,13 +600,13 @@ export class AssistantClient {
             ws.onerror = (socketEvent) => {
                 if (this.ws !== ws) return;
                 const message = socketEvent && 'message' in socketEvent ? socketEvent.message : undefined;
-                this.logConnection('socket_error', { errorCategory: classifySocketError(message) });
+                this.logConnection('socket_error', { errorCategory: classifySocketError(message), ...this.nativeReceiveDetails() });
                 this.retryConnection();
             };
 
             ws.onclose = (closeEvent) => {
                 if (this.ws !== ws) return;
-                this.logConnection('socket_close', { closeCode: closeEvent?.code });
+                this.logConnection('socket_close', { closeCode: closeEvent?.code, ...this.nativeReceiveDetails() });
                 this.retryConnection(closeEvent?.code);
             };
         } catch (err: unknown) {
@@ -610,6 +633,8 @@ export class AssistantClient {
     }
 
     private cleanUpWs(): void {
+        this.nativeSocket?.stop();
+        this.nativeSocket = undefined;
         this.releaseSendLock();
         this.serverSynced = false;
         this.awaitingFullSnapshot = false;
@@ -1214,6 +1239,77 @@ export class AssistantClient {
         }
     }
 
+    public loadEarlierChat(): Promise<number> {
+        const state = useAssistantStore.getState();
+        const before = state.chatHistoryBefore;
+        if (!before || !state.serverUrl || !state.serverToken || state.credentialsStatus !== 'ready') return Promise.resolve(0);
+
+        const key = JSON.stringify([this.connectionRequest, before, state.clearedSeq]);
+        if (this.olderChat?.key === key) return this.olderChat.request;
+        const request = this.fetchEarlierChat(state, before).finally(() => {
+            if (this.olderChat?.request === request) this.olderChat = undefined;
+        });
+        this.olderChat = { key, request };
+        return request;
+    }
+
+    private async fetchEarlierChat(
+        previous: ReturnType<typeof useAssistantStore.getState>,
+        before: NonNullable<ChatHistoryPage['historyBefore']>,
+    ): Promise<number> {
+        const query = new URLSearchParams({
+            beforeId: before.id, beforeTime: String(before.timestamp), clearedSeq: String(previous.clearedSeq),
+        });
+        const result = await this.readChatResource<ChatHistoryPage>(`history?${query}`, previous);
+        if (!result) return 0;
+        const current = useAssistantStore.getState();
+        if (current.chatHistoryBefore !== before || current.clearedSeq !== previous.clearedSeq
+            || current.currentSeq !== previous.currentSeq || !Array.isArray(result.messages)
+            || (result.historyBefore !== null && (!result.historyBefore?.id
+                || !Number.isSafeInteger(result.historyBefore.timestamp)))) return 0;
+
+        const loaded = new Set(current.messages.map(message => message.id));
+        const older = result.messages.filter(message => !loaded.has(message.id) && message.seq > current.clearedSeq);
+        useAssistantStore.setState({
+            messages: [...older, ...current.messages.filter(message => message.seq > 0)]
+                .sort((a, b) => a.timestamp - b.timestamp)
+                .concat(current.messages.filter(message => !(message.seq > 0))),
+            chatHistoryBefore: result.historyBefore,
+        });
+        return older.length;
+    }
+
+    public async loadToolDetail(messageId: string, toolId: string): Promise<Pick<ToolCallState, 'input' | 'output'> | undefined> {
+        const state = useAssistantStore.getState();
+        const query = new URLSearchParams({ messageId, toolId });
+        return this.readChatResource(`tool-detail?${query}`, state);
+    }
+
+    private async readChatResource<T>(
+        resource: string, previous: ReturnType<typeof useAssistantStore.getState>,
+    ): Promise<T | undefined> {
+        if (!previous.serverUrl || !previous.serverToken || previous.credentialsStatus !== 'ready') return undefined;
+        const request = this.connectionRequest;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12000);
+        try {
+            const response = await fetch(`${AssistantClient.toHttpUrl(previous.serverUrl)}/api/chat/${resource}`, {
+                headers: { Authorization: `Bearer ${previous.serverToken}` },
+                signal: controller.signal,
+            });
+            if (!response.ok) return undefined;
+            const result = await response.json() as T;
+            const current = useAssistantStore.getState();
+            if (!controller.signal.aborted && request === this.connectionRequest && current.credentialsStatus === 'ready'
+                && current.serverUrl === previous.serverUrl && current.serverToken === previous.serverToken) return result;
+            return undefined;
+        } catch {
+            return undefined;
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
     public syncInBackground(): Promise<boolean> {
         if (!this.backgroundSync) {
             this.backgroundSync = this.fetchBackgroundChat().finally(() => { this.backgroundSync = undefined; });
@@ -1237,7 +1333,8 @@ export class AssistantClient {
             if (!before.serverUrl || !before.serverToken || before.credentialsStatus !== 'ready'
                 || (socket && (appState === 'active' || !this.serverSynced || this.sendingId))) return false;
 
-            const query = new URLSearchParams({ clearedSeq: String(before.clearedSeq) });
+            const query = new URLSearchParams({ clearedSeq: String(before.clearedSeq), historyVersion: '1' });
+            if (before.chatHistoryBefore !== undefined) query.set('hasHistoryWindow', '1');
             if (before.chatSyncCursor) {
                 query.set('epoch', before.chatSyncCursor.epoch);
                 query.set('seq', String(before.chatSyncCursor.seq));
@@ -1350,6 +1447,7 @@ export class AssistantClient {
                 : keepCursor ? store.chatSyncCursor : undefined,
             currentSeq: msg.currentSeq,
             taskState: msg.taskState,
+            chatHistoryBefore: replaceCache ? msg.historyBefore : msg.historyBefore ?? store.chatHistoryBefore,
         });
     }
 
@@ -1365,6 +1463,9 @@ export class AssistantClient {
         switch (msg.type) {
             case 'auth_result': {
                 if (msg.success) {
+                    if (typeof msg.connectionTrace === 'string' && /^[a-f0-9-]{36}$/i.test(msg.connectionTrace)) {
+                        this.connectionTrace = msg.connectionTrace;
+                    }
                     this.logConnection('authenticated');
                     if (this.ws) this.startPhaseTimeout(this.ws, 'sync');
                     // 仅在鉴权真正成功后才重置重连尝试计数，防止闪断网络进入 1s 高频重试死循环
@@ -1393,18 +1494,22 @@ export class AssistantClient {
             }
 
             case 'sync_result': {
-                this.logConnection('sync_received', { messageCount: msg.messages.length, payloadChars });
-                this.clearPhaseTimeout();
-                this.releaseSendLock();
+                this.logConnection('sync_received', {
+                    messageCount: msg.messages.length, payloadChars, snapshot: msg.replaceCache === true,
+                    ...this.nativeReceiveDetails(),
+                });
                 const alreadySynced = this.serverSynced;
-                this.serverSynced = true;
                 const replaceCache = msg.replaceCache ?? this.awaitingFullSnapshot;
-                this.awaitingFullSnapshot = false;
-                store.setIsServerUpgrading(false);
-                // Unsolicited legacy snapshots refresh recent rows without replacing
-                // the applied cursor or clearing already loaded history.
+                // Unsolicited reports update the visible chat while preserving its applied cursor and loaded history.
                 this.applyChatSync(msg, replaceCache, alreadySynced);
 
+                this.nativeSocket?.stop();
+                this.nativeSocket = undefined;
+                this.clearPhaseTimeout();
+                this.releaseSendLock();
+                this.serverSynced = true;
+                this.awaitingFullSnapshot = false;
+                store.setIsServerUpgrading(false);
                 this.logConnection('sync_applied');
                 store.setConnectionState('connected');
                 this.startPing();
