@@ -28,11 +28,12 @@ function apiClient({ token, repository, fetchImpl }) {
         }
         return response.json();
     };
-    const allPages = async (path) => {
+    const allPages = async (path, listKey) => {
         const rows = [];
         for (let page = 1; ; page += 1) {
             const separator = path.includes('?') ? '&' : '?';
-            const batch = await request(`${path}${separator}per_page=100&page=${page}`);
+            const payload = await request(`${path}${separator}per_page=100&page=${page}`);
+            const batch = listKey ? payload?.[listKey] : payload;
             if (!Array.isArray(batch)) throw new Error(`GitHub API ${path} 未返回列表`);
             rows.push(...batch);
             if (batch.length < 100) return rows;
@@ -117,7 +118,7 @@ async function verifyPush({ githubSha, githubRef, repository, event, api }) {
     });
     let verifiedRun;
     for (const run of successfulRuns) {
-        const jobs = await api.allPages(`/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`);
+        const jobs = await api.allPages(`/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
         if (REQUIRED_JOBS.every((name) => {
             const matches = jobs.filter((job) => job.name === name);
             return matches.length === 1 && Number.isSafeInteger(matches[0].id)
