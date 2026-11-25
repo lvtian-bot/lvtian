@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, type ComponentRef } from 'react';
+import React, { useState, useEffect, useRef, type ComponentRef } from 'react';
 import {
     Modal,
     View,
@@ -6,15 +6,16 @@ import {
     TouchableOpacity,
     StyleSheet,
     Platform,
-    Dimensions,
     Alert,
-    Keyboard,
-    KeyboardEvent,
+    KeyboardAvoidingView,
+    useWindowDimensions,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { theme } from '../utils/theme';
+import { textInputColors, theme } from '../utils/theme';
+import { getFontSizeMetrics } from '../utils/fontSize';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 interface FlashNoteInputModalProps {
     visible: boolean;
@@ -25,11 +26,10 @@ interface FlashNoteInputModalProps {
     onExpand?: (content: string) => void;
 }
 
-const { height: screenHeight } = Dimensions.get('window');
-const MIN_INPUT_HEIGHT_LINES = 10;
-const MAX_INPUT_HEIGHT_RATIO = 0.5;
-
-const TEXT_INPUT_FONT_SIZE = 16;
+const MIN_INPUT_LINES = 2;
+const MAX_INPUT_LINES = 6;
+const INPUT_VERTICAL_PADDING = 3;
+const ACTION_SIZE = 44;
 
 const FLASH_NOTE_DRAFT_NEW = 'flash_note_draft_new';
 const FLASH_NOTE_DRAFT_EDIT_PREFIX = 'flash_note_draft_edit_';
@@ -45,12 +45,18 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const { t } = useTranslation();
     const [inputText, setInputText] = useState(initialContent || '');
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
+    const fontSize = useSettingsStore(state => state.fontSize);
+    const { flashBody, flashLineHeight } = getFontSizeMetrics(fontSize);
+    const { fontScale } = useWindowDimensions();
 
     const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
     const isDraftLoaded = useRef(false);
 
-    const MIN_HEIGHT = MIN_INPUT_HEIGHT_LINES * TEXT_INPUT_FONT_SIZE * 1.5;
-    const MAX_HEIGHT = screenHeight * MAX_INPUT_HEIGHT_RATIO;
+    const scaledLineHeight = Math.ceil(flashLineHeight * fontScale);
+    const minInputHeight = MIN_INPUT_LINES * scaledLineHeight + INPUT_VERTICAL_PADDING * 2;
+    const maxInputHeight = MAX_INPUT_LINES * scaledLineHeight + INPUT_VERTICAL_PADDING * 2;
+    const inputHeight = Math.max(minInputHeight, Math.min(inputMeasuredHeight, maxInputHeight));
+    const canSave = inputText.trim().length > 0;
 
     // Load draft when modal becomes visible
     useEffect(() => {
@@ -94,13 +100,12 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                     setInputText(initialContent || '');
                     isDraftLoaded.current = true;
                 }
-                setInputMeasuredHeight(MIN_HEIGHT);
             };
 
             isDraftLoaded.current = false;
             checkDraft();
         }
-    }, [visible, initialId, initialContent, MIN_HEIGHT, t]);
+    }, [visible, initialId, initialContent, t]);
 
     // Auto-save draft
     useEffect(() => {
@@ -181,46 +186,6 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
         }
     };
 
-    // Keyboard Handling for Android
-    const [keyboardHeight, setKeyboardHeight] = useState(0);
-
-    useEffect(() => {
-        const onKeyboardShow = (e: KeyboardEvent) => {
-            setKeyboardHeight(e.endCoordinates.height);
-        };
-        const onKeyboardHide = () => {
-            setKeyboardHeight(0);
-        };
-
-        const showSubscription = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-            onKeyboardShow
-        );
-        const hideSubscription = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-            onKeyboardHide
-        );
-
-        return () => {
-            showSubscription.remove();
-            hideSubscription.remove();
-        };
-    }, []);
-
-    const keyboardAvoidingStyle = useMemo(() => {
-        return [
-            styles.keyboardAvoidingView,
-            Platform.OS === 'android' ? { marginBottom: keyboardHeight } : {}
-        ];
-    }, [keyboardHeight]);
-
-    const modalContentStyle = useMemo(() => {
-        return [
-            styles.modalContent,
-            Platform.OS === 'ios' ? { marginBottom: keyboardHeight } : {}
-        ];
-    }, [keyboardHeight]);
-
     return (
         <Modal
             visible={visible}
@@ -233,39 +198,61 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
                 }, 100);
             }}
         >
-            <View style={keyboardAvoidingStyle}>
-                <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={handleCancel} />
+            <KeyboardAvoidingView
+                style={styles.keyboardAvoidingView}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            >
+                <TouchableOpacity
+                    style={styles.overlay}
+                    activeOpacity={1}
+                    accessible={false}
+                    onPress={handleCancel}
+                />
 
-                <View style={modalContentStyle}>
+                <View style={styles.modalContent}>
                     <TextInput
+                        {...textInputColors}
                         ref={inputRef}
                         style={[
                             styles.input,
-                            { height: Math.max(MIN_HEIGHT, Math.min(inputMeasuredHeight, MAX_HEIGHT)) }
+                            { height: inputHeight, fontSize: flashBody, lineHeight: flashLineHeight },
                         ]}
                         multiline
                         placeholder={t('timeline.placeholder')}
+                        placeholderTextColor={theme.colors.textSecondary}
                         value={inputText}
                         onChangeText={setInputText}
                         textAlignVertical="top"
+                        underlineColorAndroid="transparent"
                         onContentSizeChange={(event) => {
-                            setInputMeasuredHeight(event.nativeEvent.contentSize.height);
+                            setInputMeasuredHeight(Math.ceil(event.nativeEvent.contentSize.height));
                         }}
                     />
                     <View style={styles.actionContainer}>
-                        <View style={styles.toolbar}>
-                            {onExpand && (
-                                <TouchableOpacity onPress={() => onExpand(inputText)} style={styles.toolbarButton}>
-                                    <Icon name="fullscreen" size={24} color={theme.colors.textSecondary} />
-                                </TouchableOpacity>
-                            )}
-                        </View>
-                        <TouchableOpacity onPress={handleSave} style={styles.sendButton}>
-                            <Icon name="send" size={24} color={theme.colors.primary} />
+                        {onExpand && (
+                            <TouchableOpacity
+                                accessibilityRole="button"
+                                accessibilityLabel={t('common.edit')}
+                                onPress={() => onExpand(inputText)}
+                                style={styles.expandButton}
+                            >
+                                <View style={styles.expandIcon}>
+                                    <Icon name="fullscreen" size={20} color={theme.colors.textSecondary} />
+                                </View>
+                            </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                            accessibilityRole="button"
+                            accessibilityLabel={t('common.save')}
+                            disabled={!canSave}
+                            onPress={handleSave}
+                            style={[styles.sendButton, !canSave && styles.sendButtonDisabled]}
+                        >
+                            <Icon name="send" size={20} color={canSave ? theme.colors.white : theme.colors.textSecondary} />
                         </TouchableOpacity>
                     </View>
                 </View>
-            </View>
+            </KeyboardAvoidingView>
         </Modal>
     );
 };
@@ -276,52 +263,59 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
     },
     overlay: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.4)',
+        ...StyleSheet.absoluteFill,
+        backgroundColor: 'rgba(20, 29, 45, 0.24)',
     },
     modalContent: {
+        flexShrink: 1,
         backgroundColor: theme.colors.surface,
-        borderTopLeftRadius: 16,
-        borderTopRightRadius: 16,
-        padding: 16,
-        paddingBottom: Platform.OS === 'ios' ? 24 : 16,
-        shadowColor: '#000',
+        borderTopLeftRadius: theme.radius.lg,
+        borderTopRightRadius: theme.radius.lg,
+        paddingHorizontal: 18,
+        paddingTop: 15,
+        paddingBottom: Platform.OS === 'ios' ? 24 : 9,
+        shadowColor: theme.colors.black,
         shadowOffset: { width: 0, height: -2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 5,
+        shadowOpacity: 0.09,
+        shadowRadius: 8,
+        elevation: 4,
     },
     input: {
-        backgroundColor: theme.colors.background,
-        borderRadius: 8,
-        padding: 12,
-        fontSize: TEXT_INPUT_FONT_SIZE,
+        flexShrink: 1,
+        paddingHorizontal: 2,
+        paddingVertical: INPUT_VERTICAL_PADDING,
+        includeFontPadding: false,
         color: theme.colors.text,
-        borderWidth: 1,
-        borderColor: '#e0e0e0',
     },
     actionContainer: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
         alignItems: 'center',
-        marginTop: 12,
     },
-    toolbar: {
-        flexDirection: 'row',
+    expandButton: {
+        width: ACTION_SIZE,
+        height: ACTION_SIZE,
         alignItems: 'center',
-        flex: 1,
+        justifyContent: 'center',
     },
-    toolbarButton: {
-        padding: 6,
-        marginRight: 8,
+    expandIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     sendButton: {
-        padding: 8,
-        backgroundColor: theme.colors.successBg,
-        borderRadius: 20,
+        width: ACTION_SIZE,
+        height: ACTION_SIZE,
+        borderRadius: ACTION_SIZE / 2,
+        marginLeft: 'auto',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: theme.colors.primaryDark,
+    },
+    sendButtonDisabled: {
+        backgroundColor: theme.colors.inputBg,
     },
 });
