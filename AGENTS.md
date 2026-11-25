@@ -164,7 +164,7 @@ lvtian/
 │   │   └── previewHtml.ts           # 注入 RN WebView 的产物
 │   ├── hooks/                       # 自定义 Hooks (useCloudSync, useFlashNoteList...)
 │   ├── locales/                     # 国际化语言包 (zh.json, en.json)
-│   ├── navigation/                  # 导航配置 (AppNavigator, TabNavigator；文件页已并入「我」页导航)
+│   ├── navigation/                  # 底部标签：主聊天、闪念、任务、我；文件页由「我」进入
 │   ├── screens/                     # 页面级组件 (FlashScreen, TodoScreen, ChatScreen, ServerFileScreen, CloudNoteScreen, PreviewScreen, EditorScreen...)
 │   ├── services/                    # ⭐ 业务逻辑服务层 (业务中枢)
 │   │   ├── CloudService.ts          # 云服务策略入口 (ICloudProvider)

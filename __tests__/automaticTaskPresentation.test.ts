@@ -31,6 +31,18 @@ describe('automatic task presentation', () => {
         expect(taskTimeZone(task)).toBe('Asia/Shanghai');
         expect(taskTimeZone({ ...base, kind: 'at' })).toBeUndefined();
     });
+    it.each([
+        ['06:00', '06:00'],
+        ['06:00:00', '06:00'],
+        ['06:00:00.000', '06:00'],
+        ['06:00:01.000', '06:00:01'],
+        ['06:00:00.125', '06:00:00.125'],
+    ])('shows %s as %s for daily and weekly rules', (time, displayTime) => {
+        const t = i18n.getFixedT('zh-CN');
+        const rule = { ...base, time, timeZone: 'Asia/Shanghai' };
+        expect(taskFrequency({ ...rule, kind: 'daily' }, t)).toBe(`每天 ${displayTime}`);
+        expect(taskFrequency({ ...rule, kind: 'weekly', weekdays: [6] }, t)).toBe(`每周 周六 ${displayTime}`);
+    });
     it('renders elapsed intervals with real plural-aware translations', () => {
         expect(taskFrequency({ ...base, kind: 'every', everySeconds: 3600 }, i18n.getFixedT('en'))).toBe('Every 1 hour');
         expect(taskFrequency({ ...base, kind: 'every', everySeconds: 7200 }, i18n.getFixedT('en'))).toBe('Every 2 hours');

@@ -3,7 +3,6 @@
     "chat": "Chat",
     "timeline": "Flash",
     "todo": "Tasks",
-    "moments": "Moments",
     "files": "Files",
     "browser": "Notes",
     "settings": "Settings",
@@ -40,10 +39,6 @@
     "retryAttachmentFailed": "Attachment file is no longer available, cannot resend",
     "previewImage": "Preview image",
     "resend": "Resend"
-  },
-  "moments": {
-    "placeholderTitle": "Moments & Digest",
-    "placeholderDesc": "Moments will be available once the assistant service is connected and digests are generated."
   },
   "about": {
     "title": "About",

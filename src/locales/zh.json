@@ -3,7 +3,6 @@
     "chat": "主聊天",
     "timeline": "闪念",
     "todo": "任务",
-    "moments": "动态",
     "files": "系统文件",
     "browser": "笔记",
     "settings": "设置",
@@ -40,10 +39,6 @@
     "retryAttachmentFailed": "附件原文件已失效，无法重新发送",
     "previewImage": "预览图片",
     "resend": "重发"
-  },
-  "moments": {
-    "placeholderTitle": "动态资讯",
-    "placeholderDesc": "动态功能待助理服务接通后启用。助理将根据您的关注主题整理并呈现最新动态。"
   },
   "about": {
     "title": "关于",
