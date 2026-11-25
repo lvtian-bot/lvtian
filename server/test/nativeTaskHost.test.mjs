@@ -42,6 +42,20 @@ test('prevents two Harness processes writing the same storage root', async () =>
   } finally { await Promise.all([one.stop(), two.stop()]); }
 });
 
+test('prevents different private roots writing the same workspace task data', async () => {
+  const firstOptions = await fixture();
+  const secondRoot = await mkdtemp(path.join(os.tmpdir(), 'lvtian-host-private-root-'));
+  const secondOptions = { ...firstOptions, root: secondRoot };
+  const one = new NativeTaskHost(firstOptions);
+  const two = new NativeTaskHost(secondOptions);
+  try {
+    await one.start();
+    await assert.rejects(two.start(), /native_host_exited/);
+    await one.stop();
+    await two.start();
+  } finally { await Promise.all([one.stop(), two.stop()]); }
+});
+
 test('fails without exposing output credentials when launcher exits or times out', async () => {
   for (const source of ["console.error('private-api-key=secret'); process.exit(1);", 'setInterval(() => {}, 1000);']) {
     const host = new NativeTaskHost({ ...await fixture(source), startupTimeoutMs: 200 });

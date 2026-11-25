@@ -76,6 +76,7 @@ export class NativeTaskHost {
             }
             const launcher = this.options.launcher ?? path.join(path.dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')), 'lib', 'bin.js');
             const runner = fileURLToPath(new URL('./nativeTaskHostRunner.js', import.meta.url));
+            await fs.mkdir(workspaceData, { recursive: true, mode: 0o700 });
             const env: NodeJS.ProcessEnv = {
                 PATH: process.env.PATH,
                 HOME: process.env.HOME,
@@ -95,7 +96,7 @@ export class NativeTaskHost {
                 sessionsTarget: sessionsRoot,
                 sessionsState: path.join(root, 'sessions-workspace-migration.json'),
             });
-            const child = spawn(process.execPath, [runner, path.join(root, 'host-lease.sqlite'), migration, launcher, '--profile', 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
+            const child = spawn(process.execPath, [runner, path.join(workspaceData, 'host-lease.sqlite'), migration, launcher, '--profile', 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
                 cwd: this.options.workspace, env, stdio: ['pipe', 'pipe', 'pipe'],
             });
             this.child = child;
