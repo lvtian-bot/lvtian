@@ -22,7 +22,12 @@ let migration: NativeTaskDataMigrationPaths;
 try { migration = JSON.parse(migrationJson) as NativeTaskDataMigrationPaths; }
 catch { throw new Error('native_host_runner_migration_invalid'); }
 await migrateNativeTaskData(migration);
-process.stdin.once('end', () => process.kill(process.pid, 'SIGTERM'));
+// Capture the database in a live listener so runtimes may not finalize the
+// lease if a synthetic launcher returns while other handles keep the host alive.
+process.stdin.once('end', () => {
+    lease.close();
+    process.kill(process.pid, 'SIGTERM');
+});
 process.stdin.resume();
 process.argv = [process.execPath, launcher, ...args];
 const entry = await import(pathToFileURL(launcher).href) as { runCli?: () => Promise<void> };
