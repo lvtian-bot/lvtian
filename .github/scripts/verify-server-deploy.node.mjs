@@ -8,6 +8,7 @@ const headSha = 'b'.repeat(40);
 const repository = 'lvtian-bot/lvtian';
 const pullCreated = '2026-11-25T04:00:38Z';
 const pullMerged = '2026-11-25T04:03:30Z';
+const jobsPath = '/actions/runs/123/attempts/1/jobs?per_page=100';
 
 function pull(overrides = {}) {
     return {
@@ -38,6 +39,10 @@ function jobs(overrides = {}) {
     ];
 }
 
+function jobsPage(rows = jobs(), totalCount = rows.length) {
+    return { total_count: totalCount, jobs: rows };
+}
+
 function response(body, status = 200) {
     return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
@@ -52,7 +57,7 @@ function fixture(overrides = {}) {
         [`/actions/workflows/pr-check.yml/runs?event=pull_request&head_sha=${headSha}&per_page=100`, {
             workflow_runs: [run()],
         }],
-        ['/actions/runs/123/attempts/1/jobs?per_page=100&page=1', jobs()],
+        [`${jobsPath}&page=1`, jobsPage()],
         [`/commits/${mergeSha}`, { sha: mergeSha }],
     ]);
     for (const [path, value] of Object.entries(overrides)) routes.set(path, value);
@@ -85,11 +90,28 @@ test('direct main push without a merged PR is rejected', async () => {
 });
 
 test('a successful workflow missing either required job is rejected', async () => {
-    const { fetchImpl } = fixture({ '/actions/runs/123/attempts/1/jobs?per_page=100&page=1': [
-        { id: 1002, name: '服务端检查（类型/测试）', run_id: 123, run_attempt: 1, head_sha: headSha,
-            status: 'completed', conclusion: 'success' },
-    ] });
+    const { fetchImpl } = fixture({ [`${jobsPath}&page=1`]: jobsPage(jobs().slice(1)) });
     await assert.rejects(verifyServerDeploy(pushInput, fetchImpl), /没有同时通过客户端与服务端检查/);
+});
+
+test('required jobs are verified across wrapped GitHub API pages', async () => {
+    const [js, server] = jobs();
+    const optional = Array.from({ length: 99 }, (_, index) => ({
+        ...js, id: 2000 + index, name: `Optional check ${index}`,
+    }));
+    const { fetchImpl, calls } = fixture({
+        [`${jobsPath}&page=1`]: jobsPage([js, ...optional], 101),
+        [`${jobsPath}&page=2`]: jobsPage([server], 101),
+    });
+    assert.equal((await verifyServerDeploy(pushInput, fetchImpl)).checkRunId, 123);
+    assert.ok(calls.includes(`${jobsPath}&page=2`));
+});
+
+test('malformed jobs responses fail closed', async () => {
+    for (const invalid of [jobs(), { total_count: 2 }, { jobs: {} }]) {
+        const { fetchImpl } = fixture({ [`${jobsPath}&page=1`]: invalid });
+        await assert.rejects(verifyServerDeploy(pushInput, fetchImpl), /未返回列表/);
+    }
 });
 
 test('a successful check for the same head on another PR is rejected', async () => {
@@ -155,18 +177,18 @@ test('a fake workflow identity or attempt cannot borrow successful job names', a
     }
     const { fetchImpl } = fixture({
         [path]: { workflow_runs: [run({ run_attempt: 2 })] },
-        '/actions/runs/123/attempts/2/jobs?per_page=100&page=1': jobs(),
+        '/actions/runs/123/attempts/2/jobs?per_page=100&page=1': jobsPage(),
     });
     await assert.rejects(verifyServerDeploy(pushInput, fetchImpl), /没有同时通过客户端与服务端检查/);
 });
 
 test('failed or duplicate same-name jobs are rejected for the exact run attempt', async () => {
-    const jobPath = '/actions/runs/123/attempts/1/jobs?per_page=100&page=1';
+    const jobPath = `${jobsPath}&page=1`;
     const failed = jobs().map(job => job.name === '服务端检查（类型/测试）'
         ? { ...job, conclusion: 'failure' } : job);
     const duplicate = [...jobs(), { ...jobs()[0], conclusion: 'failure' }];
     for (const invalid of [failed, duplicate]) {
-        const { fetchImpl } = fixture({ [jobPath]: invalid });
+        const { fetchImpl } = fixture({ [jobPath]: jobsPage(invalid) });
         await assert.rejects(verifyServerDeploy(pushInput, fetchImpl), /没有同时通过客户端与服务端检查/);
     }
 });
