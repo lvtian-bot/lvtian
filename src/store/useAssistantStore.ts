@@ -436,8 +436,8 @@ export const useAssistantStore = create<AssistantState>()(
                 const chatSyncCursor = cursor && typeof cursor.epoch === 'string'
                     && Number.isSafeInteger(cursor.seq) && cursor.seq >= 0 ? cursor : undefined;
                 const before = saved.chatHistoryBefore;
-                const chatHistoryBefore = before === null || (before && typeof before.id === 'string'
-                    && Number.isSafeInteger(before.timestamp)) ? before : undefined;
+                const chatHistoryBefore = before === null || (before && before.epoch === cursor?.epoch
+                    && Number.isSafeInteger(before.timestamp) && Number.isSafeInteger(before.order)) ? before : undefined;
                 return { ...current, messages: saved.messages ?? [], chatSyncCursor,
                     chatHistoryBefore: chatSyncCursor ? chatHistoryBefore : undefined };
             },

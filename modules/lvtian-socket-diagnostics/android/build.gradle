@@ -3,6 +3,9 @@ plugins {
   id 'expo-module-gradle-plugin'
 }
 
+group = 'com.lvtian'
+version = '0.1.0'
+
 android {
   namespace 'com.lvtian.socketdiagnostics'
 }

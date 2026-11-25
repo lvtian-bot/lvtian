@@ -65,8 +65,9 @@ export interface AssistantMessage {
 
 // 客户端发往服务端的报文
 export interface ChatHistoryCursor {
+    epoch: string;
     timestamp: number;
-    id: string;
+    order: number;
 }
 
 export interface ChatHistoryPage {

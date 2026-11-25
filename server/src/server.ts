@@ -211,7 +211,8 @@ export class LvtianServer {
     private chatSync(
         sessionId: string, clearedSeq: number, cursor?: ChatSyncCursor, compact = false,
     ): Extract<ServerMessage, { type: 'sync_result' }> {
-        const { currentSeq, messages } = this.sessionManager.getOrCreateSession(sessionId);
+        const session = this.sessionManager.getOrCreateSession(sessionId);
+        const { currentSeq } = session;
         const canResume = cursor?.epoch === this.chatSyncEpoch
             && Number.isSafeInteger(cursor.seq) && cursor.seq >= 0 && cursor.seq <= currentSeq;
         const boundary = Number.isSafeInteger(clearedSeq) && clearedSeq > 0 && clearedSeq <= currentSeq ? clearedSeq : 0;
@@ -219,7 +220,7 @@ export class LvtianServer {
         const reconcile = this.sessionManager.getReconcileData(sessionId, lastSeq, canResume || boundary > 0);
         const changes = compact && canResume ? reconcile.messages.map(compactChatMessage) : reconcile.messages;
         const history = compact && (!canResume || Buffer.byteLength(JSON.stringify(changes)) > CHAT_PAGE_BYTES)
-            ? chatHistoryPage(messages, boundary) : undefined;
+            ? chatHistoryPage(session, boundary, this.chatSyncEpoch) : undefined;
         return {
             type: 'sync_result', sessionId, ...reconcile,
             ...(history && { historyBefore: history.historyBefore }),
@@ -303,16 +304,22 @@ export class LvtianServer {
         }
 
         if (pathname === '/api/chat/history' && req.method === 'GET') {
-            const id = urlObj.searchParams.get('beforeId');
+            const epoch = urlObj.searchParams.get('epoch');
             const rawTime = urlObj.searchParams.get('beforeTime');
             const timestamp = Number(rawTime);
+            const order = Number(urlObj.searchParams.get('beforeOrder'));
             const clearedSeq = Number(urlObj.searchParams.get('clearedSeq') ?? 0);
-            if (!id || !rawTime || !Number.isSafeInteger(timestamp) || !Number.isSafeInteger(clearedSeq) || clearedSeq < 0) {
+            if (!epoch || !rawTime || !Number.isSafeInteger(timestamp)
+                || !Number.isSafeInteger(order) || order <= 0 || !Number.isSafeInteger(clearedSeq) || clearedSeq < 0) {
                 res.writeHead(400).end();
                 return;
             }
-            const { messages } = this.sessionManager.getOrCreateSession('main');
-            const page = chatHistoryPage(messages, clearedSeq, { id, timestamp });
+            if (epoch !== this.chatSyncEpoch) {
+                res.writeHead(409).end();
+                return;
+            }
+            const session = this.sessionManager.getOrCreateSession('main');
+            const page = chatHistoryPage(session, clearedSeq, epoch, { epoch, timestamp, order });
             res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
             res.end(JSON.stringify(page));
             return;

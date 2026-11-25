@@ -143,10 +143,12 @@ test('background chat sync uses the same cursor and authenticated result as WebS
         { id: 'tool', name: 'read', status: 'done', summary: 'read test', detailMessageId: latest.id },
     ]);
 
-    const historyUrl = `${endpoint}/history?beforeTime=${compact.historyBefore.timestamp}&beforeId=${compact.historyBefore.id}`;
-    assert.equal((await fetch(historyUrl)).status, 401);
-    sessions.deleteMessage('main', compact.historyBefore.id);
-    const older = await (await fetch(historyUrl, { headers })).json();
+    const historyUrl = before => `${endpoint}/history?epoch=${before.epoch}&beforeTime=${before.timestamp}&beforeOrder=${before.order}`;
+    assert.equal((await fetch(historyUrl(compact.historyBefore))).status, 401);
+    assert.equal((await fetch(historyUrl({ ...compact.historyBefore, epoch: 'expired' }), { headers })).status, 409);
+    const anchorId = compact.messages[0].id;
+    sessions.deleteMessage('main', anchorId);
+    const older = await (await fetch(historyUrl(compact.historyBefore), { headers })).json();
     assert.deepEqual(older.messages.map(message => message.id), [targetId, 'row-0', 'row-1']);
     assert.equal(older.historyBefore, null);
 
@@ -161,7 +163,7 @@ test('background chat sync uses the same cursor and authenticated result as WebS
         { headers },
     )).json();
     assert.equal(compactDelta.replaceCache, false);
-    assert.deepEqual(compactDelta.deletedMessageIds, [compact.historyBefore.id]);
+    assert.deepEqual(compactDelta.deletedMessageIds, [anchorId]);
     assert.equal(compactDelta.historyBefore, undefined);
 
     const longReply = sessions.addMessage('main', {
@@ -173,7 +175,30 @@ test('background chat sync uses the same cursor and authenticated result as WebS
     )).json();
     assert.equal(longDelta.replaceCache, true);
     assert.deepEqual(longDelta.messages, [longReply]);
-    assert.equal(longDelta.historyBefore.id, longReply.id);
+    assert.equal(longDelta.historyBefore.timestamp, longReply.timestamp);
+
+    const processing = sessions.addMessage('main', {
+        id: 'processing', role: 'assistant', status: 'processing', content: 'prefix', timestamp: 10000000000200,
+    });
+    const queued = sessions.addMessage('main', {
+        id: 'queued-image', role: 'user', status: 'queued', content: '', timestamp: 10000000000300,
+        attachments: [{ type: 'image', name: 'test.jpg', data: 'x'.repeat(150000) }],
+    });
+    const withActive = await (await fetch(`${endpoint}/sync?historyVersion=1`, { headers })).json();
+    assert.deepEqual(withActive.messages, [processing, queued]);
+
+    sessions.updateMessage('main', processing.id, message => { message.status = 'done'; });
+    const question = sessions.addMessage('main', {
+        id: 'msg-question', role: 'user', status: 'sent', content: 'question', timestamp: 10000000000400,
+    });
+    const answer = sessions.addMessage('main', {
+        id: 'asst-answer', role: 'assistant', status: 'done', content: '字'.repeat(50000), timestamp: question.timestamp,
+        replyTo: question.id,
+    });
+    const latestTie = await (await fetch(`${endpoint}/sync?historyVersion=1`, { headers })).json();
+    assert.deepEqual(latestTie.messages, [answer]);
+    const earlierTie = await (await fetch(historyUrl(latestTie.historyBefore), { headers })).json();
+    assert.deepEqual(earlierTie.messages, [question]);
 });
 
 test('LvtianServer handles WebSocket connection error without crash', { timeout: 15000 }, async (t) => {

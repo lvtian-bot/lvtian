@@ -58,7 +58,7 @@ export class AssistantClient {
     private retryingIds = new Set<string>();
     private awaitingFullSnapshot = false;
     private backgroundSync?: Promise<boolean>;
-    private olderChat?: { key: string; request: Promise<number> };
+    private olderChat?: { key: string; request: Promise<number>; deletedIds: Set<string> };
 
     private constructor() {
         this.setupAppStateListener();
@@ -1246,36 +1246,45 @@ export class AssistantClient {
 
         const key = JSON.stringify([this.connectionRequest, before, state.clearedSeq]);
         if (this.olderChat?.key === key) return this.olderChat.request;
-        const request = this.fetchEarlierChat(state, before).finally(() => {
+        const deletedIds = new Set<string>();
+        const request = this.fetchEarlierChat(state, before, deletedIds).finally(() => {
             if (this.olderChat?.request === request) this.olderChat = undefined;
         });
-        this.olderChat = { key, request };
+        this.olderChat = { key, request, deletedIds };
         return request;
     }
 
     private async fetchEarlierChat(
         previous: ReturnType<typeof useAssistantStore.getState>,
         before: NonNullable<ChatHistoryPage['historyBefore']>,
+        deletedIds: Set<string>,
     ): Promise<number> {
         const query = new URLSearchParams({
-            beforeId: before.id, beforeTime: String(before.timestamp), clearedSeq: String(previous.clearedSeq),
+            epoch: before.epoch, beforeTime: String(before.timestamp), beforeOrder: String(before.order),
+            clearedSeq: String(previous.clearedSeq),
         });
         const result = await this.readChatResource<ChatHistoryPage>(`history?${query}`, previous);
         if (!result) return 0;
         const current = useAssistantStore.getState();
         if (current.chatHistoryBefore !== before || current.clearedSeq !== previous.clearedSeq
-            || current.currentSeq !== previous.currentSeq || !Array.isArray(result.messages)
-            || (result.historyBefore !== null && (!result.historyBefore?.id
-                || !Number.isSafeInteger(result.historyBefore.timestamp)))) return 0;
+            || !Array.isArray(result.messages)
+            || (result.historyBefore !== null && (result.historyBefore?.epoch !== before.epoch
+                || !Number.isSafeInteger(result.historyBefore.timestamp)
+                || !Number.isSafeInteger(result.historyBefore.order)
+                || result.historyBefore.timestamp > before.timestamp
+                || (result.historyBefore.timestamp === before.timestamp && result.historyBefore.order >= before.order)))) return 0;
 
         const loaded = new Set(current.messages.map(message => message.id));
-        const older = result.messages.filter(message => !loaded.has(message.id) && message.seq > current.clearedSeq);
+        const older = result.messages.filter(message =>
+            !deletedIds.has(message.id) && !loaded.has(message.id) && message.seq > current.clearedSeq);
         useAssistantStore.setState({
             messages: [...older, ...current.messages.filter(message => message.seq > 0)]
                 .sort((a, b) => a.timestamp - b.timestamp)
                 .concat(current.messages.filter(message => !(message.seq > 0))),
             chatHistoryBefore: result.historyBefore,
         });
+        // An early live update can already have supplied every row in this page.
+        if (older.length === 0 && result.historyBefore) return this.loadEarlierChat();
         return older.length;
     }
 
@@ -1420,6 +1429,7 @@ export class AssistantClient {
         // 服务端增量删除对账：剔除服务端已删除的排队消息，并同步清理本地待发队列与撤销暂存副本
         if (msg.deletedMessageIds && msg.deletedMessageIds.length > 0) {
             for (const delId of msg.deletedMessageIds) {
+                this.olderChat?.deletedIds.add(delId);
                 msgMap.delete(delId);
                 this.sendRetries.delete(delId);
                 store.removeFromPendingCancelQueue(delId);
@@ -1691,6 +1701,7 @@ export class AssistantClient {
             }
 
             case 'message_deleted': {
+                this.olderChat?.deletedIds.add(msg.messageId);
                 this.sendRetries.delete(msg.messageId);
                 const releasedLock = this.releaseSendLock(msg.messageId);
                 const item = store.pendingSendQueue.find(q => q.messageId === msg.messageId);

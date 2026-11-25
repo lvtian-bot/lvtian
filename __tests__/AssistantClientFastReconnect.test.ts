@@ -156,16 +156,21 @@ describe('AssistantClient connection recovery', () => {
         const newest = { id: 'new', role: 'assistant' as const, status: 'done' as const, content: 'new', timestamp: 12, seq: 12 };
         const older = { ...newest, id: 'old', timestamp: 2, seq: 2, content: 'old' };
         ws.receive({ ...sync, messages: [newest], replaceCache: true, syncEpoch: 'epoch', currentSeq: 12,
-            historyBefore: { id: newest.id, timestamp: newest.timestamp } });
-        const fetch = jest.spyOn(global, 'fetch').mockResolvedValue({
-            ok: true, json: async () => ({ messages: [older, newest], historyBefore: null }),
-        } as Response);
+            historyBefore: { epoch: 'epoch', order: 3, timestamp: newest.timestamp } });
+        let finish!: (response: Response) => void;
+        const fetch = jest.spyOn(global, 'fetch').mockReturnValue(new Promise(resolve => { finish = resolve; }));
 
         const request = client.loadEarlierChat();
         expect(client.loadEarlierChat()).toBe(request);
+        ws.receive({ type: 'event_chunk', sessionId: 'main', seq: 13, messageId: newest.id, status: 'running_tool' });
+        ws.receive({ type: 'message_deleted', sessionId: 'main', messageId: 'deleted' });
+        finish({ ok: true, json: async () => ({
+            messages: [older, newest, { ...older, id: 'deleted', seq: 4 }], historyBefore: null,
+        }) } as Response);
         await expect(request).resolves.toBe(1);
         expect(fetch).toHaveBeenCalledTimes(1);
         expect(useAssistantStore.getState().messages).toEqual([older, newest]);
+        expect(useAssistantStore.getState().currentSeq).toBe(13);
         expect(useAssistantStore.getState().chatSyncCursor).toEqual({ epoch: 'epoch', seq: 12 });
         expect(useAssistantStore.getState().chatHistoryBefore).toBeNull();
     });
