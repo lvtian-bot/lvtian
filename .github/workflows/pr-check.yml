@@ -39,6 +39,8 @@ jobs:
         run: npx eslint .
       - name: 测试
         run: npx jest
+      - name: 服务端部署门禁测试
+        run: node --test .github/scripts/verify-server-deploy.node.mjs
       - name: Expo 版本核对（仅提示，不阻断）
         run: npx expo install --check
         continue-on-error: true
