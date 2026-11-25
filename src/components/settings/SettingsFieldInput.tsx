@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { theme } from '../../utils/theme';
+import { textInputColors, theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
 import { auxFontSizes } from '../../utils/fontSize';
 
@@ -36,6 +36,7 @@ export const SettingsFieldInput: React.FC<SettingsFieldInputProps> = ({
                 ]}
             >
                 <TextInput
+                    {...textInputColors}
                     style={[styles.input, { fontSize: font.chatBody }]}
                     value={value}
                     onChangeText={onChangeText}

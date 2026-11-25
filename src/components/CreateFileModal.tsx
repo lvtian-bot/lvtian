@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useSettingsFont } from './settings';
-import { theme } from '../utils/theme';
+import { textInputColors, theme } from '../utils/theme';
 
 interface CreateFileModalProps {
     visible: boolean;
@@ -66,6 +66,7 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
                         <Text style={[styles.title, { fontSize: font.chatHeading2 }]}>{t('browser.createNewFile') || 'Create New File'}</Text>
 
                         <TextInput
+                            {...textInputColors}
                             ref={inputRef}
                             style={[styles.input, { fontSize: font.chatBody }]}
                             placeholder={t('browser.enterFilename') || 'Enter filename (e.g. MyNote)'}

@@ -43,7 +43,7 @@ import { ChatMarkdownBubble } from '../components/ChatMarkdownBubble';
 import { ChatBubbleReveal } from '../components/ChatBubbleReveal';
 import { ImageViewerModal } from '../components/ImageViewerModal';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
-import { theme } from '../utils/theme';
+import { textInputColors, theme } from '../utils/theme';
 import {
     getInvertedChatScrollTarget,
     getInvertedDistanceFromBottom,
@@ -1255,6 +1255,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                             />
                         </TouchableOpacity>
                         <TextInput
+                            {...textInputColors}
                             ref={chatInputRef}
                             autoFocus={false}
                             style={[

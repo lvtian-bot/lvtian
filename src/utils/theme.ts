@@ -37,6 +37,12 @@ export const colors = {
     bgPressed: '#F7F9FC',
 };
 
+export const textInputColors = {
+    selectionColor: colors.primary,
+    selectionHandleColor: colors.primaryDark,
+    cursorColor: colors.primaryDark,
+};
+
 export const spacing = {
     xs: 4,
     sm: 8,

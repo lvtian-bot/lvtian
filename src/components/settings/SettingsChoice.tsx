@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
         flexShrink: 0,
     },
     badge: {
-        backgroundColor: theme.colors.successBg,
+        backgroundColor: theme.colors.primaryLight,
         paddingHorizontal: 6,
         paddingVertical: 2,
         borderRadius: 5,
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
     badgeText: {
         fontSize: auxFontSizes.badge,
         fontWeight: '600',
-        color: theme.colors.successText,
+        color: theme.colors.text,
     },
     radio: {
         width: 18,
