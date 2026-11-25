@@ -2,9 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+import type { ScheduleDeliveryReceipt } from '@deepseek-ai/dsh-schedule';
 import { NativeTaskServiceError, type NativeTaskService, type NativeTaskResult } from './nativeTaskService.js';
 
 type Row = { id: string; taskId: string; title: string; result: string; state: string; attempts: number; retryAt: number; reply: string | null };
+type ScanFrontierRow = { messageId: string };
 const MAX_REPORT_ATTEMPTS = 3;
 const PROVIDER_HOLD_KEY = 'reportProviderHold';
 interface Statement {
@@ -45,6 +47,9 @@ export class TaskReportStore {
                 reportId TEXT PRIMARY KEY, engineSessionId TEXT NOT NULL,
                 prepared INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS report_scan_frontiers (
+                taskId TEXT PRIMARY KEY, messageId TEXT NOT NULL
+            );
             BEGIN IMMEDIATE;
             UPDATE reports SET state='paused', retryAt=0
             WHERE state='pending' AND attempts>0
@@ -56,15 +61,24 @@ export class TaskReportStore {
         this.enabledAt = (this.db.prepare('SELECT value FROM metadata WHERE key = ?').get('enabledAt') as { value: number }).value;
     }
     known(id: string): boolean { return Boolean(this.db.prepare('SELECT id FROM reports WHERE id = ?').get(id)); }
-    observe(taskId: string, title: string, result: NativeTaskResult): void {
+    scanFrontier(taskId: string): string | undefined {
+        return (this.db.prepare('SELECT messageId FROM report_scan_frontiers WHERE taskId=?')
+            .get(taskId) as ScanFrontierRow | undefined)?.messageId;
+    }
+    commitScanFrontier(taskId: string, messageId: string): void {
+        this.db.prepare(`INSERT INTO report_scan_frontiers(taskId,messageId) VALUES(?,?)
+            ON CONFLICT(taskId) DO UPDATE SET messageId=excluded.messageId`).run(taskId, messageId);
+    }
+    observe(taskId: string, title: string, result: NativeTaskResult): boolean {
         const receipt = result.delivery;
-        if (!receipt) return;
+        if (!receipt) return false;
         const existing = this.db.prepare('SELECT state FROM reports WHERE id = ?').get(receipt.messageId) as { state: string } | undefined;
-        if (existing && existing.state !== 'observed') return;
+        if (existing && existing.state !== 'observed') return true;
         // Only already-ended pre-enable runs are ignored. In-flight old deliveries are still tracked.
         const state = result.status === 'ended' ? (!existing && Date.parse(receipt.deliveredAt) < this.enabledAt ? 'ignored' : 'pending') : 'observed';
         this.db.prepare(`INSERT INTO reports(id,taskId,title,result,state) VALUES(?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET result=excluded.result, state=excluded.state, title=excluded.title`).run(receipt.messageId, taskId, title, state === 'ignored' ? '{}' : JSON.stringify(result), state);
+        return true;
     }
     observing(): TaskReport[] { return this.rows("SELECT * FROM reports WHERE state = 'observed' ORDER BY rowid"); }
     next(now = Date.now()): TaskReport | undefined {
@@ -239,20 +253,38 @@ export class NativeTaskReporting {
         for (const task of tasks) {
             if (this.closed) return;
             try {
-            let before: string | undefined;
-            const seen = new Set<string>();
-            for (let page = 0; page < 20; page++) {
-                if (this.closed) return;
-                const history = await this.options.service.history(task.id, { limit: 100, ...(before ? { before } : {}) });
-                if ('code' in history) throw new Error('task_report_history_unavailable');
-                for (const receipt of [...history.records].reverse()) {
+                const frontier = this.options.store.scanFrontier(task.id);
+                let before: string | undefined;
+                let newest: string | undefined;
+                let reachedFrontier = false;
+                const seenCursors = new Set<string>();
+                const discovered: ScheduleDeliveryReceipt[] = [];
+                for (let page = 0; page < 20; page++) {
                     if (this.closed) return;
-                    if (!this.options.store.known(receipt.messageId)) this.options.store.observe(task.id, task.title, await this.options.service.getResult(task.id, receipt.messageId));
+                    const history = await this.options.service.history(task.id, { limit: 100, ...(before ? { before } : {}) });
+                    if ('code' in history) throw new Error('task_report_history_unavailable');
+                    if (!newest) newest = history.records[0]?.messageId;
+                    for (const receipt of history.records) {
+                        if (receipt.messageId === frontier) { reachedFrontier = true; break; }
+                        discovered.push(receipt);
+                    }
+                    if (reachedFrontier || !history.nextBefore) break;
+                    if (seenCursors.has(history.nextBefore) || page === 19) throw new Error('task_report_history_incomplete');
+                    seenCursors.add(history.nextBefore);
+                    before = history.nextBefore;
                 }
-                if (!history.nextBefore) break;
-                if (seen.has(history.nextBefore) || page === 19) throw new Error('task_report_history_incomplete');
-                seen.add(history.nextBefore); before = history.nextBefore;
-            }
+                // History is newest-first by durable saved order, independent of wall-clock
+                // movement. Persist results oldest-first, then advance the exact message-id
+                // frontier only after every newly discovered receipt is durable locally.
+                for (const receipt of discovered.reverse()) {
+                    if (this.closed) return;
+                    if (!this.options.store.known(receipt.messageId)) {
+                        const tracked = this.options.store.observe(task.id, task.title,
+                            await this.options.service.getResult(task.id, receipt.messageId));
+                        if (!tracked) throw new Error('task_report_delivery_not_confirmed');
+                    }
+                }
+                if (newest && newest !== frontier) this.options.store.commitScanFrontier(task.id, newest);
             } catch { console.warn('[TaskReporting] Task result discovery incomplete; other tasks remain eligible'); }
         }
     }

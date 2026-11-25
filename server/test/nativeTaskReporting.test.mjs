@@ -189,3 +189,122 @@ test('delivery-specific reconciliation tracks earlier unfinished recurring run i
     assert.equal(reads.filter(id => id === 'earlier').length, 2);
     assert.equal(store.observing().length, 0);
 });
+
+test('persistent frontier scans only new saved-order receipts including equal timestamps', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-report-frontier-'));
+    const filename = path.join(root, 'reports.sqlite');
+    let store = new TaskReportStore(filename, 0);
+    const sameTime = '2026-11-25T00:00:00.000Z';
+    let records = [{ messageId: 'old', deliveredAt: sameTime }];
+    const reads = [];
+    const service = {
+        catalog: async () => [{ id: 'task-1', title: 'daily' }],
+        history: async () => ({ records }),
+        getResult: async (_taskId, messageId) => { reads.push(messageId); return result(messageId, 'ended', sameTime); },
+    };
+    let reporting = new NativeTaskReporting({ store, service, report: async () => false });
+    await reporting.reconcile();
+    assert.equal(store.scanFrontier('task-1'), 'old');
+    await reporting.stop();
+
+    store = new TaskReportStore(filename, 0);
+    records = [{ messageId: 'new-2', deliveredAt: sameTime }, { messageId: 'new-1', deliveredAt: sameTime }, { messageId: 'old', deliveredAt: sameTime }];
+    reporting = new NativeTaskReporting({ store, service, report: async () => false });
+    t.after(async () => { await reporting.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+    await reporting.reconcile();
+    assert.deepEqual(reads, ['old', 'new-1', 'new-2']);
+    assert.equal(store.scanFrontier('task-1'), 'new-2');
+    await reporting.reconcile();
+    assert.deepEqual(reads, ['old', 'new-1', 'new-2']);
+});
+
+test('frontier crosses pages and is not committed before every new receipt is durable', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-report-frontier-retry-'));
+    const filename = path.join(root, 'reports.sqlite');
+    let store = new TaskReportStore(filename, 0);
+    let phase = 'seed';
+    let fail = true;
+    const calls = [];
+    const service = {
+        catalog: async () => [{ id: 'task-1', title: 'daily' }],
+        history: async (_id, options) => {
+            calls.push(['history', options.before]);
+            if (phase === 'seed') return { records: [{ messageId: 'old' }] };
+            return options.before
+                ? { records: [{ messageId: 'new-1' }, { messageId: 'old' }] }
+                : { records: [{ messageId: 'new-2' }], nextBefore: 'new-2' };
+        },
+        getResult: async (_taskId, messageId) => {
+            calls.push(['result', messageId]);
+            if (messageId === 'new-1' && fail) throw new Error('temporary disconnect');
+            return result(messageId);
+        },
+    };
+    let reporting = new NativeTaskReporting({ store, service, report: async () => false });
+    await reporting.reconcile();
+    assert.equal(store.scanFrontier('task-1'), 'old');
+    phase = 'new';
+    await reporting.reconcile();
+    assert.equal(store.scanFrontier('task-1'), 'old');
+    await reporting.stop();
+
+    fail = false;
+    store = new TaskReportStore(filename, 0);
+    reporting = new NativeTaskReporting({ store, service, report: async () => false });
+    t.after(async () => { await reporting.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+    await reporting.reconcile();
+    assert.equal(store.scanFrontier('task-1'), 'new-2');
+    assert.ok(store.known('new-1'));
+    assert.ok(store.known('new-2'));
+    const before = calls.length;
+    await reporting.reconcile();
+    assert.deepEqual(calls.slice(before), [['history', undefined]]);
+});
+
+test('a pruned frontier rebuilds from the complete retained history window', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-report-pruned-frontier-'));
+    const store = new TaskReportStore(path.join(root, 'reports.sqlite'), 0);
+    store.commitScanFrontier('task-1', 'pruned');
+    const reads = [];
+    const reporting = new NativeTaskReporting({ store, service: {
+        catalog: async () => [{ id: 'task-1', title: 'daily' }],
+        history: async (_id, options) => options.before
+            ? { records: [{ messageId: 'retained-1' }] }
+            : { records: [{ messageId: 'retained-2' }], nextBefore: 'retained-2' },
+        getResult: async (_taskId, messageId) => { reads.push(messageId); return result(messageId); },
+    }, report: async () => false });
+    t.after(async () => { await reporting.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+
+    await reporting.reconcile();
+    assert.deepEqual(reads, ['retained-1', 'retained-2']);
+    assert.equal(store.scanFrontier('task-1'), 'retained-2');
+    await reporting.reconcile();
+    assert.deepEqual(reads, ['retained-1', 'retained-2']);
+});
+
+test('persisted inbox receipt is observed without replay and reports only after real turn end', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lvtian-report-queued-receipt-'));
+    const filename = path.join(root, 'reports.sqlite');
+    let store = new TaskReportStore(filename, 0);
+    let ended = false;
+    let resultReads = 0;
+    const service = {
+        catalog: async () => [{ id: 'task-1', title: 'side effect task' }],
+        history: async () => ({ records: [{ messageId: 'receipt' }] }),
+        getResult: async () => { resultReads++; return result('receipt', ended ? 'ended' : 'unknown'); },
+    };
+    let reporting = new NativeTaskReporting({ store, service, report: async () => assert.fail('queued receipt is not completion') });
+    await reporting.reconcile();
+    assert.equal(store.scanFrontier('task-1'), 'receipt');
+    assert.deepEqual(store.observing().map(row => row.id), ['receipt']);
+    assert.equal(store.next(), undefined);
+    await reporting.stop();
+
+    ended = true;
+    store = new TaskReportStore(filename, 0);
+    reporting = new NativeTaskReporting({ store, service, report: async () => false });
+    t.after(async () => { await reporting.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+    await reporting.reconcile();
+    assert.equal(store.next().id, 'receipt');
+    assert.equal(resultReads, 2);
+});

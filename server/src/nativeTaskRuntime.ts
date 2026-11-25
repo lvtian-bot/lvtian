@@ -48,6 +48,16 @@ export class NativeTaskRuntime {
         catch (error) { this.scheduleRecovery(); throw error; }
     }
 
+    /** Authenticated local status probe only; it never runs or replays a task. */
+    async status(): Promise<{ enabled: true; available: boolean }> {
+        try {
+            await (await this.getClient()).catalog();
+            return { enabled: true, available: true };
+        } catch {
+            return { enabled: true, available: false };
+        }
+    }
+
     private scheduleRecovery(): void {
         if (this.closed || this.retry) return;
         this.retry = setTimeout(() => {
