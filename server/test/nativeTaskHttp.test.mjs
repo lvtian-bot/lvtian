@@ -22,7 +22,9 @@ async function fixture(runtime) {
   return { server, request };
 }
 
-const fakeRuntime = service => ({ service, start: async () => {}, stop: async () => {} });
+const fakeRuntime = (service, status = async () => ({ enabled: true, available: true })) => ({
+  service, status, start: async () => {}, stop: async () => {},
+});
 
 test('existing bearer authorization runs before task API and disabled feature is explicit', async () => {
   const { server, request } = await fixture(undefined);
@@ -31,6 +33,20 @@ test('existing bearer authorization runs before task API and disabled feature is
     const response = await request('/api/tasks');
     assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), { code: 'native_tasks_unavailable' });
+  } finally { await server.stop(); }
+});
+
+test('authenticated runtime status reports installed DSH and host availability without changing public health', async () => {
+  const { server, request } = await fixture(fakeRuntime({}, async () => ({ enabled: true, available: true })));
+  try {
+    const health = await fetch(`http://127.0.0.1:${server.httpServer.address().port}/health`);
+    assert.deepEqual(await health.json(), { status: 'ok', version: '0.1.0', assistantName: 'Test' });
+    assert.equal((await request('/api/runtime-status', { headers: { Authorization: '' } })).status, 401);
+    const response = await request('/api/runtime-status');
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      dshVersion: '0.2.2-rc.5', nativeTasks: { enabled: true, available: true },
+    });
   } finally { await server.stop(); }
 });
 

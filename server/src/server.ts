@@ -41,6 +41,7 @@ import {
 
 const require = createRequire(import.meta.url);
 const WS = require('ws');
+const DSH_RUNTIME_VERSION = (require('@deepseek-ai/dsh/package.json') as { version: string }).version;
 
 // 保存端点传输上限：内容解码后上限为 5MB（saveFileContent 中的权威限制），
 // JSON 序列化最坏情况下单个字符会膨胀至 6 字节（\uXXXX 转义），
@@ -109,7 +110,8 @@ export class LvtianServer {
         acpEngine: AcpEngineManager,
         fileManager?: FileManager,
         contextConsolidator?: ContextConsolidator,
-        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'> & Partial<Pick<NativeTaskRuntime, 'watchChanges'>>,
+        private readonly nativeTasks?: Pick<NativeTaskRuntime, 'service' | 'start' | 'stop'>
+            & Partial<Pick<NativeTaskRuntime, 'watchChanges' | 'status'>>,
         skillManager?: SkillManager,
         googleCalendar?: GoogleCalendarConnector,
         private readonly chatSyncPush: ChatSyncPush | undefined = createChatSyncPush(config.dataDir),
@@ -331,6 +333,16 @@ export class LvtianServer {
                     permissionMode: getDshPermissionMode(this.config.dshProfileDir),
                 })
             );
+            return;
+        }
+
+        // Authenticated runtime facts. Keep public /health stable and never expose host credentials.
+        if (pathname === '/api/runtime-status' && req.method === 'GET') {
+            const nativeTasks = this.nativeTasks
+                ? await this.nativeTasks.status?.() ?? { enabled: true, available: false }
+                : { enabled: false, available: false };
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify({ dshVersion: DSH_RUNTIME_VERSION, nativeTasks }));
             return;
         }
 

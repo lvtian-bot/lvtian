@@ -18,10 +18,26 @@ test('starts proactively, reuses checked connection, and disposes client before 
   runtime.host.stop = async () => { order.push('stop-host'); };
   t.mock.method(NativeTaskClient, 'connect', async () => ({ catalog: async () => [], dispose: async () => { order.push('dispose-client'); } }));
   await runtime.start();
+  assert.deepEqual(await runtime.status(), { enabled: true, available: true });
   await runtime.service.catalog();
   await runtime.stop();
   assert.deepEqual(order, ['start-host', 'dispose-client', 'stop-host']);
   await assert.rejects(runtime.start(), /native_tasks_stopped/);
+});
+
+test('status reports an unavailable host without running or replaying task operations', async t => {
+  const runtime = await runtimeFixture();
+  runtime.host.start = async () => ({ origin: 'http://127.0.0.1:3100', token: 'fixture-token' });
+  runtime.host.stop = async () => {};
+  let catalogCalls = 0;
+  t.mock.method(NativeTaskClient, 'connect', async () => ({
+    catalog: async () => { catalogCalls++; throw new Error('offline'); },
+    dispose: async () => {},
+  }));
+  try {
+    assert.deepEqual(await runtime.status(), { enabled: true, available: false });
+    assert.equal(catalogCalls, 1);
+  } finally { await runtime.stop(); }
 });
 
 test('recovers an exited native host without a phone query or replaying task creation', { timeout: 3000 }, async t => {
