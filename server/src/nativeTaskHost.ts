@@ -17,12 +17,25 @@ export interface NativeTaskHostOptions {
     /** Existing controlled model environment; values are never written to disk. */
     modelEnvironment?: Readonly<Record<string, string>>;
     launcher?: string;
+    runner?: string;
+    migrationTimeoutMs?: number;
     startupTimeoutMs?: number;
     stopTimeoutMs?: number;
     onUnexpectedExit?: () => void;
 }
 
-const managedOverlay = '- id: session-log-deepseek\n  disabled: true\n- id: session-telemetry-otel\n  disabled: true\n';
+const legacyManagedOverlay = '- id: session-log-deepseek\n  disabled: true\n- id: session-telemetry-otel\n  disabled: true\n';
+const migrationCompleteMarker = 'LVTIAN_NATIVE_TASK_MIGRATION_COMPLETE';
+
+function managedOverlay(storageRoot: string, sessionsRoot: string): string {
+    return `- id: session-log-deepseek\n  disabled: true\n- id: session-telemetry-otel\n  disabled: true\n- id: storage-json\n  config:\n    root: ${JSON.stringify(storageRoot)}\n- id: session-persistence-jsonl\n  config:\n    root: ${JSON.stringify(sessionsRoot)}\n`;
+}
+
+async function replaceManagedOverlay(target: string, content: string): Promise<void> {
+    const temporary = `${target}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, content, { mode: 0o600 });
+    await fs.rename(temporary, target);
+}
 
 /** Owns only a native Harness process. It never computes a task's execution time. */
 export class NativeTaskHost {
@@ -46,17 +59,27 @@ export class NativeTaskHost {
         const root = path.resolve(this.options.root);
         const home = path.join(root, 'home');
         const agents = path.join(root, 'agents');
+        const workspaceData = path.join(path.resolve(this.options.workspace), '.lvtian', 'native-tasks');
+        const storageRoot = path.join(workspaceData, 'storages');
+        const sessionsRoot = path.join(workspaceData, 'sessions');
         await fs.mkdir(root, { recursive: true, mode: 0o700 });
         await fs.mkdir(agents, { recursive: true, mode: 0o700 });
         try {
             const overlay = path.join(root, 'managed-host.patch.yml');
-            try { await fs.writeFile(overlay, managedOverlay, { flag: 'wx', mode: 0o600 }); }
+            const overlayContent = managedOverlay(storageRoot, sessionsRoot);
+            try { await fs.writeFile(overlay, overlayContent, { flag: 'wx', mode: 0o600 }); }
             catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-                if (await fs.readFile(overlay, 'utf8') !== managedOverlay) throw new Error('native_host_overlay_conflict');
+                const existing = await fs.readFile(overlay, 'utf8');
+                if (existing === legacyManagedOverlay) {
+                    await replaceManagedOverlay(overlay, overlayContent);
+                } else if (existing !== overlayContent) {
+                    throw new Error('native_host_overlay_conflict');
+                }
             }
             const launcher = this.options.launcher ?? path.join(path.dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')), 'lib', 'bin.js');
-            const runner = fileURLToPath(new URL('./nativeTaskHostRunner.js', import.meta.url));
+            const runner = this.options.runner ?? fileURLToPath(new URL('./nativeTaskHostRunner.js', import.meta.url));
+            await fs.mkdir(workspaceData, { recursive: true, mode: 0o700 });
             const env: NodeJS.ProcessEnv = {
                 PATH: process.env.PATH,
                 HOME: process.env.HOME,
@@ -68,7 +91,15 @@ export class NativeTaskHost {
                 DSH_HOME: home,
                 DSH_AGENTS_HOME: agents,
             };
-            const child = spawn(process.execPath, [runner, path.join(root, 'host-lease.sqlite'), launcher, '--profile', 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
+            const migration = JSON.stringify({
+                storageSource: path.join(home, 'storages'),
+                storageTarget: storageRoot,
+                storageState: path.join(root, 'storage-workspace-migration.json'),
+                sessionsSource: path.join(home, 'sessions'),
+                sessionsTarget: sessionsRoot,
+                sessionsState: path.join(root, 'sessions-workspace-migration.json'),
+            });
+            const child = spawn(process.execPath, [runner, path.join(workspaceData, 'host-lease.sqlite'), migration, launcher, '--profile', 'web', '--patch', overlay, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
                 cwd: this.options.workspace, env, stdio: ['pipe', 'pipe', 'pipe'],
             });
             this.child = child;
@@ -85,14 +116,40 @@ export class NativeTaskHost {
                 // must never terminate a partial startup URL from the other.
                 const buffers = new Map<NodeJS.ReadableStream, string>();
                 let settled = false;
-                const timer = setTimeout(() => reject(new Error('native_host_startup_timeout')), this.options.startupTimeoutMs ?? 30000);
+                let migrationReady = false;
+                let migrationTimer: ReturnType<typeof setTimeout> | undefined;
+                let startupTimer: ReturnType<typeof setTimeout> | undefined;
                 const settle = (result?: NativeTaskHostEndpoint, error?: Error) => {
                     if (settled) return;
                     settled = true;
                     buffers.clear();
-                    clearTimeout(timer);
+                    if (migrationTimer) clearTimeout(migrationTimer);
+                    if (startupTimer) clearTimeout(startupTimer);
                     if (error) reject(error);
                     else if (result) resolve(result);
+                };
+                const findEndpoint = (): NativeTaskHostEndpoint | undefined => {
+                    if (!migrationReady) return undefined;
+                    for (const buffer of buffers.values()) {
+                        const match = buffer.match(/http:\/\/127\.0\.0\.1:(\d+)\/?\?token=([A-Za-z0-9_-]+)(?=[^A-Za-z0-9_-])/);
+                        if (match) return { origin: `http://127.0.0.1:${match[1]}`, token: match[2] };
+                    }
+                    return undefined;
+                };
+                migrationTimer = setTimeout(
+                    () => settle(undefined, new Error('native_host_migration_timeout')),
+                    this.options.migrationTimeoutMs ?? 30 * 60 * 1000,
+                );
+                const markMigrationReady = () => {
+                    if (migrationReady) return;
+                    migrationReady = true;
+                    if (migrationTimer) clearTimeout(migrationTimer);
+                    startupTimer = setTimeout(
+                        () => settle(undefined, new Error('native_host_startup_timeout')),
+                        this.options.startupTimeoutMs ?? 30000,
+                    );
+                    const detectedEndpoint = findEndpoint();
+                    if (detectedEndpoint) settle(detectedEndpoint);
                 };
                 child.once('error', () => settle(undefined, new Error('native_host_spawn_failed')));
                 child.once('exit', () => settle(undefined, new Error('native_host_exited')));
@@ -101,8 +158,9 @@ export class NativeTaskHost {
                     // Keep startup credentials in memory only; discard other host diagnostics.
                     const buffer = ((buffers.get(stream) ?? '') + chunk.toString('utf8')).slice(-65536);
                     buffers.set(stream, buffer);
-                    const match = buffer.match(/http:\/\/127\.0\.0\.1:(\d+)\/?\?token=([A-Za-z0-9_-]+)(?=[^A-Za-z0-9_-])/);
-                    if (match) settle({ origin: `http://127.0.0.1:${match[1]}`, token: match[2] });
+                    if (buffer.includes(migrationCompleteMarker)) markMigrationReady();
+                    const detectedEndpoint = findEndpoint();
+                    if (detectedEndpoint) settle(detectedEndpoint);
                 });
             });
             this.endpoint = endpoint;
