@@ -52,6 +52,17 @@
             /* Extra padding at bottom for easy scrolling on mobile */
         }
 
+
+        .flash-note-editor .cm-editor {
+            height: min(100%, var(--flash-editor-viewport-height, 100%));
+        }
+
+        .flash-note-editor .cm-content {
+            flex: 1 0 auto !important;
+            min-height: 0 !important;
+            padding-bottom: 24px !important;
+        }
+
         /* Basic Markdown Styling */
         .cm-content {
             font-family: sans-serif;

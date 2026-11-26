@@ -12,12 +12,9 @@ import { StyleSheet, StatusBar, DeviceEventEmitter } from 'react-native';
 import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
 
-import { useShareStore } from './src/store/useShareStore';
 import { ChatNotificationTarget, RootStackParamList } from './src/types/navigation';
-import { SHARE_RECEIVED_EVENT, flashNoteService } from './src/services/FlashNoteService';
 import { startChatNotifications } from './src/services/chatNotifications';
 import { startChatBackgroundPush } from './src/services/chatBackgroundPush';
-import { FlashNoteInputModal } from './src/components/FlashNoteInputModal'; // Global Modal
 
 
 // Create navigation ref for programmatic navigation
@@ -40,9 +37,22 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
     target => { pendingReply.current = target; openPendingReply(); },
   ), [openPendingReply]);
 
-  // Global Modal State
-  const [isGlobalModalVisible, setIsGlobalModalVisible] = React.useState(false);
-  const [globalShareContent, setGlobalShareContent] = React.useState<string>('');
+  const pendingShares = useRef<string[]>([]);
+  const openPendingShare = useCallback(() => {
+    if (!navigationRef.isReady() || navigationRef.getCurrentRoute()?.name === 'FlashNoteEditor') return;
+    const sharedText = pendingShares.current.shift();
+    if (sharedText === undefined) return;
+    navigationRef.navigate('FlashNoteEditor', {
+      flashNoteId: 'new',
+      initialContent: sharedText,
+      fromShare: true,
+    });
+  }, []);
+  const handleNavigationReady = useCallback(() => {
+    openPendingReply();
+    openPendingShare();
+  }, [openPendingReply, openPendingShare]);
+
   // Logic to initialize cloud service based on settings
   const { webDavConfig, cloudProvider, hasHydrated } = useSettingsStore();
 
@@ -60,46 +70,19 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
     initializeCloud();
   }, [webDavConfig, cloudProvider, hasHydrated]);
 
-  // Shared handler for processing shared content
-  const handleSharedContent = React.useCallback(async (sharedText: string) => {
-    console.log('[App] handleSharedContent triggered. Content length:', sharedText?.length);
-    console.log('[App] Content preview:', sharedText?.substring(0, 20));
+  const handleSharedContent = useCallback((sharedText: unknown) => {
+    if (typeof sharedText !== 'string' || !sharedText.trim()) return;
+    pendingShares.current.push(sharedText);
+    openPendingShare();
+  }, [openPendingShare]);
 
-    // Store the pending share content
-    useShareStore.getState().setPendingShare(sharedText);
-
-    // Show Global Modal immediately
-    console.log('[App] Setting global modal visible');
-    setGlobalShareContent(sharedText);
-    setIsGlobalModalVisible(true);
-
-    // Also emit event just in case other components need to know (optional)
-    DeviceEventEmitter.emit(SHARE_RECEIVED_EVENT, { content: sharedText });
-  }, []);
-
-
-  // Handle Initial Share (Cold Start)
   useEffect(() => {
-    if (props.sharedText) {
-      console.log('[App] Cold start with sharedText prop:', props.sharedText?.substring(0, 20));
-      handleSharedContent(props.sharedText);
-    } else {
-      console.log('[App] Cold start check: No sharedText prop found.');
-    }
+    handleSharedContent(props.sharedText);
   }, [props.sharedText, handleSharedContent]);
 
-  // Share Intent Handler (Warm Start)
   useEffect(() => {
-    console.log('[App] Setting up onShareReceived listener');
-    const subscription = DeviceEventEmitter.addListener('onShareReceived', (content) => {
-      console.log('[App] Event onShareReceived captured!');
-      handleSharedContent(content);
-    });
-
-    return () => {
-        console.log('[App] Removing onShareReceived listener');
-        subscription.remove();
-    };
+    const subscription = DeviceEventEmitter.addListener('onShareReceived', handleSharedContent);
+    return () => subscription.remove();
   }, [handleSharedContent]);
 
   if (!hasHydrated) {
@@ -112,35 +95,10 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
         {/* edge-to-edge 下状态栏透明，底色由各页头部背景透出 */}
         <StatusBar barStyle="dark-content" />
         <SafeAreaProvider>
-          <NavigationContainer ref={navigationRef} onReady={openPendingReply}>
+          <NavigationContainer ref={navigationRef} onReady={handleNavigationReady} onStateChange={openPendingShare}>
             <AppNavigator />
           </NavigationContainer>
 
-          {/* Global Share Input Modal */}
-          <FlashNoteInputModal
-            visible={isGlobalModalVisible}
-            initialContent={globalShareContent}
-            onSave={async (id, content) => {
-              try {
-                // Determine if it should be saved as Note or Todo based on some heuristic? 
-                // For now, default to Note as per request "Flash Note Dialog"
-                await flashNoteService.addNote(content);
-                // Also notify list to refresh
-                DeviceEventEmitter.emit(SHARE_RECEIVED_EVENT, { content: '' }); // Hack to trigger refresh if listener exists, or usually FLASH_NOTES_UPDATED_EVENT is better
-              } catch (e) {
-                console.error("Failed to save shared note", e);
-              } finally {
-                setIsGlobalModalVisible(false);
-                setGlobalShareContent('');
-                useShareStore.getState().clearPendingShare();
-              }
-            }}
-            onCancel={() => {
-              setIsGlobalModalVisible(false);
-              setGlobalShareContent('');
-              useShareStore.getState().clearPendingShare();
-            }}
-          />
         </SafeAreaProvider>
       </KeyboardProvider>
     </GestureHandlerRootView>
