@@ -9,7 +9,6 @@ import { useTranslation } from 'react-i18next';
 import { useFileMetadataStore } from '../store/useFileMetadataStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics } from '../utils/fontSize';
-import { FlashNoteInputModal } from '../components/FlashNoteInputModal';
 import { flashNoteService, FlashNote } from '../services/FlashNoteService';
 import { ActionSheetModal, ActionItem } from '../components/ActionSheetModal';
 
@@ -38,8 +37,6 @@ export const FlashScreen = () => {
         handleRefresh,
         refreshLoadedData,
         removeLocalById,
-        prependLocal,
-        updateLocalById,
         syncStatus,
         conflictType,
         isSyncing,
@@ -52,10 +49,6 @@ export const FlashScreen = () => {
         // enableAutoCheck: true, // Removed
         sorter: (a, b) => b.timestamp.localeCompare(a.timestamp)
     });
-
-    const [isModalVisible, setIsModalVisible] = useState(false);
-    const [editingNoteId, setEditingNoteId] = useState<string | undefined>(undefined);
-    const [editingNoteContent, setEditingNoteContent] = useState<string | undefined>(undefined);
 
     // ActionSheet state
     const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
@@ -95,50 +88,11 @@ export const FlashScreen = () => {
     // -- Action Handlers --
 
     const handleEditNote = (note: FlashNote) => {
-        // Direct jump to Editor for existing notes
-        navigation.navigate('Editor', {
-            filePath: 'flash_note.md', // Dummy path
+        navigation.navigate('FlashNoteEditor', {
             flashNoteId: note.id,
-            initialContent: note.content.trim()
+            noteFilePath: note.filePath,
+            initialContent: note.content,
         });
-    };
-
-    const handleSaveFlashNote = async (id: string | undefined, content: string) => {
-        setIsModalVisible(false);
-        try {
-            if (id) {
-                const updated = await flashNoteService.updateNote(id, content);
-                updateLocalById(id, updated);
-            } else {
-                const created = await flashNoteService.addNote(content);
-                if (created) prependLocal(created);
-            }
-        } catch (error) {
-            console.error('Failed to save flash note', error);
-            Alert.alert(t('common.error'), t('timeline.saveError'));
-            refreshLoadedData();
-        }
-    };
-
-    const handleCancelFlashNote = () => {
-        setIsModalVisible(false);
-        setEditingNoteId(undefined);
-        setEditingNoteContent(undefined);
-    };
-
-    const handleExpandFlashNote = (content: string) => {
-        setIsModalVisible(false);
-        // Navigate to Editor Screen with content mode
-        // Note: filePath is dummy but required by types, flashNoteId triggers the mode
-        navigation.navigate('Editor', {
-            filePath: 'flash_note.md',
-            flashNoteId: editingNoteId || 'new',
-            initialContent: content
-        });
-
-        // Reset local state as we offloaded to Editor
-        setEditingNoteId(undefined);
-        setEditingNoteContent(undefined);
     };
 
     const handleDeleteFlashNote = async (noteToDelete: FlashNote) => {
@@ -261,16 +215,7 @@ export const FlashScreen = () => {
 
             <FabButton
                 icon="flash-on"
-                onPress={() => { setEditingNoteId(undefined); setEditingNoteContent(undefined); setIsModalVisible(true); }}
-            />
-
-            <FlashNoteInputModal
-                visible={isModalVisible}
-                initialId={editingNoteId}
-                initialContent={editingNoteContent}
-                onSave={handleSaveFlashNote}
-                onCancel={handleCancelFlashNote}
-                onExpand={handleExpandFlashNote}
+                onPress={() => navigation.navigate('FlashNoteEditor', { flashNoteId: 'new' })}
             />
 
             <ActionSheetModal

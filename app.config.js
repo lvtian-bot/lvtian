@@ -163,14 +163,14 @@ module.exports = {
         ios: {
             supportsTablet: true,
             bundleIdentifier: "com.lvtian",
-            buildNumber: "25"
+            buildNumber: "26"
         },
         android: {
             package: "com.lvtian",
             ...(process.env.LVTIAN_GOOGLE_SERVICES_FILE && {
                 googleServicesFile: process.env.LVTIAN_GOOGLE_SERVICES_FILE,
             }),
-            versionCode: 25,
+            versionCode: 26,
             enableProGuardInReleaseBuilds: true,
             adaptiveIcon: {
                 foregroundImage: "./assets/adaptive-icon.png",

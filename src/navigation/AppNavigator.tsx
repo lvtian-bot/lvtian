@@ -27,6 +27,7 @@ export const AppNavigator = () => {
             <Stack.Screen name="MainTabs" component={TabNavigator} options={{ headerShown: false }} />
             <Stack.Screen name="Preview" component={PreviewScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Editor" component={EditorScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="FlashNoteEditor" component={EditorScreen} options={{ headerShown: false }} />
             {/* 云端仓库配置二级页面 */}
             <Stack.Screen
                 name="CloudRepoConfig"
