@@ -7,8 +7,10 @@ import {
     StyleSheet,
     Platform,
     Alert,
+    Keyboard,
     KeyboardAvoidingView,
     useWindowDimensions,
+    type LayoutChangeEvent,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import Icon from '@expo/vector-icons/MaterialIcons';
@@ -26,13 +28,19 @@ interface FlashNoteInputModalProps {
     onExpand?: (content: string) => void;
 }
 
-const MIN_INPUT_LINES = 2;
-const MAX_INPUT_LINES = 6;
+const MIN_INPUT_LINES = 8;
+const MAX_INPUT_LINES = 10;
 const INPUT_VERTICAL_PADDING = 3;
 const ACTION_SIZE = 44;
 
 const FLASH_NOTE_DRAFT_NEW = 'flash_note_draft_new';
 const FLASH_NOTE_DRAFT_EDIT_PREFIX = 'flash_note_draft_edit_';
+
+interface AndroidModalLayout {
+    width: number;
+    height: number;
+    largestHeight: number;
+}
 
 export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     visible,
@@ -45,6 +53,8 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const { t } = useTranslation();
     const [inputText, setInputText] = useState(initialContent || '');
     const [inputMeasuredHeight, setInputMeasuredHeight] = useState(0);
+    const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+    const [androidModalLayout, setAndroidModalLayout] = useState<AndroidModalLayout>();
     const fontSize = useSettingsStore(state => state.fontSize);
     const { flashBody, flashLineHeight } = getFontSizeMetrics(fontSize);
     const { fontScale } = useWindowDimensions();
@@ -57,6 +67,37 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
     const maxInputHeight = MAX_INPUT_LINES * scaledLineHeight + INPUT_VERTICAL_PADDING * 2;
     const inputHeight = Math.max(minInputHeight, Math.min(inputMeasuredHeight, maxInputHeight));
     const canSave = inputText.trim().length > 0;
+    const isAndroid = Platform.OS === 'android';
+    const nativeResize = androidModalLayout ? androidModalLayout.largestHeight - androidModalLayout.height : 0;
+    const androidBottomPadding = Math.max(0, androidKeyboardHeight - nativeResize);
+
+    useEffect(() => {
+        if (!isAndroid) return;
+        if (!visible) {
+            setAndroidKeyboardHeight(0);
+            setAndroidModalLayout(undefined);
+            return;
+        }
+
+        const show = Keyboard.addListener('keyboardDidShow', event => {
+            setAndroidKeyboardHeight(event.endCoordinates.height);
+        });
+        const hide = Keyboard.addListener('keyboardDidHide', () => setAndroidKeyboardHeight(0));
+        setAndroidKeyboardHeight(Keyboard.metrics()?.height ?? 0);
+        return () => {
+            show.remove();
+            hide.remove();
+        };
+    }, [isAndroid, visible]);
+
+    const handleAndroidLayout = ({ nativeEvent: { layout: { width, height } } }: LayoutChangeEvent) => {
+        // 保留键盘弹出前的高度。Android 可能先缩小弹窗，再发出键盘显示事件。
+        setAndroidModalLayout(previous => ({
+            width,
+            height,
+            largestHeight: previous?.width === width ? Math.max(previous.largestHeight, height) : height,
+        }));
+    };
 
     // Load draft when modal becomes visible
     useEffect(() => {
@@ -199,8 +240,10 @@ export const FlashNoteInputModal: React.FC<FlashNoteInputModalProps> = ({
             }}
         >
             <KeyboardAvoidingView
-                style={styles.keyboardAvoidingView}
+                style={[styles.keyboardAvoidingView, isAndroid && { paddingBottom: androidBottomPadding }]}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                enabled={!isAndroid}
+                onLayout={isAndroid ? handleAndroidLayout : undefined}
             >
                 <TouchableOpacity
                     style={styles.overlay}
