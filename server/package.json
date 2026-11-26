@@ -27,13 +27,22 @@
     "@deepseek-ai/dsh-llm": "0.2.2-rc.5",
     "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.5",
     "firebase-admin": "^14.5.1",
-    "i18next": "^25.10.10",
-    "ws": "^8.18.0",
+    "i18next": "^27.2.9",
+    "ws": "^8.23.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/ws": "^8.5.10",
-    "typescript": "^5.0.0"
+    "@types/node": "^22.20.7",
+    "@types/ws": "^8.18.2",
+    "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "@deepseek-ai/dsh-mcp-client": {
+      "@modelcontextprotocol/client": "^2.4.0"
+    },
+    "@deepseek-ai/libreoffice-kit": {
+      "fflate": "^0.8.3"
+    },
+    "undici@8.11.2": "^8.13.1"
   }
 }

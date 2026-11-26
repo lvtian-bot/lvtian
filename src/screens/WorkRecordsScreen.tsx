@@ -10,6 +10,7 @@ import {
     View,
 } from 'react-native';
 import Icon from '@expo/vector-icons/MaterialIcons';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -28,7 +29,7 @@ const turnTime = (turn: ChatTurn, language: string) => formatChatTime(
     language,
 );
 
-const statusLabel = (turn: ChatTurn, t: (key: string, options?: Record<string, unknown>) => string) => turn.status === 'running'
+const statusLabel = (turn: ChatTurn, t: TFunction) => turn.status === 'running'
     ? t('workRecords.running', { defaultValue: '进行中' })
     : turn.status === 'error'
         ? t('workRecords.failed', { defaultValue: '未完成' })
