@@ -918,6 +918,7 @@ test('DSH 引擎真实端到端集成：验证 DshConfigManager 写入的规范�
                 stdio: ['pipe', 'pipe', 'pipe'],
             }
         );
+        const childClosed = new Promise((resolve) => child.once('close', resolve));
 
         const app = acp.client({ name: 'test-e2e-client' });
         const stdinWeb = Writable.toWeb(child.stdin);
@@ -939,7 +940,8 @@ test('DSH 引擎真实端到端集成：验证 DshConfigManager 写入的规范�
         }
 
         child.kill('SIGTERM');
-        await run.catch(() => {});
+        // ACP can disconnect before DSH finishes flushing its session files.
+        await Promise.all([run.catch(() => {}), childClosed]);
 
         assert.ok(sessResult && sessResult.sessionId, 'DSH 应成功创建新会话');
 
