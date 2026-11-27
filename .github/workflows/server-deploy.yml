@@ -33,6 +33,10 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v7
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
       - name: 生产环境部署安全门禁（核验合并与检查）
         id: verify
         env:

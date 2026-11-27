@@ -9,7 +9,6 @@ import * as Network from 'expo-network';
 import { recordOperation } from './operationDiagnostics';
 import {
     FLASH_NOTES_UPDATED_EVENT,
-    SHARE_RECEIVED_EVENT,
     BATCH_SYNC_STATUS_CHANGED_EVENT
 } from '../constants/events';
 
@@ -20,10 +19,14 @@ export interface FlashNote {
     filePath: string; // Added source file path
 }
 
-const HEADER_REGEX = /^(#{1,2})\s+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
+const HEADER_REGEX = /^(#{1,2})[ \t]+(20\d{2}[-/]\d{1,2}[-/]\d{1,2}.*)/;
+const NOTE_HEADERS = new RegExp(HEADER_REGEX.source, 'gm');
+// 去掉外围空行，并保留 Markdown 首行缩进和正文空格。
+const trimBlankLines = (markdown: string): string =>
+    markdown.replace(/^(?:[^\S\n]*\n)+|(?:\n[^\S\n]*)+$/g, '');
 
 // Re-export events for backward compatibility
-export { FLASH_NOTES_UPDATED_EVENT, SHARE_RECEIVED_EVENT, BATCH_SYNC_STATUS_CHANGED_EVENT };
+export { FLASH_NOTES_UPDATED_EVENT, BATCH_SYNC_STATUS_CHANGED_EVENT };
 
 // Updated event payload type
 export interface BatchSyncStatusPayload {
@@ -131,8 +134,8 @@ class FlashNoteService {
     }
 
     async addNote(content: string): Promise<FlashNote | null> {
-        const trimmedInput = content.trim();
-        if (!trimmedInput) return null;
+        if (!content.trim()) return null;
+        const trimmedInput = trimBlankLines(content);
 
         const filePath = this.getFlashNotePath();
         let currentContent = '';
@@ -162,32 +165,23 @@ class FlashNoteService {
         };
     }
 
-    async updateNote(id: string, newText: string): Promise<FlashNote> {
-        const filePath = this.getFlashNotePath();
+    async updateNote(id: string, newText: string, filePath = this.getFlashNotePath()): Promise<FlashNote> {
         const currentContent = await fsService.readFile(filePath);
+        const content = trimBlankLines(newText);
+        const headers = Array.from(currentContent.matchAll(NOTE_HEADERS));
+        const noteIndex = headers.findIndex(header => header[2].trim() === id);
+        if (noteIndex < 0) throw new Error('Note not found');
 
-        const noteBlocks = currentContent.split(/(?=^##\s)/m).filter(b => b.trim());
-        let noteFound = false;
+        const header = headers[noteIndex];
+        const end = headers[noteIndex + 1]?.index ?? currentContent.length;
+        const block = currentContent.slice(header.index, end);
+        const separator = block.match(/\n(?:[ \t\r]*\n)*$/)?.[0] ?? '\n';
+        const updated = currentContent.slice(0, header.index)
+            + `${header[0]}\n${content}${separator}`
+            + currentContent.slice(end);
+        await this.saveAndSync(filePath, updated);
 
-        const newBlocks = noteBlocks.map(block => {
-            if (block.trim().startsWith(`## ${id}`)) {
-                noteFound = true;
-                return `## ${id}\n${newText.trim()}\n`;
-            }
-            return block;
-        });
-
-        if (noteFound) {
-            await this.saveAndSync(filePath, newBlocks.join(''));
-            return {
-                id,
-                timestamp: id,
-                content: newText.trim(),
-                filePath,
-            };
-        } else {
-            throw new Error('Note not found');
-        }
+        return { id, timestamp: id, content, filePath };
     }
 
     async deleteNote(noteId: string): Promise<void> {

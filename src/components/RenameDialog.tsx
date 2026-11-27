@@ -9,7 +9,7 @@ import {
     KeyboardAvoidingView,
     Platform,
 } from 'react-native';
-import { theme } from '../utils/theme';
+import { textInputColors, theme } from '../utils/theme';
 import { useTranslation } from 'react-i18next';
 import { useSettingsFont } from './settings';
 
@@ -64,6 +64,7 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
                     <Text style={[styles.title, { fontSize: font.chatHeading2 }]}>{t('common.rename')}</Text>
 
                     <TextInput
+                        {...textInputColors}
                         ref={inputRef}
                         style={[styles.input, { fontSize: font.chatBody }]}
                         value={newName}

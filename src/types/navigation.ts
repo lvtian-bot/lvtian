@@ -20,7 +20,8 @@ export type ChatStackParamList = {
 export type RootStackParamList = {
     MainTabs: NavigatorScreenParams<MainTabParamList>;
     Preview: { filePath: string; source?: 'server' | 'webdav' | 'local'; title?: string };
-    Editor: { filePath: string; source?: 'server' | 'webdav' | 'local'; flashNoteId?: string; initialContent?: string; title?: string; expectedMtime?: number };
+    Editor: { filePath: string; source?: 'server' | 'webdav' | 'local'; initialContent?: string; title?: string; expectedMtime?: number };
+    FlashNoteEditor: { flashNoteId: string; noteFilePath?: string; initialContent?: string; fromShare?: boolean };
     CloudRepoConfig: undefined; // WebDAV 配置页面
     FlashNoteConfig: undefined; // 闪念笔记设置页面
     About: undefined; // 关于页面

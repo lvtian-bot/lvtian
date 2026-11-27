@@ -55,7 +55,7 @@ class MergeUtils {
         try {
             // 将内容分割为笔记块
             const splitNotes = (content: string): string[] => {
-                return content.split(/(?=^##\s)/m).filter(block => block.trim());
+                return content.split(new RegExp(`(?=${flashNotePattern.source})`, 'm')).filter(block => block.trim());
             };
 
             const baseNotes = splitNotes(base);

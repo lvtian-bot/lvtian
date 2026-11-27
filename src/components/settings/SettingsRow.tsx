@@ -1,5 +1,5 @@
 import React, { type ComponentProps, type PropsWithChildren } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform, Switch } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '../../utils/theme';
 import { useSettingsFont } from './useSettingsFont';
@@ -56,6 +56,9 @@ export const SettingsRow: React.FC<SettingsRowProps> = ({
                     accessibilityLabel={title}
                     value={toggle.value}
                     disabled={busy}
+                    trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                    thumbColor={Platform.OS === 'android' ? theme.colors.white : undefined}
+                    ios_backgroundColor={theme.colors.border}
                     onValueChange={toggle.onChange}
                 />
             )}

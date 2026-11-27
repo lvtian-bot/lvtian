@@ -1,10 +1,11 @@
 /// <reference lib="dom" />
 import { EditorView, keymap, highlightSpecialChars, drawSelection, dropCursor, placeholder } from '@codemirror/view';
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorState, Compartment, Prec } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { defaultKeymap, history, historyKeymap, undo, redo } from '@codemirror/commands';
 import { languages } from '@codemirror/language-data';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { textInputColors } from '../utils/theme';
 
 // --- Global Error Handling (Must be first) ---
 window.onerror = function (message, source, lineno, colno, _error) {
@@ -39,7 +40,7 @@ import { tags } from '@lezer/highlight';
 // Inbound: RN -> Web
 export type InboundMessage =
     | { type: 'SET_CONTENT'; payload: string }
-    | { type: 'INITIAL_LOAD_DATA'; payload: { content: string; placeholder?: string; autoFocus?: boolean; theme?: 'light' | 'dark' } }
+    | { type: 'INITIAL_LOAD_DATA'; payload: { content: string; placeholder?: string; autoFocus?: boolean; compactSpacing?: boolean; theme?: 'light' | 'dark' } }
     | { type: 'GET_CONTENT' }
     | { type: 'INSERT_TEXT'; payload: string }
     | { type: 'UPDATE_SETTINGS'; payload: { theme: 'light' | 'dark'; fontSize?: number } }
@@ -141,6 +142,13 @@ const frontMatterPlugin = ViewPlugin.fromClass(class {
 
 // --- Editor Setup ---
 
+const inputColorTheme = Prec.high(EditorView.theme({
+    '.cm-cursor, .cm-dropCursor': { borderLeftColor: textInputColors.cursorColor },
+    '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+        backgroundColor: `${textInputColors.selectionColor}66`,
+    },
+}));
+
 const themeConfig = new Compartment();
 const fontSizeConfig = new Compartment();
 let editor: EditorView | null = null;
@@ -177,6 +185,7 @@ function createEditor(initialContent: string, placeholderText: string = 'Start w
             EditorView.lineWrapping,
 
             // Theme & Configs
+            inputColorTheme,
             themeConfig.of([]), // Default light
             fontSizeConfig.of(EditorView.theme({
                 '.cm-content': { fontSize: '16px', lineHeight: '24px' }
@@ -205,6 +214,31 @@ function createEditor(initialContent: string, placeholderText: string = 'Start w
     }
 }
 
+function trackFlashViewport(view: EditorView) {
+    document.body.classList.add('flash-note-editor');
+    const visualViewport = window.visualViewport;
+    let lastHeight = Number.POSITIVE_INFINITY;
+
+    const resize = () => {
+        const height = Math.min(window.innerHeight, visualViewport?.height ?? window.innerHeight);
+        const caret = view.hasFocus ? view.coordsAtPos(view.state.selection.main.head) : null;
+        const keepCaretVisible = height < lastHeight && caret && caret.top >= 0
+            && caret.bottom <= lastHeight && caret.bottom > height;
+        lastHeight = height;
+        document.body.style.setProperty('--flash-editor-viewport-height', `${height}px`);
+        if (keepCaretVisible) {
+            requestAnimationFrame(() => {
+                if (!view.hasFocus) return;
+                view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { yMargin: 12 }) });
+            });
+        }
+    };
+
+    resize();
+    window.addEventListener('resize', resize);
+    visualViewport?.addEventListener('resize', resize);
+}
+
 function handleMessage(event: MessageEvent) {
     try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
@@ -228,6 +262,7 @@ function handleMessage(event: MessageEvent) {
                     });
                 } else {
                     createEditor(payload.content, payload.placeholder, payload.autoFocus);
+                    if (payload.compactSpacing && editor) trackFlashViewport(editor);
                     if (payload.theme === 'dark' && editor) {
                         (editor as EditorView).dispatch({ effects: themeConfig.reconfigure(oneDark) });
                     }

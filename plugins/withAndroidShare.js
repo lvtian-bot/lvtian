@@ -210,17 +210,7 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
       }
     }
 
-    // D. Hook into onCreate
-    // Only if handleShareIntent is not already called in onCreate
-    // We look for super.onCreate(null)
-    if (content.includes('super.onCreate(null)') && !content.includes('handleShareIntent(intent) // Injected')) {
-      content = content.replace('super.onCreate(null)', 'super.onCreate(null)\n    handleShareIntent(intent) // Injected');
-    }
-
-    // E. Modify createReactActivityDelegate to pass initialProps (Cold Start Fix)
-    // We try to replace the whole function block.
-    // Note: Regex might be safer to handle varying whitespace, but direct string replacement is safer if exact match.
-    // Let's try to match the "closure" of the object expression.
+    // 冷启动优先通过 React 初始属性传递分享正文。
     if (content.includes('object : DefaultReactActivityDelegate(') && !content.includes('getLaunchOptions')) {
       content = content.replace(/object : DefaultReactActivityDelegate\(\s*this,\s*mainComponentName,\s*fabricEnabled\s*\)\{\}/,
         `object : DefaultReactActivityDelegate(
@@ -240,6 +230,14 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
               return initialProps
             }
           }`);
+    }
+
+    const handlesColdShareWithProps = content.includes('initialProps.putString("sharedText", sharedText)');
+    if (handlesColdShareWithProps) {
+      // 旧的 onCreate 事件与初始属性会重复投递同一条分享。
+      content = content.replace(/\r?\n[ \t]*handleShareIntent\(intent\) \/\/ Injected/, '');
+    } else if (!content.includes('handleShareIntent(intent) // Injected')) {
+      content = content.replace('super.onCreate(null)', 'super.onCreate(null)\n    handleShareIntent(intent) // Injected');
     }
 
     modConfig.modResults.contents = content;

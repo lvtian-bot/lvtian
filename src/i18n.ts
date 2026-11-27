@@ -26,7 +26,6 @@ i18n
     resources,
     lng: defaultLng,
     fallbackLng: 'en', // fallback language
-    compatibilityJSON: 'v4', // To make it work with Android
     interpolation: {
       escapeValue: false, // react already safes from xss
     },

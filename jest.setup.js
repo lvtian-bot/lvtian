@@ -28,6 +28,10 @@ jest.mock('react-native-webview', () => {
   };
 });
 
+jest.mock('react-native-enriched-markdown', () =>
+  require('react-native-enriched-markdown/jest')
+);
+
 // react-native-keyboard-controller 为原生模块，Jest 环境以普通 View 代替
 jest.mock('react-native-keyboard-controller', () => {
   const React = require('react');

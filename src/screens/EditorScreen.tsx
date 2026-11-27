@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback, type ComponentRef } from 'react';
 import { View, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Text, BackHandler } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
+import { useRoute, useNavigation, usePreventRemove, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTranslation } from 'react-i18next';
-import { WebView } from 'react-native-webview';
+import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import type { EnrichedMarkdownTextInputInstance } from 'react-native-enriched-markdown';
+import { FlashNoteRichInput } from '../components/FlashNoteRichInput';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 // import { Asset } from 'expo-asset'; // Removed
 // import { File } from 'expo-file-system/next'; // Removed
@@ -24,7 +26,8 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics } from '../utils/fontSize';
 import * as Clipboard from 'expo-clipboard';
 
-type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
+type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor' | 'FlashNoteEditor'>;
+type FlashEditorMode = 'checking' | 'rich' | 'source';
 
 // 草稿载荷：内容与基线 mtime 以单键 JSON 原子存储，避免分开写入中断产生无基线草稿
 interface DraftPayload {
@@ -61,10 +64,14 @@ export const EditorScreen = () => {
     const route = useRoute<EditorScreenRouteProp>();
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
     const { t } = useTranslation();
-    const { filePath: rawFilePath, flashNoteId, initialContent: paramInitialContent, source = 'local', title, expectedMtime: paramExpectedMtime } = route.params; // Get params
+    const flashParams = 'flashNoteId' in route.params ? route.params : undefined;
+    const { flashNoteId, noteFilePath, fromShare } = flashParams ?? {};
+    const { filePath: rawFilePath = '', source = 'local', title, expectedMtime: paramExpectedMtime } =
+        'filePath' in route.params ? route.params : {};
+    const { initialContent: paramInitialContent } = route.params;
     const filePath = source === 'server' ? rawFilePath : normalizePath(rawFilePath);
     const currentMtimeRef = useRef<number | undefined>(paramExpectedMtime);
-    const serverUrl = useAssistantStore(state => state.serverUrl);
+    const serverUrl = useAssistantStore(state => source === 'server' ? state.serverUrl : undefined);
     const [content, setContent] = useState('');
     const [loading, setLoading] = useState(true);
     const [isDirty, setIsDirty] = useState(false);
@@ -72,6 +79,14 @@ export const EditorScreen = () => {
     const saveInFlightRef = useRef(false);
     const [editorHtml, setEditorHtml] = useState<string | null>(null);
     const webViewRef = useRef<ComponentRef<typeof WebView>>(null);
+    const richInputRef = useRef<EnrichedMarkdownTextInputInstance | null>(null);
+    const [flashEditorMode, setFlashEditorMode] = useState<FlashEditorMode>('checking');
+    const [flashInitialContent, setFlashInitialContent] = useState('');
+    const [sourceReady, setSourceReady] = useState(false);
+    const [flashExitApproved, setFlashExitApproved] = useState(false);
+    const flashDraftWrite = useRef<Promise<void>>(Promise.resolve());
+    const restoredLegacyDraftKey = useRef<string | null>(null);
+    const flashSaveCommitted = useRef(false);
     const isDraftLoaded = useRef(false);
     const initialContentRef = useRef<string>('');
 
@@ -79,7 +94,16 @@ export const EditorScreen = () => {
     const { fontSize } = useSettingsStore();
     const editorFontSize = getFontSizeMetrics(fontSize).editorFontSize;
 
-    const isFlashMode = !!flashNoteId;
+    const isFlashMode = flashParams !== undefined;
+    const isNewFlash = flashNoteId === 'new';
+    const legacyFlashDraftKey = !isFlashMode || fromShare ? null : isNewFlash
+        ? 'flash_note_draft_new'
+        : `flash_note_draft_edit_${flashNoteId}`;
+    const flashTitle = t(isNewFlash ? 'timeline.newTitle' : 'timeline.editTitle');
+    const canSaveFlash = Boolean(content.trim()) && (isNewFlash || isDirty)
+        && (flashEditorMode === 'rich' || (flashEditorMode === 'source' && sourceReady));
+    const markRichEditorReady = useCallback(() => setFlashEditorMode('rich'), []);
+    const showSourceEditor = useCallback(() => setFlashEditorMode('source'), []);
     const { serverToken } = useAssistantStore.getState();
     // 服务前缀含地址与令牌：同地址换令牌（重装、反代按令牌选实例）视为不同服务，草稿互不串用
     const serverPrefix = source === 'server' ? (serverUrl ? stableHash(`${serverUrl}|${serverToken || ''}`) : 'default') : '';
@@ -88,23 +112,72 @@ export const EditorScreen = () => {
         ? stableHash(`${webDavConfig?.server || ''}|${webDavConfig?.username || ''}`)
         : '';
     const DRAFT_KEY = isFlashMode
-        ? `editor_draft_flash_${flashNoteId}`
+        ? fromShare
+            ? `editor_draft_flash_share_${stableHash(paramInitialContent ?? '')}`
+            : `editor_draft_flash_${flashNoteId}`
         : source === 'server'
             ? `editor_draft_server_${serverPrefix}_${filePath}`
             : source === 'webdav'
                 ? `editor_draft_webdav_${webdavPrefix}_${filePath}`
                 : `editor_draft_${source}_${filePath}`;
 
+    const queueFlashDraftOperation = useCallback((operation: () => Promise<void>) => {
+        const result = flashDraftWrite.current.then(operation);
+        flashDraftWrite.current = result.catch(() => {});
+        return result;
+    }, []);
+    const clearFlashDraft = useCallback(() => queueFlashDraftOperation(async () => {
+        const legacy = restoredLegacyDraftKey.current;
+        await AsyncStorage.multiRemove(legacy ? [DRAFT_KEY, legacy] : [DRAFT_KEY]);
+        restoredLegacyDraftKey.current = null;
+    }), [DRAFT_KEY, queueFlashDraftOperation]);
+
     const loadFile = useCallback(async () => {
+        const openFlashEditor = (original: string, draft?: string) => {
+            const initial = draft ?? original;
+            initialContentRef.current = original;
+            isDraftLoaded.current = true;
+            setContent(initial);
+            setIsDirty(initial !== original);
+            setFlashInitialContent(initial);
+            setFlashEditorMode(initial === '' ? 'rich' : 'checking');
+            setLoading(false);
+        };
         try {
             console.log('[EditorScreen] Loading...', isFlashMode ? `FlashNote: ${flashNoteId}` : `File: ${filePath} (${source})`);
 
             let fileContent = '';
 
             if (isFlashMode) {
-                // Flash Note Mode: Use passed content directly
-                fileContent = paramInitialContent || '';
-            } else if (source !== 'local' && paramInitialContent !== undefined) {
+                const original = paramInitialContent ?? '';
+                let draft = parseDraft(await AsyncStorage.getItem(DRAFT_KEY))?.content;
+                if (draft === undefined && legacyFlashDraftKey !== null) {
+                    const legacy = await AsyncStorage.getItem(legacyFlashDraftKey);
+                    if (legacy !== null) {
+                        restoredLegacyDraftKey.current = legacyFlashDraftKey;
+                        draft = legacy;
+                    }
+                }
+                if (draft === undefined || draft === original) {
+                    openFlashEditor(original);
+                } else {
+                    Alert.alert(t('common.draftFound'), t('common.restoreDraftPrompt'), [
+                        {
+                            text: t('common.discard'),
+                            style: 'destructive',
+                            onPress: () => {
+                                clearFlashDraft().then(() => openFlashEditor(original), () => {
+                                    Alert.alert(t('common.error'), t('timeline.saveError'));
+                                    openFlashEditor(original, draft);
+                                });
+                            },
+                        },
+                        { text: t('common.restore'), onPress: () => openFlashEditor(original, draft) },
+                    ], { cancelable: false });
+                }
+                return;
+            }
+            if (source !== 'local' && paramInitialContent !== undefined) {
                 // 纯在线模式（VPS / 网盘）：直接信任并复用刚拉取的预览快照，避免重复网络请求
                 fileContent = paramInitialContent;
             } else if (source === 'server') {
@@ -121,9 +194,9 @@ export const EditorScreen = () => {
                 }
             }
 
-            // Check for draft (Both modes support drafts)
+            // 恢复文件草稿并兼容旧键名
             let draft = parseDraft(await AsyncStorage.getItem(DRAFT_KEY));
-            if (draft === null && source === 'local' && !isFlashMode) {
+            if (draft === null && source === 'local') {
                 // 兼容旧版本地草稿键名，若存在则自动平滑迁移
                 const legacyDraftKey = `editor_draft_${filePath}`;
                 draft = parseDraft(await AsyncStorage.getItem(legacyDraftKey));
@@ -152,7 +225,7 @@ export const EditorScreen = () => {
             if (draft !== null && draft.content !== fileContent) {
                 const discardDraft = async () => {
                     await AsyncStorage.removeItem(DRAFT_KEY);
-                    if (source === 'local' && !isFlashMode) {
+                    if (source === 'local') {
                         await AsyncStorage.removeItem(`editor_draft_${filePath}`);
                     }
                     if (source === 'webdav') {
@@ -229,13 +302,17 @@ export const EditorScreen = () => {
         } catch (error) {
             console.error('[EditorScreen] Error loading content:', error);
             Alert.alert(t('editor.loadFileFailed'), JSON.stringify(error));
-            setContent('');
-            initialContentRef.current = '';
-            isDraftLoaded.current = true;
+            if (isFlashMode) {
+                openFlashEditor(paramInitialContent ?? '');
+            } else {
+                setContent('');
+                initialContentRef.current = '';
+                isDraftLoaded.current = true;
+            }
         } finally {
-            setLoading(false);
+            if (!isFlashMode) setLoading(false);
         }
-    }, [filePath, DRAFT_KEY, serverUrl, t, isFlashMode, flashNoteId, paramInitialContent, source]);
+    }, [filePath, DRAFT_KEY, serverUrl, t, isFlashMode, flashNoteId, paramInitialContent, source, legacyFlashDraftKey, clearFlashDraft]);
 
     useEffect(() => {
         loadFile();
@@ -243,6 +320,7 @@ export const EditorScreen = () => {
 
     // Load editor HTML from generated TS file (Vite build output)
     useEffect(() => {
+        if (isFlashMode && flashEditorMode !== 'source') return;
         const loadEditor = async () => {
             // In the new build system, editorHtml is a string constant import. 
             // We use require to avoid top-level import issues if the file doesn't exist yet (though it should after build).
@@ -255,7 +333,7 @@ export const EditorScreen = () => {
             }
         };
         loadEditor();
-    }, [t]);
+    }, [t, isFlashMode, flashEditorMode]);
 
     // Debounced Auto-save to Cache
     useEffect(() => {
@@ -263,10 +341,17 @@ export const EditorScreen = () => {
 
         const saveDraft = async () => {
             try {
-                // Only save draft if dirty
-                if (isDirty) {
-                    // 内容与基线 mtime 以单键 JSON 原子写入，避免分开写入中断产生无基线草稿
-                    await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ c: content, m: currentMtimeRef.current ?? 0 } as DraftPayload));
+                // 内容与基线 mtime 以单键 JSON 原子存储。
+                const draft = JSON.stringify({ c: content, m: currentMtimeRef.current ?? 0 } as DraftPayload);
+                if (isFlashMode) {
+                    if (saveInFlightRef.current || flashSaveCommitted.current) return;
+                    if (!isDirty) {
+                        await clearFlashDraft();
+                        return;
+                    }
+                    await queueFlashDraftOperation(() => AsyncStorage.setItem(DRAFT_KEY, draft));
+                } else if (isDirty) {
+                    await AsyncStorage.setItem(DRAFT_KEY, draft);
                 }
             } catch (error) {
                 console.error('Failed to save draft:', error);
@@ -275,18 +360,16 @@ export const EditorScreen = () => {
 
         const timeoutId = setTimeout(saveDraft, 500);
         return () => clearTimeout(timeoutId);
-    }, [content, isDirty, DRAFT_KEY]);
+    }, [content, isDirty, DRAFT_KEY, isFlashMode, clearFlashDraft, queueFlashDraftOperation]);
 
-    const handleAutoSave = (newContent: string) => {
-        // Update state, trigger effect to save to cache
+    const handleAutoSave = useCallback((newContent: string) => {
         setContent(newContent);
-        // Only mark as dirty if content is different from initial or saved content
         setIsDirty(newContent !== initialContentRef.current);
-    };
+    }, []);
 
     const handleManualSave = useCallback(async (contentToSave: string) => {
         // 阻断保存进行中的重复触发（连点保存按钮、WebView 重复回调），避免并发保存与重复成功提示
-        if (saveInFlightRef.current) return;
+        if (saveInFlightRef.current || flashSaveCommitted.current || (isFlashMode && !contentToSave.trim())) return;
         saveInFlightRef.current = true;
         setIsSaving(true);
         try {
@@ -295,9 +378,13 @@ export const EditorScreen = () => {
                 if (flashNoteId === 'new') {
                     await flashNoteService.addNote(contentToSave);
                 } else {
-                    await flashNoteService.updateNote(flashNoteId, contentToSave);
+                    await flashNoteService.updateNote(flashNoteId, contentToSave, noteFilePath);
                 }
-                Alert.alert(t('common.success'), t('timeline.noteUpdated')); // Feedback for user
+                flashSaveCommitted.current = true;
+                // 正文已保存，独立处理清草稿失败，避免重试时再次追加相同闪念。
+                await clearFlashDraft().catch(error => console.error('[EditorScreen] Failed to clear flash draft:', error));
+                setFlashExitApproved(true);
+                return;
             } else if (source === 'server') {
                 // --- Server File Save Logic ---
                 const saveRes = await serverFileService.saveFileContent(filePath, contentToSave, currentMtimeRef.current);
@@ -325,7 +412,7 @@ export const EditorScreen = () => {
 
             // Common Post-Save Cleanup
             await AsyncStorage.removeItem(DRAFT_KEY);
-            if (source === 'local' && !isFlashMode) {
+            if (source === 'local') {
                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
             }
             if (source === 'webdav') {
@@ -341,7 +428,9 @@ export const EditorScreen = () => {
         } catch (error: unknown) {
             console.error('Save failed:', error);
             const serverErr = error as { code?: string; message?: string };
-            if (serverErr.code === 'PRECONDITION_FAILED') {
+            if (isFlashMode) {
+                Alert.alert(t('common.error'), t('timeline.saveError'));
+            } else if (serverErr.code === 'PRECONDITION_FAILED') {
                 Alert.alert(
                     t('common.conflict', { defaultValue: '保存冲突' }),
                     t('editor.conflictMtimeMessage', { defaultValue: '服务端该文件在您编辑期间已被外部修改。为防止覆盖他人内容，本次保存已被阻止。建议先返回重新进入。' })
@@ -358,9 +447,49 @@ export const EditorScreen = () => {
             saveInFlightRef.current = false;
             setIsSaving(false);
         }
-    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t]);
+    }, [filePath, markFileAsModified, DRAFT_KEY, navigation, isFlashMode, flashNoteId, source, t, clearFlashDraft, noteFilePath]);
+
+    const requestSaveFromWebView = () => {
+        webViewRef.current?.postMessage(JSON.stringify({ type: 'GET_CONTENT' }));
+    };
+
+    const requestSave = () => {
+        if (saveInFlightRef.current || flashSaveCommitted.current) return;
+        if (!isFlashMode || flashEditorMode === 'source') {
+            requestSaveFromWebView();
+        } else if (flashEditorMode === 'rich') {
+            richInputRef.current?.getMarkdown().then(handleManualSave, () => {
+                Alert.alert(t('common.error'), t('timeline.saveError'));
+            });
+        }
+    };
+
+    usePreventRemove(isFlashMode && !flashExitApproved && (isDirty || isSaving), ({ data }) => {
+        if (saveInFlightRef.current) return;
+        const choices = [
+            {
+                text: t('common.dontSave'),
+                style: 'destructive' as const,
+                onPress: () => {
+                    saveInFlightRef.current = true;
+                    clearFlashDraft().then(() => navigation.dispatch(data.action), () => {
+                        saveInFlightRef.current = false;
+                        Alert.alert(t('common.error'), t('timeline.saveError'));
+                    });
+                },
+            },
+            { text: t('common.cancel'), style: 'cancel' as const },
+        ];
+        Alert.alert(t('common.confirm'), t('common.saveChangesPrompt'),
+            canSaveFlash ? [...choices, { text: t('common.save'), onPress: requestSave }] : choices);
+    });
+
+    useEffect(() => {
+        if (flashExitApproved) navigation.goBack();
+    }, [flashExitApproved, navigation]);
 
     const handleBackPress = useCallback(() => {
+        if (isFlashMode) return false;
         if (isDirty) {
             Alert.alert(
                 t('common.confirm'),
@@ -371,7 +500,7 @@ export const EditorScreen = () => {
                         style: 'destructive',
                         onPress: async () => {
                             await AsyncStorage.removeItem(DRAFT_KEY);
-                            if (source === 'local' && !isFlashMode) {
+                            if (source === 'local') {
                                 await AsyncStorage.removeItem(`editor_draft_${filePath}`);
                             }
                             if (source === 'webdav') {
@@ -397,9 +526,10 @@ export const EditorScreen = () => {
 
     // Handle hardware back button
     useEffect(() => {
+        if (isFlashMode) return;
         const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
         return () => backHandler.remove();
-    }, [handleBackPress]);
+    }, [handleBackPress, isFlashMode]);
 
     // Handle header back button
     const headerLeft = useCallback(() => (
@@ -416,14 +546,12 @@ export const EditorScreen = () => {
     useEffect(() => {
         navigation.setOptions({
             headerLeft,
-            headerTitle: isFlashMode
-                ? (t('timeline.editTitle') || 'Edit Note') // Fallback translation
-                : undefined // Default behavior (usually route param title, but we customize it below in container)
+            headerTitle: isFlashMode ? flashTitle : undefined
         });
-    }, [navigation, headerLeft, isFlashMode, t]);
+    }, [navigation, headerLeft, isFlashMode, flashTitle]);
 
 
-    const onWebViewMessage = (event: any) => {
+    const onWebViewMessage = (event: WebViewMessageEvent) => {
         try {
             const data = JSON.parse(event.nativeEvent.data);
             if (data.type === 'ON_CHANGE') {
@@ -437,12 +565,14 @@ export const EditorScreen = () => {
                         type: 'INITIAL_LOAD_DATA',
                         payload: {
                             content: content,
-                            placeholder: t('editor.placeholder'),
-                            autoFocus: false, // Let user tap to focus
+                            placeholder: t(isFlashMode ? 'timeline.placeholder' : 'editor.placeholder'),
+                            autoFocus: isFlashMode,
+                            compactSpacing: isFlashMode,
                             theme: 'light' // TODO: wire up dark mode based on system scheme
                         }
                     };
                     webViewRef.current.postMessage(JSON.stringify(payload));
+                    if (isFlashMode) setSourceReady(true);
                     webViewRef.current.postMessage(JSON.stringify({
                         type: 'UPDATE_SETTINGS',
                         payload: {
@@ -462,12 +592,10 @@ export const EditorScreen = () => {
         }
     };
 
-    const requestSaveFromWebView = () => {
-        // Send JSON request
-        webViewRef.current?.postMessage(JSON.stringify({ type: 'GET_CONTENT' }));
-    };
+    const showRichInput = isFlashMode && flashEditorMode !== 'source';
+    const saveDisabled = (isFlashMode ? !canSaveFlash : !isDirty) || isSaving;
 
-    if (loading || !editorHtml) {
+    if (loading || (!showRichInput && !editorHtml)) {
         return (
             <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -487,30 +615,40 @@ export const EditorScreen = () => {
                 </TouchableOpacity>
                 <View style={styles.titleContainer}>
                     <Text style={[styles.title, { fontSize: font.chatBody }]} numberOfLines={2}>
-                        {isFlashMode ? (t('timeline.editTitle') || 'Edit Note') : (title || filePath.split('/').pop() || filePath)}
+                        {isFlashMode ? flashTitle : (title || filePath.split('/').pop() || filePath)}
                     </Text>
                 </View>
                 <TouchableOpacity
-                    onPress={requestSaveFromWebView}
+                    onPress={requestSave}
                     style={styles.headerButton}
-                    disabled={!isDirty || isSaving}
+                    disabled={saveDisabled}
                 >
                     <Text style={[
                         styles.headerButtonText,
-                        (!isDirty || isSaving) && styles.headerButtonTextDisabled,
+                        saveDisabled && styles.headerButtonTextDisabled,
                         { fontSize: font.chatBody },
                     ]}>{t('common.save')}</Text>
                 </TouchableOpacity>
             </View>
 
-            <WebView
-                ref={webViewRef}
-                source={{ html: editorHtml, baseUrl: '' }}
-                originWhitelist={['*']}
-                onMessage={onWebViewMessage}
-                // Removed onLoadEnd as we now wait for ON_READY message from the app
-                style={styles.webview}
-            />
+            {showRichInput ? (
+                <FlashNoteRichInput
+                    editorRef={richInputRef}
+                    initialContent={flashInitialContent}
+                    onChange={handleAutoSave}
+                    onReady={markRichEditorReady}
+                    onUnsupported={showSourceEditor}
+                />
+            ) : (
+                <WebView
+                    ref={webViewRef}
+                    source={{ html: editorHtml ?? '', baseUrl: '' }}
+                    originWhitelist={['*']}
+                    onMessage={onWebViewMessage}
+                    keyboardDisplayRequiresUserAction={!isFlashMode}
+                    style={styles.webview}
+                />
+            )}
         </SafeAreaView>
     );
 };
