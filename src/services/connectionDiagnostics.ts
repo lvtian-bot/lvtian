@@ -15,6 +15,9 @@ export interface ConnectionEventDetails {
     errorCategory?: ReturnType<typeof classifySocketError>;
     closeCode?: number;
     retryDelayMs?: number;
+    backgroundMs?: number;
+    lastServerMessageAgeMs?: number;
+    probeElapsedMs?: number;
     messageCount?: number;
     payloadChars?: number;
     connectionTrace?: string;

@@ -19,6 +19,11 @@ import {
 } from '../types/assistantProtocol';
 
 const PHASE_TIMEOUT_MS = { handshake: 8000, authentication: 8000, sync: 20000 };
+const HEARTBEAT_INTERVAL_MS = 10000;
+const HEARTBEAT_TIMEOUT_MS = 3500;
+const FOREGROUND_PROBE_TIMEOUT_MS = 1500;
+const RECENT_SERVER_MESSAGE_MS = 15000;
+const STALE_CONNECTION_MS = 30000;
 const MAX_AUTO_SEND_RETRIES = 3;
 const SEND_ACK_TIMEOUTS_MS = [6000, 6000, 8000, 10000] as const;
 const SEND_RETRY_DELAYS_MS = [3000, 6000, 10000] as const;
@@ -31,7 +36,14 @@ export class AssistantClient {
     private ws: WebSocket | null = null;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
-    private pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    private heartbeat?: {
+        startedAt: number;
+        deadline: number;
+        timer: ReturnType<typeof setTimeout>;
+        foreground: boolean;
+    };
+    private lastServerMessageAt?: number;
+    private backgroundStartedAt?: number;
     private phaseTimer: ReturnType<typeof setTimeout> | null = null;
     private connectionPhase: ConnectionPhase | null = null;
     private phaseStartedAt = 0;
@@ -41,6 +53,7 @@ export class AssistantClient {
     private connectionTrace?: string;
     private nativeSocket?: ReturnType<typeof trackSocketReceive>;
     private networkState: Network.NetworkState | null = null;
+    private lastKnownNetworkType?: Network.NetworkStateType;
     private networkSubscription: { remove: () => void } | null = null;
     private reconnectAttempts = 0;
     private isExplicitlyClosed = false;
@@ -91,7 +104,9 @@ export class AssistantClient {
         this.appStateSubscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
             const prevAppState = this.currentAppState;
             this.currentAppState = nextAppState;
-            if (prevAppState.match(/inactive|background/) && nextAppState === 'active') {
+            if (prevAppState === 'active' && (nextAppState === 'inactive' || nextAppState === 'background')) {
+                this.backgroundStartedAt = Date.now();
+            } else if (prevAppState !== 'active' && nextAppState === 'active') {
                 this.handleAppForeground();
             }
         });
@@ -102,6 +117,11 @@ export class AssistantClient {
             this.networkSubscription = Network.addNetworkStateListener((state) => {
                 const previous = this.networkState;
                 this.networkState = state;
+                const type = state.type;
+                const knownOnline = state.isConnected === true && type !== undefined && type !== 'UNKNOWN' && type !== 'NONE';
+                const switched = knownOnline && this.lastKnownNetworkType !== undefined && type !== this.lastKnownNetworkType;
+                if (knownOnline) this.lastKnownNetworkType = type;
+                if (state.isConnected === false) this.lastKnownNetworkType = undefined;
                 if (this.isExplicitlyClosed) return;
 
                 // Internet validation can fail on a working LAN or VPN. Only a known
@@ -114,8 +134,6 @@ export class AssistantClient {
                     return;
                 }
                 const restored = previous?.isConnected === false && state.isConnected === true;
-                const switched = previous?.type !== undefined && state.type !== undefined
-                    && previous.type !== state.type && state.isConnected === true;
                 const validated = previous?.isInternetReachable === false && state.isInternetReachable === true
                     && useAssistantStore.getState().connectionState !== 'connected';
                 if (!restored && !switched && !validated) return;
@@ -123,7 +141,7 @@ export class AssistantClient {
                 if (!store.serverUrl || store.credentialsStatus !== 'ready') return;
 
                 this.logConnection('network_changed');
-                if (this.reuseCurrentConnection()) return;
+                if (!restored && !switched && this.keepConnectionAttempt(Date.now())) return;
                 this.clearReconnectTimer();
                 this.cleanUpWs();
                 store.setConnectionState('reconnecting');
@@ -133,7 +151,7 @@ export class AssistantClient {
                     // cancel this timer and connect immediately instead.
                     this.reconnectTimer = setTimeout(() => {
                         this.reconnectTimer = null;
-                        this.connect(true);
+                        this.connect();
                     }, 250);
                 } else {
                     this.scheduleReconnect();
@@ -145,27 +163,53 @@ export class AssistantClient {
     }
 
     public handleAppForeground(): void {
+        const now = Date.now();
+        const backgroundMs = this.backgroundStartedAt === undefined ? 0 : Math.max(0, now - this.backgroundStartedAt);
+        this.backgroundStartedAt = undefined;
         const store = useAssistantStore.getState();
         if (!store.serverUrl || this.isExplicitlyClosed) return;
 
         this.clearReconnectTimer();
         this.reconnectAttempts = 0;
-        this.logConnection('foreground');
-        if (this.networkState?.isConnected === false || this.reuseCurrentConnection()) return;
-        this.connect(true);
-    }
+        const lastServerMessageAgeMs = this.lastServerMessageAt === undefined ? undefined : now - this.lastServerMessageAt;
+        const details = { backgroundMs, lastServerMessageAgeMs };
+        this.logConnection('foreground', details);
+        if (this.networkState?.isConnected === false || this.keepConnectionAttempt(now)) return;
 
-    private reuseCurrentConnection(): boolean {
-        const state = this.ws?.readyState;
-        if (state !== WebSocket.OPEN && state !== WebSocket.CONNECTING) return false;
-        if (state === WebSocket.OPEN && this.serverSynced) {
-            this.sendPingWithTimeout();
-            return true;
+        if (this.ws?.readyState === WebSocket.OPEN && this.serverSynced) {
+            const heartbeat = this.heartbeat;
+            if (heartbeat && now >= heartbeat.deadline) {
+                this.logConnection('heartbeat_timeout', { probeElapsedMs: now - heartbeat.startedAt });
+            } else if (backgroundMs < STALE_CONNECTION_MS && lastServerMessageAgeMs !== undefined
+                && lastServerMessageAgeMs >= 0 && lastServerMessageAgeMs < STALE_CONNECTION_MS) {
+                if (lastServerMessageAgeMs < RECENT_SERVER_MESSAGE_MS) {
+                    this.logConnection('foreground_reuse', details);
+                } else {
+                    this.logConnection('foreground_probe', details);
+                    this.sendPingWithTimeout(true);
+                }
+                return;
+            }
         }
 
+        this.logConnection('foreground_reconnect', details);
+        // Let network and lifecycle notifications already queued together agree on
+        // one attempt. connect() also clears the network event's pending retry.
+        const request = this.connectionRequest;
+        Promise.resolve().then(() => {
+            if (request === this.connectionRequest && !this.isExplicitlyClosed && this.currentAppState === 'active'
+                && this.networkState?.isConnected !== false) this.connect(true);
+        });
+    }
+
+    private keepConnectionAttempt(now: number): boolean {
+        const state = this.ws?.readyState;
+        const phase = this.connectionPhase;
+        if (!phase || (state !== WebSocket.OPEN && state !== WebSocket.CONNECTING)) return false;
+
         // Android may suspend JS timers in the background. Keep the original phase deadline.
-        if (!this.connectionPhase) return false;
-        if (Date.now() - this.phaseStartedAt < PHASE_TIMEOUT_MS[this.connectionPhase]) return true;
+        const elapsedMs = now - this.phaseStartedAt;
+        if (elapsedMs >= 0 && elapsedMs < PHASE_TIMEOUT_MS[phase]) return true;
         this.logConnection('timeout', this.nativeReceiveDetails());
         return false;
     }
@@ -637,6 +681,7 @@ export class AssistantClient {
         this.nativeSocket = undefined;
         this.releaseSendLock();
         this.serverSynced = false;
+        this.lastServerMessageAt = undefined;
         this.awaitingFullSnapshot = false;
         this.clearPhaseTimeout();
         this.stopPing();
@@ -687,40 +732,49 @@ export class AssistantClient {
     private startPing(): void {
         this.stopPing();
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-        // 前台心跳设为 10 秒，更早发现假死链路
         this.pingTimer = setInterval(() => {
             this.sendPingWithTimeout();
             if (useAssistantStore.getState().pendingSendQueue.some(item => item.withdrawal === 'cancel' || item.withdrawal === 'edit')) {
                 this.flushPendingCancelQueue();
             }
-        }, 10000);
+        }, HEARTBEAT_INTERVAL_MS);
     }
 
-    private sendPingWithTimeout(): void {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.serverSynced || this.pongTimeoutTimer) return;
-
+    private sendPingWithTimeout(foreground = false): void {
         const ws = this.ws;
-        try {
-            this.sendRaw({ type: 'ping' });
-        } catch (error) {
-            this.logConnection('socket_error', { errorCategory: classifySocketError(error instanceof Error ? error.message : undefined) });
-            this.retryConnection();
-            return;
+        if (!ws || ws.readyState !== WebSocket.OPEN || !this.serverSynced) return;
+        const previous = this.heartbeat;
+        if (previous && (!foreground || previous.foreground)) return;
+
+        const now = Date.now();
+        const deadline = Math.min(previous?.deadline ?? Infinity,
+            now + (foreground ? FOREGROUND_PROBE_TIMEOUT_MS : HEARTBEAT_TIMEOUT_MS));
+        const startedAt = previous?.startedAt ?? now;
+        if (previous) {
+            clearTimeout(previous.timer);
+        } else {
+            try {
+                this.sendRaw({ type: 'ping' });
+            } catch (error) {
+                this.logConnection('socket_error', {
+                    errorCategory: classifySocketError(error instanceof Error ? error.message : undefined),
+                });
+                this.retryConnection();
+                return;
+            }
         }
 
-        // 挂载 3500ms 假死熔断保护：若 3.5 秒内无任何下行数据，判定当前网络为假死黑洞，立即推倒重连
-        this.pongTimeoutTimer = setTimeout(() => {
-            if (this.ws !== ws) return;
-            this.logConnection('heartbeat_timeout');
+        const timer = setTimeout(() => {
+            if (this.ws !== ws || this.heartbeat?.timer !== timer) return;
+            this.logConnection('heartbeat_timeout', { probeElapsedMs: Date.now() - startedAt });
             this.retryConnection();
-        }, 3500);
+        }, Math.max(0, deadline - Date.now()));
+        this.heartbeat = { deadline, startedAt, timer, foreground };
     }
 
     private clearPongTimeout(): void {
-        if (this.pongTimeoutTimer) {
-            clearTimeout(this.pongTimeoutTimer);
-            this.pongTimeoutTimer = null;
-        }
+        if (this.heartbeat) clearTimeout(this.heartbeat.timer);
+        this.heartbeat = undefined;
     }
 
     private stopPing(): void {
@@ -1465,7 +1519,13 @@ export class AssistantClient {
      * 处理服务端下发的事件报文
      */
     private handleServerMessage(msg: ServerMessage, payloadChars?: number): void {
-        // 收到服务端任何下行数据包均表明链路活跃，立即清除假死熔断定时器
+        // An authenticated connection can use any valid incoming message as evidence of liveness.
+        if (typeof msg?.type !== 'string') return;
+        const now = Date.now();
+        this.lastServerMessageAt = now;
+        if (this.heartbeat?.foreground) {
+            this.logConnection('foreground_probe_alive', { probeElapsedMs: now - this.heartbeat.startedAt });
+        }
         this.clearPongTimeout();
 
         const store = useAssistantStore.getState();
