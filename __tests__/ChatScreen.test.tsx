@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import { FlatList, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import * as Reanimated from 'react-native-reanimated';
+import { ChatBubbleReveal } from '../src/components/ChatBubbleReveal';
 import { ChatMessageMenu } from '../src/components/ChatMessageMenu';
 import { TypingIndicator } from '../src/components/TypingIndicator';
 import * as Clipboard from 'expo-clipboard';
@@ -288,6 +290,46 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(send).toHaveBeenCalledWith(text, undefined);
         expect(root.findByType(TextInput).props.value).toBe('');
         expect(sendButton().props.disabled).toBe(true);
+    });
+
+    it.each([
+        { offset: 0, reduced: false, enter: true },
+        { offset: 0, reduced: true, enter: false },
+        { offset: 160, reduced: false, enter: false },
+    ])('发送过渡按当前列表位置和减少动态效果决定（%o）', async ({ offset, reduced, enter }) => {
+        jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(reduced);
+        const scroll = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => {});
+        const prev = { id: 'old', seq: 1, role: 'user', content: '上一条', status: 'sent', timestamp: Date.now() } as const;
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.setState({ messages: [prev], pendingSendQueue: [] });
+            currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+        });
+        const root = currentRenderer!.root;
+        const list = () => root.findByType(FlatList);
+        await ReactTestRenderer.act(async () => {
+            list().props.onScroll({ nativeEvent: { contentOffset: { x: 0, y: offset } } });
+            root.findByType(TextInput).props.onChangeText('好');
+        });
+        const send = root.findAllByType(TouchableOpacity).find(button =>
+            /^(发送|Send)$/.test(button.props.accessibilityLabel) && typeof button.props.onPress === 'function')!;
+        await ReactTestRenderer.act(async () => send.props.onPress());
+
+        if (offset === 0) expect(scroll).not.toHaveBeenCalled();
+        else expect(scroll).toHaveBeenCalledWith({ offset: 0, animated: true });
+        expect(list().props.ListHeaderComponent).toBeUndefined();
+        expect(list().props.data.map((message: { content: string }) => message.content)).toEqual(['好', '上一条']);
+
+        const rows = () => root.findAllByType(ChatBubbleReveal);
+        expect(rows()).toHaveLength(2);
+        expect(typeof rows()[0].props.consumeEntrance === 'function').toBe(enter);
+        expect(rows()[1].props.consumeEntrance).toBeUndefined();
+
+        await ReactTestRenderer.act(async () => {
+            const confirmed = { ...list().props.data[0], status: 'sent', seq: 2 } as const;
+            useAssistantStore.getState().addOrUpdateMessage(confirmed);
+            useAssistantStore.getState().removeFromPendingSendQueue(confirmed.id);
+        });
+        expect(rows()[0].props.consumeEntrance).toBeUndefined();
     });
 
     it.each(['processing', 'queued', 'error', 'disconnected'] as const)('在线发送保持箭头底色，按实际状态 %s 恢复操作', async (outcome) => {

@@ -23,6 +23,7 @@ import {
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
+    useReducedMotion,
     interpolate,
 } from 'react-native-reanimated';
 import {
@@ -125,6 +126,9 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
     const flatListRef = useRef<FlatList<ChatTimelineMessage>>(null);
     const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
     const contentInsetsRef = useRef<{ top: number; bottom: number }>({ top: 0, bottom: 0 });
+    const scrollOffset = useRef<number | undefined>(undefined);
+    const entranceMessageId = useRef<string | undefined>(undefined);
+    const reduceMotion = useReducedMotion();
     const extraContentPadding = useSharedValue(0);
     const composerHeight = useSharedValue(60);
 
@@ -496,6 +500,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
 
     const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const offsetY = event.nativeEvent.contentOffset.y;
+        scrollOffset.current = offsetY;
         // 倒序列表中，根据顶部 inset 补偿计算视口距最新消息的物理距离；向旧消息上滑时距离增大
         const distanceFromBottom = getInvertedDistanceFromBottom(offsetY, contentInsetsRef.current.top);
         const gesture = scrollGestureRef.current;
@@ -686,11 +691,15 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
             Alert.alert(t('common.notice', '提示'), t('chat.attachmentTooLarge', '附件体积过大（上限 10MB）'));
             return;
         }
+        const { top } = contentInsetsRef.current;
+        const targetOffset = getInvertedChatScrollTarget(top);
+        const distance = getInvertedDistanceFromBottom(scrollOffset.current ?? targetOffset, top);
+        const atBottom = distance <= 1;
         const messageId = AssistantClient.getInstance().sendMessage(text, attachments.length > 0 ? attachments : undefined);
+        entranceMessageId.current = atBottom && !reduceMotion ? messageId : undefined;
         setSubmittedId(taskRunning ? undefined : messageId);
         finishComposer();
-        const targetOffset = getInvertedChatScrollTarget(contentInsetsRef.current.top);
-        flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
+        if (!atBottom) flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
     };
 
     const handleStop = () => {
@@ -1021,16 +1030,22 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                             </View>}
                         </Pressable>
                     ) : null;
-                    return (
-                        <View>
-                        {showDate && <View style={styles.dateSeparator} testID={`chat-date-${item.id}`}>
+                    const dateSeparator = showDate ? (
+                        <View style={styles.dateSeparator} testID={`chat-date-${item.id}`}>
                             <Text style={styles.dateSeparatorText}>
                                 {formatChatDate(item.timelineTimestamp ?? item.timestamp, dateNow, chatI18n.language, t)}
                             </Text>
-                        </View>}
+                        </View>
+                    ) : null;
+                    return (
+                        <View>
                         {hasVisibleRow ? <ChatBubbleReveal
                             layoutKey={JSON.stringify([item.id, metrics])}
+                            dateSeparator={dateSeparator}
                             streaming={!isUser && item.status === 'processing'}
+                            consumeEntrance={isUser && entranceMessageId.current === item.id ? () => {
+                                if (entranceMessageId.current === item.id) entranceMessageId.current = undefined;
+                            } : undefined}
                             style={[
                                 styles.messageRow,
                                 isUser ? styles.userRow : styles.assistantRow,
@@ -1054,7 +1069,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                                     )}
                                 </View>
                             ) : bubblePressable}
-                        </ChatBubbleReveal> : null}
+                        </ChatBubbleReveal> : dateSeparator}
                         </View>
                     );
                 }}
