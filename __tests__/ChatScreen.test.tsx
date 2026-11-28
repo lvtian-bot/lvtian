@@ -2,6 +2,7 @@ import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import { FlatList, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { ChatMessageMenu } from '../src/components/ChatMessageMenu';
+import { TypingIndicator } from '../src/components/TypingIndicator';
 import * as Clipboard from 'expo-clipboard';
 import { ChatScreen } from '../src/screens/ChatScreen';
 import { useAssistantStore } from '../src/store/useAssistantStore';
@@ -318,6 +319,37 @@ describe('ChatScreen 输入区与操作菜单', () => {
                 else useAssistantStore.getState().addOrUpdateMessage({ ...outgoing, status: outcome });
             });
             expect(color()).toBe('#C4CBD6');
+        }
+    });
+
+    it('服务端开始处理满 1 秒才显示三点，短任务结束后不会出现旧提示', async () => {
+        jest.useFakeTimers();
+        try {
+            await ReactTestRenderer.act(async () => {
+                currentRenderer = ReactTestRenderer.create(<ChatScreen />);
+            });
+            const header = () => currentRenderer!.root.findByType(FlatList).props.ListHeaderComponent;
+            const setTaskState = (state: 'processing' | 'completed') => ReactTestRenderer.act(async () => {
+                useAssistantStore.getState().setTaskState(state);
+            });
+            const advanceTime = (duration: number) => ReactTestRenderer.act(async () => {
+                jest.advanceTimersByTime(duration);
+            });
+
+            expect(header()).toBeUndefined();
+            await setTaskState('processing');
+            await advanceTime(999);
+            expect(header()).toBeUndefined();
+            await setTaskState('completed');
+            await setTaskState('processing');
+            await advanceTime(999);
+            expect(header()).toBeUndefined();
+            await advanceTime(1);
+            expect(header()?.type).toBe(TypingIndicator);
+            await setTaskState('completed');
+            expect(header()).toBeUndefined();
+        } finally {
+            jest.useRealTimers();
         }
     });
 
