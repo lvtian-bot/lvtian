@@ -21,6 +21,7 @@ jest.mock('../src/services/chatNotifications', () => ({
     notifyPushedChatReplies: jest.fn(),
     chatServerIdentity: jest.fn(() => 'test-server'),
     ensureChatNotificationChannel: jest.fn(),
+    removeLegacyChatNotificationChannel: jest.fn(),
     getSystemNotificationRoute: jest.fn().mockResolvedValue('ab'.repeat(16)),
     setSystemNotificationEnrollment: jest.fn(),
 }));
@@ -50,7 +51,10 @@ function mockAndroid(hasModules: boolean) {
         defineTask: jest.Mock;
     }>('expo-task-manager');
     const client = jest.requireMock<{ AssistantClient: { getInstance: jest.Mock } }>('../src/services/AssistantClient');
-    const notificationsService = jest.requireMock<{ setSystemNotificationEnrollment: jest.Mock }>('../src/services/chatNotifications');
+    const notificationsService = jest.requireMock<{
+        setSystemNotificationEnrollment: jest.Mock;
+        removeLegacyChatNotificationChannel: jest.Mock;
+    }>('../src/services/chatNotifications');
     const { useSettingsStore } = require('../src/store/useSettingsStore') as typeof import('../src/store/useSettingsStore');
     useSettingsStore.setState({ hasHydrated: true, chatNotificationsEnabled: false, chatNotificationPreview: true });
     const { startChatBackgroundPush } = require('../src/services/chatBackgroundPush') as
@@ -92,9 +96,21 @@ describe('Android chat background synchronization', () => {
         notifications.getDevicePushTokenAsync.mockResolvedValue({ type: 'android', data: 'test-device-token' });
         notifications.registerTaskAsync.mockRejectedValueOnce(new Error('Background task registration failed'));
         useSettingsStore.setState({ chatNotificationsEnabled: true, chatNotificationPreview: true });
+        let channelConfirmed = false;
         const fetch = jest.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
             const { taskNotification } = JSON.parse(String(init?.body));
-            return { ok: true, headers: { get: () => taskNotification ? '2' : null } } as unknown as Response;
+            return {
+                ok: true,
+                headers: {
+                    get: (name: string) => {
+                        if (!taskNotification) return null;
+                        if (name === 'X-Lvtian-Notification-Channel') {
+                            return channelConfirmed ? 'chat-messages-v2' : null;
+                        }
+                        return '2';
+                    },
+                },
+            } as unknown as Response;
         });
         const stop = startChatBackgroundPush();
         try {
@@ -108,8 +124,11 @@ describe('Android chat background synchronization', () => {
                 channelId: 'chat-messages-v2',
             });
             expect(notificationsService.setSystemNotificationEnrollment).toHaveBeenCalledWith('test-server', '2');
+            expect(notificationsService.removeLegacyChatNotificationChannel).not.toHaveBeenCalled();
+            channelConfirmed = true;
             useSettingsStore.setState({ chatNotificationPreview: false });
             await flush();
+            expect(notificationsService.removeLegacyChatNotificationChannel).toHaveBeenCalledTimes(1);
             const hiddenPreview = JSON.parse(String(fetch.mock.calls[1][1]?.body));
             expect(hiddenPreview.taskNotification).toEqual({
                 routeId: 'ab'.repeat(16),

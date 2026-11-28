@@ -52,13 +52,16 @@ export function pushedReplyIds(value: unknown): string[] {
 export async function ensureChatNotificationChannel(): Promise<void> {
     const notifications = pushModules?.notifications;
     if (!notifications) return;
-    await notifications.deleteNotificationChannelAsync?.(LEGACY_CHANNEL).catch(() => undefined);
     await notifications.setNotificationChannelAsync(CHAT_NOTIFICATION_CHANNEL, {
         name: i18n.t('chatNotifications.enabled'),
         importance: notifications.AndroidImportance.HIGH,
         enableVibrate: true,
         showBadge: true,
     });
+}
+
+export async function removeLegacyChatNotificationChannel(): Promise<void> {
+    await pushModules?.notifications.deleteNotificationChannelAsync?.(LEGACY_CHANNEL).catch(() => undefined);
 }
 
 // Keep the persisted keys so notifications already in the tray still open their replies.
@@ -259,16 +262,25 @@ export function startChatNotifications(isChatVisible: () => boolean, openReply: 
             const settings = useSettingsStore.getState();
             let show = Boolean(serverIdentity && serverIdentity === currentChatIdentity() && !isReadingChat()
                 && settings.chatNotificationsEnabled);
-            if (show && serverIdentity && data?.type === SYSTEM_TYPE && typeof data.messageId === 'string'
-                && AppState.currentState === 'active' && settings.chatNotificationPreview
-                && isGenericNoticeBody(notification.request.content.body)) {
-                const reply = useAssistantStore.getState().messages.find(message =>
-                    message.id === data.messageId && isCompletedReply(message));
-                if (reply) {
-                    try {
-                        await scheduleReplyNotification(reply.id, serverIdentity, previewText(reply.content));
+            if (show && serverIdentity && (data?.type === SYSTEM_TYPE || data?.type === LEGACY_SYSTEM_TYPE)
+                && typeof data.messageId === 'string') {
+                const body = notification.request.content.body;
+                if (!settings.chatNotificationPreview) {
+                    if (!isGenericNoticeBody(body)) {
+                        try {
+                            await scheduleReplyNotification(data.messageId, serverIdentity);
+                        } catch { /* Do not expose preview text when the local preview setting is off. */ }
                         show = false;
-                    } catch { /* Keep the original system notice if the preview could not be displayed. */ }
+                    }
+                } else if (data?.type === SYSTEM_TYPE && AppState.currentState === 'active' && isGenericNoticeBody(body)) {
+                    const reply = useAssistantStore.getState().messages.find(message =>
+                        message.id === data.messageId && isCompletedReply(message));
+                    if (reply) {
+                        try {
+                            await scheduleReplyNotification(reply.id, serverIdentity, previewText(reply.content));
+                            show = false;
+                        } catch { /* Keep the original system notice if the preview could not be displayed. */ }
+                    }
                 }
             }
             return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };

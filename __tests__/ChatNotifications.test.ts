@@ -3,8 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NotificationResponse } from 'expo-notifications';
 import {
     CHAT_NOTIFICATION_CHANNEL, chatServerIdentity, clearVisibleChatNotifications, getSystemNotificationRoute,
-    notifyChatReplies, notifyPushedChatReplies, pushedReplyIds, setChatNotificationPermission,
-    setSystemNotificationEnrollment, startChatNotifications,
+    notifyChatReplies, notifyPushedChatReplies, pushedReplyIds, removeLegacyChatNotificationChannel,
+    setChatNotificationPermission, setSystemNotificationEnrollment, startChatNotifications,
 } from '../src/services/chatNotifications';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { useSettingsStore } from '../src/store/useSettingsStore';
@@ -86,13 +86,15 @@ it('displays one preview when push and live synchronization deliver the same fin
     expect(request.content.body).toBe('本周汇报 已经整理完毕。');
     expect(request.content.title).toBe(i18n.t('chatNotifications.title'));
     expect(request.trigger).toEqual({ channelId: CHAT_NOTIFICATION_CHANNEL });
-    expect(mockDeleteChannel).toHaveBeenCalledWith('chat-messages');
+    expect(mockDeleteChannel).not.toHaveBeenCalled();
     expect(mockSetChannel).toHaveBeenCalledWith(CHAT_NOTIFICATION_CHANNEL, {
         name: i18n.t('chatNotifications.enabled'),
         importance: 4,
         enableVibrate: true,
         showBadge: true,
     });
+    await removeLegacyChatNotificationChannel();
+    expect(mockDeleteChannel).toHaveBeenCalledWith('chat-messages');
     const onResponse = mockListenResponse.mock.calls[0][0] as (response: NotificationResponse) => void;
     onResponse({ actionIdentifier: 'default', notification: { date: Date.now(), request } });
     await Promise.resolve();
@@ -193,6 +195,12 @@ it('lets the system own all completed replies while foreground notifications can
     };
     await expect(handler.handleNotification(previewNotice)).resolves.toMatchObject({ shouldShowBanner: true });
     expect(mockSchedule).toHaveBeenCalledTimes(1);
+
+    useSettingsStore.setState({ chatNotificationPreview: false });
+    await expect(handler.handleNotification(previewNotice)).resolves.toMatchObject({ shouldShowBanner: false });
+    expect(mockSchedule).toHaveBeenCalledTimes(2);
+    expect(mockSchedule.mock.calls[1][0].content.body).toBe(i18n.t('chatNotifications.newMessage'));
+    useSettingsStore.setState({ chatNotificationPreview: true });
 
     const onResponse = mockListenResponse.mock.calls[0][0];
     onResponse({ actionIdentifier: 'default', notification });

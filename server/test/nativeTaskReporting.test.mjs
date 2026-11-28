@@ -76,11 +76,14 @@ test('task reports send a generic Android system notification to opted-in device
     const registration = await register({ token: optedIn, taskNotification: { routeId, language: 'zh' } });
     assert.equal(registration.status, 204);
     assert.equal(registration.headers.get('X-Lvtian-Task-Notification'), '1');
+    assert.equal(registration.headers.get('X-Lvtian-Notification-Channel'), null);
     assert.equal((await register({ token: syncOnly })).headers.get('X-Lvtian-Task-Notification'), null);
-    assert.equal((await register({
+    const allRepliesReg = await register({
         token: allReplies,
         taskNotification: { routeId: allRepliesRoute, language: 'zh', scope: 'chat', preview: true, channelId: 'chat-messages-v2' },
-    })).headers.get('X-Lvtian-Task-Notification'), '2');
+    });
+    assert.equal(allRepliesReg.headers.get('X-Lvtian-Task-Notification'), '2');
+    assert.equal(allRepliesReg.headers.get('X-Lvtian-Notification-Channel'), 'chat-messages-v2');
     assert.equal((await register({
         token: hiddenPreview,
         taskNotification: { routeId: hiddenPreviewRoute, language: 'zh', scope: 'chat', preview: false, channelId: 'chat-messages-v2' },

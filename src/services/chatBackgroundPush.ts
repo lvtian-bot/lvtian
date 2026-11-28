@@ -7,11 +7,13 @@ import { AssistantClient } from './AssistantClient';
 import { pushModules } from './chatPushModules';
 import {
     CHAT_NOTIFICATION_CHANNEL, chatServerIdentity, ensureChatNotificationChannel,
-    getSystemNotificationRoute, notifyPushedChatReplies, pushedReplyIds, setSystemNotificationEnrollment,
+    getSystemNotificationRoute, notifyPushedChatReplies, pushedReplyIds,
+    removeLegacyChatNotificationChannel, setSystemNotificationEnrollment,
 } from './chatNotifications';
 
 const TASK = 'lvtian-chat-background-sync';
 const SYSTEM_NOTIFICATION_HEADER = 'X-Lvtian-Task-Notification';
+const NOTIFICATION_CHANNEL_HEADER = 'X-Lvtian-Notification-Channel';
 
 if (pushModules) {
     const { notifications, taskManager } = pushModules;
@@ -118,6 +120,9 @@ export function startChatBackgroundPush(): (() => void) | undefined {
                 const scope = taskNotification && response.headers.get(SYSTEM_NOTIFICATION_HEADER);
                 systemNotificationsAccepted = scope === '2';
                 await setSystemNotificationEnrollment(identity, scope === '2' || scope === '1' ? scope : undefined);
+                if (taskNotification && response.headers.get(NOTIFICATION_CHANNEL_HEADER) === CHAT_NOTIFICATION_CHANNEL) {
+                    await removeLegacyChatNotificationChannel();
+                }
                 registration = next;
                 registeredAt = Date.now();
                 if (previous && sameServer && previous.token !== deviceToken) updateDevice(previous, true).catch(() => undefined);

@@ -11,6 +11,7 @@ export const CHAT_NOTIFICATION_CHANNEL = 'chat-messages-v2';
 const LEGACY_NOTIFICATION_CHANNEL = 'chat-messages';
 // Retain the original registration header for already installed clients.
 export const SYSTEM_NOTIFICATION_HEADER = 'X-Lvtian-Task-Notification';
+export const NOTIFICATION_CHANNEL_HEADER = 'X-Lvtian-Notification-Channel';
 
 function previewText(content: string): string {
     const plainText = content.trim().replace(/^#{1,6}\s+/gm, '').replace(/\s+/g, ' ');
