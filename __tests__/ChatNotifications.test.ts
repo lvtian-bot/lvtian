@@ -1,8 +1,9 @@
 import { AppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NotificationResponse } from 'expo-notifications';
 import {
-    chatServerIdentity, notifyChatReplies, pushedReplyIds, setChatNotificationPermission,
-    startChatNotifications,
+    chatServerIdentity, getTaskNotificationRoute, notifyChatReplies, pushedReplyIds, setChatNotificationPermission,
+    setTaskNotificationEnrollment, startChatNotifications,
 } from '../src/services/chatNotifications';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { useSettingsStore } from '../src/store/useSettingsStore';
@@ -15,6 +16,7 @@ const mockRequestPermissions = jest.fn();
 const mockSetChannel = jest.fn();
 const mockClearResponse = jest.fn();
 const mockListenResponse = jest.fn();
+const mockSetHandler = jest.fn();
 
 jest.mock('../src/services/chatPushModules', () => ({
     pushModules: {
@@ -26,7 +28,7 @@ jest.mock('../src/services/chatPushModules', () => ({
             getPermissionsAsync: () => mockGetPermissions(),
             requestPermissionsAsync: () => mockRequestPermissions(),
             scheduleNotificationAsync: (...args: unknown[]) => mockSchedule(...args),
-            setNotificationHandler: jest.fn(),
+            setNotificationHandler: (...args: unknown[]) => mockSetHandler(...args),
             addNotificationResponseReceivedListener: (...args: unknown[]) => mockListenResponse(...args),
             getLastNotificationResponse: () => null,
             clearLastNotificationResponse: () => mockClearResponse(),
@@ -79,9 +81,48 @@ it('displays one preview when push and live synchronization deliver the same fin
     expect(mockSetChannel).toHaveBeenCalledWith('chat-messages', expect.objectContaining({ lockscreenVisibility: 0 }));
     const onResponse = mockListenResponse.mock.calls[0][0] as (response: NotificationResponse) => void;
     onResponse({ actionIdentifier: 'default', notification: { date: Date.now(), request } });
+    await Promise.resolve();
     expect(mockClearResponse).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledWith({ messageId: 'one',
         serverIdentity: chatServerIdentity('https://server.test', 'test-' + testAccount) });
+});
+
+it('uses the system notification for enrolled task reports and opens the correct reply on a tap', async () => {
+    const open = jest.fn();
+    let viewingChat = false;
+    stop = startChatNotifications(() => viewingChat, open);
+    const identity = chatServerIdentity('https://server.test', 'test-' + testAccount);
+    const routeId = 'ab'.repeat(16);
+    await AsyncStorage.setItem('lvtian-task-notification-device:' + identity, routeId);
+    await AsyncStorage.setItem('lvtian-task-notification-route:' + routeId, identity);
+    expect(await getTaskNotificationRoute(identity)).toBe(routeId);
+    const report: AssistantMessage = { ...reply('report'), source: 'native_task_report' };
+    await setTaskNotificationEnrollment(identity, true);
+    await notifyChatReplies([report, reply('regular')]);
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    expect(mockSchedule.mock.calls[0][0].content.data.messageId).toBe('regular');
+
+    const notification = {
+        date: Date.now(),
+        request: {
+            identifier: 'native-notice',
+            trigger: null,
+            content: { title: '绿天', body: '你有一条新消息', data: { type: 'lvtian_task_report', messageId: report.id, routeId } },
+        },
+    };
+    const handler = mockSetHandler.mock.calls[0][0];
+    await expect(handler.handleNotification(notification)).resolves.toMatchObject({ shouldShowBanner: true });
+    viewingChat = true;
+    await expect(handler.handleNotification(notification)).resolves.toMatchObject({ shouldShowBanner: false });
+    const onResponse = mockListenResponse.mock.calls[0][0];
+    onResponse({ actionIdentifier: 'default', notification });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(open).toHaveBeenCalledWith({ messageId: report.id, serverIdentity: identity });
+
+    viewingChat = false;
+    await setTaskNotificationEnrollment(identity, false);
+    await notifyChatReplies([report]);
+    expect(mockSchedule).toHaveBeenCalledTimes(2);
 });
 
 it('suppresses replies read in open chat and hides text when previews are off', async () => {
