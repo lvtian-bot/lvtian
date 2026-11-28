@@ -990,12 +990,20 @@ test('主聊天经接线层发送受理回执、流式增量、完成终态和�
     });
     const legacyDevice = 'test-fcm:legacy-notification-device';
     const updatedDevice = 'test-fcm:updated-notification-device';
+    const hiddenDevice = 'test-fcm:hidden-preview-notification-device';
     const routeId = 'ef'.repeat(16);
+    const hiddenRouteId = '12'.repeat(16);
     assert.equal((await register({ token: legacyDevice, taskNotification: {
         routeId: 'ab'.repeat(16), language: 'zh',
     } })).headers.get('X-Lvtian-Task-Notification'), '1');
-    assert.equal((await register({ token: updatedDevice, taskNotification: { routeId, language: 'zh', scope: 'chat' } }))
-        .headers.get('X-Lvtian-Task-Notification'), '2');
+    assert.equal((await register({
+        token: updatedDevice,
+        taskNotification: { routeId, language: 'zh', scope: 'chat', preview: true, channelId: 'chat-messages-v2' },
+    })).headers.get('X-Lvtian-Task-Notification'), '2');
+    assert.equal((await register({
+        token: hiddenDevice,
+        taskNotification: { routeId: hiddenRouteId, language: 'zh', scope: 'chat', preview: false, channelId: 'chat-messages-v2' },
+    })).headers.get('X-Lvtian-Task-Notification'), '2');
     const ws = await openAuthenticatedClient(port, token, received);
 
     ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '你好' }));
@@ -1031,14 +1039,20 @@ test('主聊天经接线层发送受理回执、流式增量、完成终态和�
     assert.ok(typeof asstMsg.completedAt === 'number' && asstMsg.completedAt > 0, '助理消息应持久化 completedAt 时间戳');
     assert.equal(asstMsg.completedAt, done.completedAt, '持久化 completedAt 应与终态广播一致');
     assert.ok(sessionManager.getDshSessionId('main'), '引擎侧会话绑定应持久化');
-    assert.equal(notices.length, 2);
+    assert.equal(notices.length, 3);
     assert.deepEqual(notices[0].tokens, [updatedDevice]);
-    assert.deepEqual(notices[0].notification, { title: '绿天', body: '你有一条新消息' });
+    assert.deepEqual(notices[0].notification, { title: '绿天', body: 'chunk-1chunk-2' });
     assert.deepEqual(notices[0].data, { type: 'lvtian_system_chat_reply', messageId: asstMsg.id, routeId });
     assert.equal(notices[0].android.priority, 'high');
-    assert(!JSON.stringify(notices).includes(asstMsg.content));
-    assert.deepEqual(notices[1].tokens, [legacyDevice, updatedDevice]);
-    assert.deepEqual(JSON.parse(notices[1].data.messageIds), [asstMsg.id]);
+    assert.equal(notices[0].android.notification.channelId, 'chat-messages-v2');
+    assert.equal(notices[0].android.notification.visibility, undefined);
+    assert.deepEqual(notices[1].tokens, [hiddenDevice]);
+    assert.deepEqual(notices[1].notification, { title: '绿天', body: '你有一条新消息' });
+    assert.deepEqual(notices[1].data, { type: 'lvtian_system_chat_reply', messageId: asstMsg.id, routeId: hiddenRouteId });
+    assert.equal(notices[1].android.notification.channelId, 'chat-messages-v2');
+    assert.equal(notices[1].android.notification.visibility, undefined);
+    assert.deepEqual(notices[2].tokens, [legacyDevice, updatedDevice, hiddenDevice]);
+    assert.deepEqual(JSON.parse(notices[2].data.messageIds), [asstMsg.id]);
 
     ws.close();
 });

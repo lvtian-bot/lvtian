@@ -96,7 +96,7 @@ export class LvtianServer {
         if (sessionId !== 'main' || message?.role !== 'assistant' || message.status !== 'done') return;
         // Only legacy device registrations limit system notifications to task reports.
         const kind = message.source === 'native_task_report' ? 'task' : 'chat';
-        this.chatSyncPush?.wakeDevices(message.id, message.content.trim() ? kind : undefined);
+        this.chatSyncPush?.wakeDevices(message.id, message.content.trim() ? { kind, content: message.content } : undefined);
     }
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;

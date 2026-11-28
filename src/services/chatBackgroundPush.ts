@@ -6,8 +6,8 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { AssistantClient } from './AssistantClient';
 import { pushModules } from './chatPushModules';
 import {
-    chatServerIdentity, ensureChatNotificationChannel, getSystemNotificationRoute,
-    notifyPushedChatReplies, pushedReplyIds, setSystemNotificationEnrollment,
+    CHAT_NOTIFICATION_CHANNEL, chatServerIdentity, ensureChatNotificationChannel,
+    getSystemNotificationRoute, notifyPushedChatReplies, pushedReplyIds, setSystemNotificationEnrollment,
 } from './chatNotifications';
 
 const TASK = 'lvtian-chat-background-sync';
@@ -29,7 +29,7 @@ interface Registration {
     url: string;
     auth: string;
     token: string;
-    taskNotification?: { routeId: string; language: 'zh' | 'en'; scope: 'chat' };
+    taskNotification?: { routeId: string; language: 'zh' | 'en'; scope: 'chat'; preview: boolean; channelId: string };
 }
 
 async function updateDevice(registration: Registration, remove = false): Promise<Response | undefined> {
@@ -84,8 +84,13 @@ export function startChatBackgroundPush(): (() => void) | undefined {
             const identity = chatServerIdentity(serverUrl, serverToken);
             const enabled = settings.chatNotificationsEnabled && (await notifications.getPermissionsAsync()).granted;
             const language = i18n.language?.split('-')[0] === 'zh' ? 'zh' : 'en';
+            const preview = settings.chatNotificationPreview;
             if (sameServer && (!token || previous.token === token)
-                && (enabled ? systemNotificationsAccepted && previous.taskNotification?.language === language
+                && (enabled
+                    ? systemNotificationsAccepted
+                        && previous.taskNotification?.language === language
+                        && previous.taskNotification?.preview === preview
+                        && previous.taskNotification?.channelId === CHAT_NOTIFICATION_CHANNEL
                     : !previous.taskNotification)
                 && Date.now() - registeredAt < 24 * 60 * 60 * 1000) {
                 ensureBackgroundTask();
@@ -98,7 +103,13 @@ export function startChatBackgroundPush(): (() => void) | undefined {
             let taskNotification: Registration['taskNotification'];
             if (enabled) {
                 await ensureChatNotificationChannel();
-                taskNotification = { routeId: await getSystemNotificationRoute(identity), language, scope: 'chat' };
+                taskNotification = {
+                    routeId: await getSystemNotificationRoute(identity),
+                    language,
+                    scope: 'chat',
+                    preview,
+                    channelId: CHAT_NOTIFICATION_CHANNEL,
+                };
             }
             if (!active) return;
             const next = { url: serverUrl, auth: serverToken, token: deviceToken, taskNotification };
@@ -121,7 +132,9 @@ export function startChatBackgroundPush(): (() => void) | undefined {
     });
     const appState = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
     const removeSettingsListener = useSettingsStore.subscribe((state, before) => {
-        if (state.hasHydrated && (!before.hasHydrated || state.chatNotificationsEnabled !== before.chatNotificationsEnabled)) refresh();
+        if (state.hasHydrated && (!before.hasHydrated
+            || state.chatNotificationsEnabled !== before.chatNotificationsEnabled
+            || state.chatNotificationPreview !== before.chatNotificationPreview)) refresh();
     });
     const onLanguageChanged = () => refresh();
     i18n.on('languageChanged', onLanguageChanged);
