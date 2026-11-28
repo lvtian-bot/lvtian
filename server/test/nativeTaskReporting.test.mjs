@@ -7,6 +7,7 @@ import { TaskReportStore, NativeTaskReporting, reportMessageId } from '../dist/n
 import { LvtianServer } from '../dist/server.js';
 import { SessionManager } from '../dist/sessionManager.js';
 import { MemoryManager } from '../dist/memoryManager.js';
+import { ChatSyncPush } from '../dist/chatSyncPush.js';
 
 function result(id = 'delivery-1', status = 'ended', deliveredAt = new Date().toISOString()) {
     return { taskId: 'task-1', status, delivery: { messageId: id, deliveredAt, scheduledAt: deliveredAt }, endReason: status === 'ended' ? 'completed' : undefined, assistantText: ['完整10仓明细'], truncated: false };
@@ -39,6 +40,61 @@ test('offline report calls actual main agent with full input then publishes only
     assert.equal(store.next(), undefined); assert.equal(calls, 1);
     const cold = new SessionManager(server.config.dataDir);
     assert.equal(cold.getOrCreateSession('main').messages[0].id, reportMessageId(report.id));
+});
+
+test('task reports send a generic Android system notification to opted-in devices and wake sync independently', async t => {
+    const { store, server } = fixture(t, async (_session, _id, _prompt, cb) => {
+        cb.onDelta('私密任务汇报正文');
+        cb.onStatusChange('done', { stopReason: 'end_turn' });
+    });
+    const requests = [];
+    let finishNotification;
+    const notificationSend = new Promise(resolve => { finishNotification = resolve; });
+    const sender = { sendEachForMulticast: async message => {
+        requests.push(message);
+        if (message.notification) await notificationSend;
+        return { responses: message.tokens.map(() => ({ success: true })), failureCount: 0 };
+    } };
+    const { dataDir } = server.config;
+    server.chatSyncPush = new ChatSyncPush(dataDir, sender);
+    await server.start();
+    const url = `http://127.0.0.1:${server.httpServer.address().port}/api/chat/sync-device`;
+    const register = body => fetch(url, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer test', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    const optedIn = 'test-fcm:opted-in-lvtian-token';
+    const syncOnly = 'test-fcm:sync-only-lvtian-token';
+    const routeId = 'ab'.repeat(16);
+    const title = '绿天';
+    const body = '你有一条新消息';
+    const registration = await register({ token: optedIn, taskNotification: { routeId, language: 'zh' } });
+    assert.equal(registration.status, 204);
+    assert.equal(registration.headers.get('X-Lvtian-Task-Notification'), '1');
+    assert.equal((await register({ token: syncOnly })).headers.get('X-Lvtian-Task-Notification'), null);
+    server.chatSyncPush = new ChatSyncPush(dataDir, sender);
+    try {
+        const report = enqueue(store);
+        assert.equal(await server.reportNativeTask(report), true);
+        const messageId = reportMessageId(report.id);
+        assert.equal(requests.length, 2);
+        assert.deepEqual(requests[0].tokens, [optedIn]);
+        assert.deepEqual(requests[0].notification, { title, body });
+        assert.deepEqual(requests[0].data, { type: 'lvtian_task_report', messageId, routeId });
+        assert.equal(requests[0].android.priority, 'high');
+        assert.equal(requests[0].android.notification.tag, messageId);
+        assert(!JSON.stringify(requests).includes('私密任务汇报正文'));
+        assert.deepEqual(requests[1].tokens, [optedIn, syncOnly]);
+        assert.deepEqual(JSON.parse(requests[1].data.messageIds), [messageId]);
+
+        assert.equal((await register({ token: optedIn })).headers.get('X-Lvtian-Task-Notification'), null);
+        assert.equal(await server.reportNativeTask(enqueue(store, 'next-delivery')), true);
+        assert.equal(requests.length, 3);
+        assert.equal(requests[2].notification, undefined);
+    } finally {
+        finishNotification();
+    }
 });
 
 test('busy main and queued real user prevent any background acceptance', async t => {

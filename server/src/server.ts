@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import type { WebSocketServer } from 'ws';
 import { ServerConfig } from './config.js';
-import { ChatSyncPush, createChatSyncPush, isChatPushToken } from './chatSyncPush.js';
+import { ChatSyncPush, createChatSyncPush, isChatPushToken, readTaskNotification, TASK_NOTIFICATION_HEADER } from './chatSyncPush.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload, type EngineFailure } from './acpEngineManager.js';
@@ -357,15 +357,16 @@ export class LvtianServer {
                 res.writeHead(503).end();
                 return;
             }
-            let registration: { token?: unknown; remove?: unknown } | undefined;
+            let registration: { token?: unknown; remove?: unknown; taskNotification?: unknown } | undefined;
             try { registration = await this.readJsonBody(req, 8192); } catch { /* invalid body */ }
             if (!isChatPushToken(registration?.token)) {
                 res.writeHead(400).end();
                 return;
             }
+            const taskNotification = registration.remove === true ? undefined : readTaskNotification(registration.taskNotification);
             if (registration.remove === true) this.chatSyncPush.unregister(registration.token);
-            else this.chatSyncPush.register(registration.token);
-            res.writeHead(204).end();
+            else this.chatSyncPush.register(registration.token, taskNotification);
+            res.writeHead(204, taskNotification ? { [TASK_NOTIFICATION_HEADER]: '1' } : {}).end();
             return;
         }
 
@@ -1344,7 +1345,7 @@ export class LvtianServer {
             this.sessionManager.persistDurableMessage(sessionId, messageId);
             store.delivered(report.id);
             this.broadcastRecentMessage(sessionId, messageId);
-            this.chatSyncPush?.wakeDevices(messageId);
+            this.chatSyncPush?.wakeDevices(messageId, true);
             this.scheduleProcessQueue(sessionId);
             return true;
         } catch {
