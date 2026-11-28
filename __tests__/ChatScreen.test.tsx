@@ -3,6 +3,7 @@ import ReactTestRenderer from 'react-test-renderer';
 import { FlatList, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 import { ChatBubbleReveal } from '../src/components/ChatBubbleReveal';
+import { ChatMessageCell } from '../src/components/ChatMessageCell';
 import { ChatMessageMenu } from '../src/components/ChatMessageMenu';
 import { TypingIndicator } from '../src/components/TypingIndicator';
 import * as Clipboard from 'expo-clipboard';
@@ -321,15 +322,40 @@ describe('ChatScreen 输入区与操作菜单', () => {
 
         const rows = () => root.findAllByType(ChatBubbleReveal);
         expect(rows()).toHaveLength(2);
-        expect(typeof rows()[0].props.consumeEntrance === 'function').toBe(enter);
-        expect(rows()[1].props.consumeEntrance).toBeUndefined();
+        expect(typeof rows()[0].props.onEntranceReady === 'function').toBe(enter);
+        expect(rows()[1].props.onEntranceReady).toBeUndefined();
+
+        const cells = root.findAllByType(ChatMessageCell);
+        const newRowSlide = cells[0].findAllByType(View)[0].props.layout;
+        const previousRowSlide = cells[1].findAllByType(View)[0].props.layout;
+        if (enter) {
+            const animate = jest.mocked(Reanimated.withTiming);
+            expect(newRowSlide({ currentHeight: 0, targetHeight: 60, targetOriginY: 0 })).toEqual({
+                initialValues: { height: 60, originY: -60 },
+                animations: { originY: 0 },
+            });
+            expect(previousRowSlide({ currentOriginY: 0, targetHeight: 48, targetOriginY: 60 })).toEqual({
+                initialValues: { height: 48, originY: 0 },
+                animations: { originY: 60 },
+            });
+            expect(animate).toHaveBeenCalledTimes(2);
+            expect(animate).toHaveBeenLastCalledWith(60, expect.objectContaining({ duration: 250 }));
+        } else {
+            expect(newRowSlide).toBeUndefined();
+            expect(previousRowSlide).toBeUndefined();
+        }
+
+        await ReactTestRenderer.act(async () => {
+            const body = rows()[0].findAllByType(Text).find(node => node.props.children === '好')!;
+            body.props.onTextLayout({ nativeEvent: { lines: [{ x: 0, y: 0, width: 18, height: 24 }] } });
+        });
 
         await ReactTestRenderer.act(async () => {
             const confirmed = { ...list().props.data[0], status: 'sent', seq: 2 } as const;
             useAssistantStore.getState().addOrUpdateMessage(confirmed);
             useAssistantStore.getState().removeFromPendingSendQueue(confirmed.id);
         });
-        expect(rows()[0].props.consumeEntrance).toBeUndefined();
+        expect(rows()[0].props.onEntranceReady).toBeUndefined();
     });
 
     it.each(['processing', 'queued', 'error', 'disconnected'] as const)('在线发送保持箭头底色，按实际状态 %s 恢复操作', async (outcome) => {
