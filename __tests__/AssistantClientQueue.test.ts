@@ -48,6 +48,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue.length).toBe(1);
         expect(state.pendingSendQueue[0].messageId).toBe(msgId);
         expect(state.pendingSendQueue[0].content).toBe('离线发送的消息');
+        expect(state.pendingSendQueue[0].attempted).toBe(false);
     });
 
     test('5000字符长消息离线入队并在重连后完整补发', () => {
@@ -64,6 +65,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
                 type: 'chat', messageId, content,
             }));
             expect(useAssistantStore.getState().pendingSendQueue[0].content).toBe(content);
+            expect(useAssistantStore.getState().pendingSendQueue[0].attempted).toBe(true);
         } finally {
             sendRaw.mockRestore();
         }
@@ -170,7 +172,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         sendRawSpy.mockRestore();
     });
 
-    test('连接看似正常但消息没有到达时，重连保留两条原始消息并先补发第一条', async () => {
+    test('重连保留待发顺序、提交时的连接状态及实际发送记录', async () => {
         const transport = client as unknown as {
             ws: { readyState: number; send: jest.Mock; close: jest.Mock } | null;
             handleServerMessage: (message: ServerMessage) => void;
@@ -180,15 +182,20 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         try {
             useAssistantStore.setState({ connectionState: 'connected', taskState: 'idle', outboxStatus: 'ready' });
             const first = client.sendMessage('第一条');
+            const second = client.sendMessage('已连接时排队的第二条');
             useAssistantStore.setState({ connectionState: 'disconnected' });
-            const second = client.sendMessage('第二条');
+            const third = client.sendMessage('断开后排队的第三条');
             socket.send.mockClear();
             transport.handleServerMessage({
                 type: 'sync_result', sessionId: 'main', messages: [], currentSeq: 1, taskState: 'idle',
             });
             await Promise.resolve();
             const state = useAssistantStore.getState();
-            expect(state.pendingSendQueue.map(message => message.messageId)).toEqual([first, second]);
+            expect(state.pendingSendQueue.map(message => message.messageId)).toEqual([first, second, third]);
+            expect(state.pendingSendQueue[0]).toMatchObject({ submittedOnline: true, attempted: true });
+            expect(state.pendingSendQueue[1]).toMatchObject({ submittedOnline: true, attempted: false });
+            expect(state.pendingSendQueue[2].submittedOnline).toBeUndefined();
+            expect(state.pendingSendQueue[2].attempted).toBe(false);
             expect(state.messages.find(message => message.id === first)?.status).toBe('sending');
             const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw) as { type: string; messageId?: string });
             expect(frames.find(frame => frame.type === 'chat')?.messageId).toBe(first);
@@ -277,6 +284,7 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         expect(state.pendingSendQueue.length).toBe(1);
         expect(state.pendingSendQueue[0].messageId).toBe('m-drain-1');
         expect(state.pendingSendQueue[0].content).toBe('排空期在途消息');
+        expect(state.pendingSendQueue[0].attempted).toBe(true);
     });
 
     test('addToPendingSendQueue 保留既有项在 FIFO 队列中的原始位置（原位更新而非追加到队尾）', () => {
@@ -1028,6 +1036,9 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
         jest.useFakeTimers();
         await resetOperationDiagnosticsState();
         const sendRawSpy = jest.spyOn(client as unknown as { sendRaw: () => boolean }, 'sendRaw').mockReturnValue(true);
+        const handleServerMessage = (client as unknown as {
+            handleServerMessage: (msg: ServerMessage) => void;
+        }).handleServerMessage.bind(client);
         useAssistantStore.setState({
             connectionState: 'connected',
             outboxStatus: 'ready',
@@ -1060,12 +1071,21 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
             await Promise.resolve();
             const state = useAssistantStore.getState();
             expect(state.messages.find(m => m.id === 'm-timeout')?.status).toBe('error');
-            expect(state.pendingSendQueue.find(q => q.messageId === 'm-timeout')?.failed).toBe(true);
+            expect(state.pendingSendQueue.find(q => q.messageId === 'm-timeout')).toMatchObject({ failed: true, attempted: true });
             expect(sendRawSpy).toHaveBeenLastCalledWith(expect.objectContaining({ messageId: 'm-next' }));
             const reports = (await readOperationReports()).map(line => JSON.parse(line));
             expect(reports).toEqual(expect.arrayContaining([
                 expect.objectContaining({ operation: 'chat_send', outcome: 'send_ack_timeout' }),
             ]));
+
+            sendRawSpy.mockClear();
+            handleServerMessage({
+                type: 'message_ack', messageId: 'm-timeout', seq: 0, status: 'error', error: 'service_upgrading',
+            });
+            handleServerMessage({ type: 'sync_result', sessionId: 'main', messages: [], taskState: 'idle', currentSeq: 0 });
+            expect(useAssistantStore.getState().pendingSendQueue.find(q => q.messageId === 'm-timeout')?.failed).toBe(true);
+            expect(sendRawSpy).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'chat', messageId: 'm-next' }));
+            expect(sendRawSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'chat', messageId: 'm-timeout' }));
         } finally {
             sendRawSpy.mockRestore();
             jest.useRealTimers();
@@ -1253,11 +1273,11 @@ describe('AssistantClient 离线乐观排队与服务端优雅升级感知', () 
 
             // writeOutbox / readOutbox 往返保留 failed 字段并校验类型
             await writeOutbox('test-outbox-failed', {
-                pendingSendQueue: [{ sessionId: 'main', messageId: 'persisted-fail', content: '内容', failed: true }],
+                pendingSendQueue: [{ sessionId: 'main', messageId: 'persisted-fail', content: '内容', submittedOnline: true, failed: true }],
                 pendingCancelQueue: [],
             });
             await expect(readOutbox('test-outbox-failed')).resolves.toEqual({
-                pendingSendQueue: [{ sessionId: 'main', messageId: 'persisted-fail', content: '内容', failed: true }],
+                pendingSendQueue: [{ sessionId: 'main', messageId: 'persisted-fail', content: '内容', submittedOnline: true, failed: true }],
                 pendingCancelQueue: [],
             });
             await AsyncStorage.setItem('test-outbox-invalid-failed', JSON.stringify({

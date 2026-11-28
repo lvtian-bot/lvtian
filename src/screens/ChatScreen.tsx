@@ -881,7 +881,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                     // the body after acknowledgement. Only actionable states need a footer.
                     const inlineUserTime = isUser && Boolean(item.content);
                     const pendingItem = pendingById.get(item.id);
-                    const pending = Boolean(pendingItem) || item.status === 'sending';
+                    const dimUserBubble = isUser && pendingItem && !pendingItem.submittedOnline && !pendingItem.attempted;
                     const sendFailed = isUser && Boolean(pendingItem?.failed);
                     const selectingHere = selecting === item.id;
                     // Data is newest-first, while each cell remains top-to-bottom.
@@ -899,7 +899,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                                 e.preventDefault();
                                 openMessageMenu(item.id, e.clientX, e.clientY);
                             } } : {})}
-                            style={[isUser ? styles.userBubblePressable : styles.assistantMessageGroup, isUser && pending && styles.pendingBubble]}>
+                            style={[isUser ? styles.userBubblePressable : styles.assistantMessageGroup, dimUserBubble && styles.pendingBubble]}>
                             {!isUser && assistantParts.map((part) => {
                                 const partTime = part.type === 'text' && part.key === lastTextPartKey && item.completedAt
                                     ? formatChatTime(item.completedAt, chatI18n.language)

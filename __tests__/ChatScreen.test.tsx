@@ -94,7 +94,10 @@ describe('ChatScreen 输入区与操作菜单', () => {
         const outgoing = { id: 'menu-test', seq: 0, role: 'user', status: 'sending', content, timestamp: 1 } as const;
         const copy = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
         await ReactTestRenderer.act(async () => {
-            useAssistantStore.setState({ messages: [outgoing], pendingSendQueue: [{ sessionId: 'main', messageId: outgoing.id, content }] });
+            useAssistantStore.setState({
+                connectionState: 'disconnected', messages: [outgoing],
+                pendingSendQueue: [{ sessionId: 'main', messageId: outgoing.id, content, attempted: false }],
+            });
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
         });
         const root = currentRenderer!.root;
@@ -107,8 +110,26 @@ describe('ChatScreen 输入区与操作菜单', () => {
         const open = () => ReactTestRenderer.act(async () => row.root.findAll(node => typeof node.props.onLongPress === 'function')[0]
             .props.onLongPress({ nativeEvent: { pageX: 50, pageY: 75 } }));
         const actions = () => root.findByType(ChatMessageMenu).findAllByType(Text).map(node => node.props.children);
+        const bubbleOpacity = () => StyleSheet.flatten(row.root.findAll(node => typeof node.props.onLongPress === 'function')[0].props.style).opacity;
+        expect(bubbleOpacity()).toBe(0.5);
         await open();
         expect(actions()).toEqual(['copy', 'select', 'cancel', 'edit'].map(key => i18n.t('common.' + key)));
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.getState().setConnectionState('connected');
+        });
+        await ReactTestRenderer.act(async () => row.update(renderRow()));
+        expect(bubbleOpacity()).toBe(0.5);
+        await ReactTestRenderer.act(async () => {
+            const store = useAssistantStore.getState();
+            store.addToPendingSendQueue({ ...store.pendingSendQueue[0], attempted: true });
+        });
+        await ReactTestRenderer.act(async () => row.update(renderRow()));
+        expect(bubbleOpacity()).toBeUndefined();
+        await ReactTestRenderer.act(async () => {
+            useAssistantStore.getState().setConnectionState('reconnecting');
+        });
+        await ReactTestRenderer.act(async () => row.update(renderRow()));
+        expect(bubbleOpacity()).toBeUndefined();
         await ReactTestRenderer.act(async () => {
             useAssistantStore.getState().removeFromPendingSendQueue(outgoing.id);
             useAssistantStore.getState().addOrUpdateMessage({ ...outgoing, status: 'sent' });
@@ -642,8 +663,9 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(allTexts.some((txt) => /上下文已重置|Context has been reset/i.test(txt))).toBe(false);
     });
 
-    it('发送失败维持未确认半透明气泡原样，仅在气泡外下方显示重发且长按菜单一致', async () => {
+    it('发送失败维持气泡原颜色，仅在气泡外下方显示重发且长按菜单一致', async () => {
         const outgoing = { id: 'user-failed', seq: 0, role: 'user', status: 'error', content: '待重发消息', timestamp: 1 } as const;
+        const beforeFirstSend = { ...outgoing, id: 'user-failed-before-send' };
         const retrySpy = jest.spyOn(AssistantClient.getInstance(), 'retryPendingMessage')
             .mockResolvedValueOnce({ ok: false, errorMessage: i18n.t('chat.retryAttachmentFailed') })
             .mockResolvedValueOnce({ ok: true });
@@ -655,10 +677,12 @@ describe('ChatScreen 输入区与操作菜单', () => {
                     { id: 'user-sending', seq: 0, role: 'user', status: 'sending', content: '发送中', timestamp: 2 },
                     { id: 'user-sent', seq: 1, role: 'user', status: 'sent', content: '已发送', timestamp: 3 },
                     { id: 'user-stopped', seq: 2, role: 'user', status: 'error', errorMessage: 'task_stopped', content: '被停止', timestamp: 4 },
+                    beforeFirstSend,
                 ],
                 pendingSendQueue: [
                     { sessionId: 'main', messageId: outgoing.id, content: outgoing.content, failed: true, attempted: true },
-                    { sessionId: 'main', messageId: 'user-sending', content: '发送中', attempted: false },
+                    { sessionId: 'main', messageId: 'user-sending', content: '发送中', submittedOnline: true, attempted: false },
+                    { sessionId: 'main', messageId: beforeFirstSend.id, content: beforeFirstSend.content, failed: true, attempted: false },
                 ],
             });
             currentRenderer = ReactTestRenderer.create(<ChatScreen />);
@@ -671,9 +695,9 @@ describe('ChatScreen 输入区与操作菜单', () => {
             failedRow = ReactTestRenderer.create(renderItem({ item: outgoing, index: 0 }));
         });
 
-        // 气泡保持半透明且气泡内部不含任何错误文案，仅气泡外下方显示「重发」
+        // 发送过的失败气泡保持正常颜色，重发按钮位于气泡外下方。
         const pressable = failedRow.root.findAll(node => typeof node.props.onLongPress === 'function')[0];
-        expect(StyleSheet.flatten(pressable.props.style)).toMatchObject({ opacity: 0.5 });
+        expect(StyleSheet.flatten(pressable.props.style).opacity).toBeUndefined();
         const bubble = failedRow.root.findByProps({ testID: `user-bubble-${outgoing.id}` });
         expect(bubble.findAllByType(Text).map(n => n.props.children)).not.toContain(i18n.t('chat.resend'));
         expect(bubble.findAllByType(Text).map(n => n.props.children)).not.toContain(i18n.t('chat.retryAttachmentFailed'));
@@ -705,12 +729,23 @@ describe('ChatScreen 输入区与操作菜单', () => {
         expect(retrySpy).toHaveBeenCalledTimes(2);
         await ReactTestRenderer.act(async () => failedRow.unmount());
 
+        let unsentRow!: ReactTestRenderer.ReactTestRenderer;
+        await ReactTestRenderer.act(async () => {
+            unsentRow = ReactTestRenderer.create(renderItem({ item: beforeFirstSend, index: 0 }));
+        });
+        const unsentBubble = unsentRow.root.findAll(node => typeof node.props.onLongPress === 'function')[0];
+        expect(StyleSheet.flatten(unsentBubble.props.style).opacity).toBe(0.5);
+        expect(unsentRow.root.findByProps({ testID: `resend-message-${beforeFirstSend.id}` })).toBeDefined();
+        await ReactTestRenderer.act(async () => unsentRow.unmount());
+
         // 发送中、已发送及服务端已受理但被停止的用户消息均不显示重发按钮
-        for (const msg of useAssistantStore.getState().messages.slice(1)) {
+        for (const msg of useAssistantStore.getState().messages.slice(1, -1)) {
             let otherRow!: ReactTestRenderer.ReactTestRenderer;
             await ReactTestRenderer.act(async () => {
                 otherRow = ReactTestRenderer.create(renderItem({ item: msg, index: 0 }));
             });
+            const otherBubble = otherRow.root.findAll(node => typeof node.props.onLongPress === 'function')[0];
+            expect(StyleSheet.flatten(otherBubble.props.style).opacity).toBeUndefined();
             expect(otherRow.root.findAllByProps({ testID: `resend-message-${msg.id}` })).toHaveLength(0);
             await ReactTestRenderer.act(async () => otherRow.unmount());
         }
