@@ -100,6 +100,21 @@ test('跨月剪藏按同一时间基准排序', async t => {
     assert.deepEqual(page.items.map(item => item.title), ['跨年', '另一篇']);
 });
 
+test('归档月份早于文件创建时间的剪藏仍可在分页中找到', async t => {
+    const { request, create } = await fixture(t);
+    for (let i = 0; i < 21; i++) {
+        await create(`2025/11/${i}.md`, markdown('2025-11-28T09:00:00Z', '最近的归档目录'));
+    }
+    await create('2025/01/创建时间回退.md', markdown('invalid', '实际文件创建于归档月份之后'));
+    const first = await (await request()).json();
+    assert.equal(first.items[0].title, '创建时间回退');
+    const next = await (await request('?cursor=' + first.nextCursor)).json();
+    assert.equal(first.items.length, 20);
+    assert.equal(next.items.length, 2);
+    assert.equal(new Set([...first.items, ...next.items].map(item => item.id)).size, 22);
+    assert.equal(next.nextCursor, null);
+});
+
 test('摘要操作复用配对接口，两种结果都反映落盘后的卡片', async t => {
     const id = '2026/11/同名-1.md';
     const captured = '2026-11-28T12:20:00+08:00';

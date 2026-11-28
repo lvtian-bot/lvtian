@@ -9,7 +9,6 @@ const monthPattern = /^(0[1-9]|1[0-2])$/;
 // eslint-disable-next-line no-control-regex -- Windows 路径和控制字符不属于归档文件名。
 const filePattern = /^[^/\\:\u0000-\u001f\u007f]+\.md$/;
 const pageSize = 20;
-const dayMs = 86_400_000;
 
 export type SummaryAction = 'regenerate' | 'delete';
 export type UploadResult = 'uploaded' | 'upload_failed';
@@ -122,39 +121,33 @@ export class MomentsArchive {
             throw error;
         }
         let items: Moment[] = [];
-        const page = () => {
-            const hasMore = items.length > pageSize;
-            const visible = items.slice(0, pageSize);
-            const last = visible.at(-1);
-            return { items: visible, nextCursor: hasMore && last ? Buffer.from(JSON.stringify({
-                id: last.id, clippedAt: last.clippedAt,
-            })).toString('base64url') : null };
-        };
         for (const year of await directories(this.root, yearPattern)) {
             const yearDir = path.join(this.root, year);
             for (const month of await directories(yearDir, monthPattern)) {
                 const folder = `${year}/${month}`;
-                // Web Clipper 用 created 的日历年月归档。跨月时允许最多一天的时区偏移。
-                const monthStart = new Date(`${year}-${month}-01T00:00:00Z`);
-                if (cursor && cursor.clippedAt < monthStart.getTime() - dayMs) continue;
-                const monthEnd = monthStart.setUTCMonth(monthStart.getUTCMonth() + 1);
-                if (items.length > pageSize && items[pageSize].clippedAt > monthEnd + dayMs) return page();
                 const monthDir = path.join(yearDir, month);
                 if (await realpath(monthDir).catch(error => { if (isMissing(error)) return null; throw error; }) !== monthDir) continue;
                 const ids = (await readdir(monthDir, { withFileTypes: true }).catch(error => {
                     if (isMissing(error)) return [];
                     throw error;
                 })).filter(entry => entry.isFile()).map(entry => `${folder}/${entry.name}`).filter(isMomentId);
-                const clips: Moment[] = [];
+                // 缺少 created 的文件可能在归档月份之外创建。逐批比较真实排序键，
+                // 保留当前页和下一条，避免按目录剪枝造成漏项。
                 for (let start = 0; start < ids.length; start += 8) {
                     for (const clip of await Promise.all(ids.slice(start, start + 8).map(id => this.read(id)))) {
-                        if (clip && (!cursor || compare(clip, cursor) > 0)) clips.push(clip);
+                        if (clip && (!cursor || compare(clip, cursor) > 0)) items.push(clip);
                     }
+                    items = items.sort(compare).slice(0, pageSize + 1);
                 }
-                items = items.concat(clips).sort(compare).slice(0, pageSize + 1);
             }
         }
-        return page();
+        const hasMore = items.length > pageSize;
+        if (hasMore) items.pop();
+        const last = items.at(-1);
+        const nextCursor = hasMore && last ? Buffer.from(JSON.stringify({
+            id: last.id, clippedAt: last.clippedAt,
+        })).toString('base64url') : null;
+        return { items, nextCursor };
     }
 }
 
