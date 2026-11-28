@@ -970,10 +970,33 @@ async function openAuthenticatedClient(port, token, received) {
     return ws;
 }
 
-test('聊天报文经接线层完整广播：受理回执、流式增量与完成终态', async () => {
+test('主聊天经接线层发送受理回执、流式增量、完成终态和普通回复的系统通知', async t => {
     const { server, sessionManager, tmp, port } = await buildWiredServer({ chunkCount: 2 });
     const received = [];
-    const ws = await openAuthenticatedClient(port, 'test-token-wired-12345', received);
+    const token = 'test-token-wired-12345';
+    const notices = [];
+    server.chatSyncPush = new ChatSyncPush(tmp, { sendEachForMulticast: async message => {
+        notices.push(message);
+        return { responses: message.tokens.map(() => ({ success: true })), failureCount: 0 };
+    } });
+    t.after(async () => {
+        await server.stop();
+        fs.rmSync(tmp, { recursive: true, force: true });
+    });
+    const register = taskNotification => fetch(`http://127.0.0.1:${port}/api/chat/sync-device`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskNotification),
+    });
+    const legacyDevice = 'test-fcm:legacy-notification-device';
+    const updatedDevice = 'test-fcm:updated-notification-device';
+    const routeId = 'ef'.repeat(16);
+    assert.equal((await register({ token: legacyDevice, taskNotification: {
+        routeId: 'ab'.repeat(16), language: 'zh',
+    } })).headers.get('X-Lvtian-Task-Notification'), '1');
+    assert.equal((await register({ token: updatedDevice, taskNotification: { routeId, language: 'zh', scope: 'chat' } }))
+        .headers.get('X-Lvtian-Task-Notification'), '2');
+    const ws = await openAuthenticatedClient(port, token, received);
 
     ws.send(JSON.stringify({ type: 'chat', sessionId: 'main', messageId: 'u1', content: '你好' }));
 
@@ -1008,10 +1031,16 @@ test('聊天报文经接线层完整广播：受理回执、流式增量与完�
     assert.ok(typeof asstMsg.completedAt === 'number' && asstMsg.completedAt > 0, '助理消息应持久化 completedAt 时间戳');
     assert.equal(asstMsg.completedAt, done.completedAt, '持久化 completedAt 应与终态广播一致');
     assert.ok(sessionManager.getDshSessionId('main'), '引擎侧会话绑定应持久化');
+    assert.equal(notices.length, 2);
+    assert.deepEqual(notices[0].tokens, [updatedDevice]);
+    assert.deepEqual(notices[0].notification, { title: '绿天', body: '你有一条新消息' });
+    assert.deepEqual(notices[0].data, { type: 'lvtian_system_chat_reply', messageId: asstMsg.id, routeId });
+    assert.equal(notices[0].android.priority, 'high');
+    assert(!JSON.stringify(notices).includes(asstMsg.content));
+    assert.deepEqual(notices[1].tokens, [legacyDevice, updatedDevice]);
+    assert.deepEqual(JSON.parse(notices[1].data.messageIds), [asstMsg.id]);
 
     ws.close();
-    await server.stop();
-    fs.rmSync(tmp, { recursive: true, force: true });
 });
 
 test('超时取消宽限期收到手动 stop：广播和持久化不改写为 task_stopped', { timeout: 4000 }, async (t) => {

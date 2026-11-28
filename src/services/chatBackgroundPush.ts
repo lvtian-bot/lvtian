@@ -6,12 +6,12 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { AssistantClient } from './AssistantClient';
 import { pushModules } from './chatPushModules';
 import {
-    chatServerIdentity, ensureChatNotificationChannel, getTaskNotificationRoute,
-    notifyPushedChatReplies, pushedReplyIds, setTaskNotificationEnrollment,
+    chatServerIdentity, ensureChatNotificationChannel, getSystemNotificationRoute,
+    notifyPushedChatReplies, pushedReplyIds, setSystemNotificationEnrollment,
 } from './chatNotifications';
 
 const TASK = 'lvtian-chat-background-sync';
-const TASK_NOTIFICATION_HEADER = 'X-Lvtian-Task-Notification';
+const SYSTEM_NOTIFICATION_HEADER = 'X-Lvtian-Task-Notification';
 
 if (pushModules) {
     const { notifications, taskManager } = pushModules;
@@ -29,7 +29,7 @@ interface Registration {
     url: string;
     auth: string;
     token: string;
-    taskNotification?: { routeId: string; language: 'zh' | 'en' };
+    taskNotification?: { routeId: string; language: 'zh' | 'en'; scope: 'chat' };
 }
 
 async function updateDevice(registration: Registration, remove = false): Promise<Response | undefined> {
@@ -98,14 +98,15 @@ export function startChatBackgroundPush(): (() => void) | undefined {
             let taskNotification: Registration['taskNotification'];
             if (enabled) {
                 await ensureChatNotificationChannel();
-                taskNotification = { routeId: await getTaskNotificationRoute(identity), language };
+                taskNotification = { routeId: await getSystemNotificationRoute(identity), language, scope: 'chat' };
             }
             if (!active) return;
             const next = { url: serverUrl, auth: serverToken, token: deviceToken, taskNotification };
             const response = await updateDevice(next);
             if (response) {
-                systemNotificationsAccepted = Boolean(taskNotification && response.headers.get(TASK_NOTIFICATION_HEADER) === '1');
-                await setTaskNotificationEnrollment(identity, systemNotificationsAccepted);
+                const scope = taskNotification && response.headers.get(SYSTEM_NOTIFICATION_HEADER);
+                systemNotificationsAccepted = scope === '2';
+                await setSystemNotificationEnrollment(identity, scope === '2' || scope === '1' ? scope : undefined);
                 registration = next;
                 registeredAt = Date.now();
                 if (previous && sameServer && previous.token !== deviceToken) updateDevice(previous, true).catch(() => undefined);

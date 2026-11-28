@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import type { WebSocketServer } from 'ws';
 import { ServerConfig } from './config.js';
-import { ChatSyncPush, createChatSyncPush, isChatPushToken, readTaskNotification, TASK_NOTIFICATION_HEADER } from './chatSyncPush.js';
+import { ChatSyncPush, createChatSyncPush, isChatPushToken, readSystemNotification, SYSTEM_NOTIFICATION_HEADER } from './chatSyncPush.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload, type EngineFailure } from './acpEngineManager.js';
@@ -38,6 +38,7 @@ import {
     TaskExecutionState,
     ChatAttachment,
     ChatSyncCursor,
+    type AssistantMessage,
 } from './protocol.js';
 
 const require = createRequire(import.meta.url);
@@ -81,12 +82,19 @@ export class LvtianServer {
         if (session.messages.some(message => message.id === id)) return;
         this.appendPendingReport(sessionId, `[后台作业回复 ${id}]`, reply.text);
         const timestamp = Date.now();
-        this.sessionManager.addMessage(sessionId, {
+        const message = this.sessionManager.addMessage(sessionId, {
             id, role: 'assistant', source: 'autonomous_job_reply', content: reply.text, status: 'done', timestamp, completedAt: timestamp,
         });
         this.sessionManager.persistDurableMessage(sessionId, id);
         this.broadcastRecentMessage(sessionId, id);
-        if (sessionId === 'main') this.chatSyncPush?.wakeDevices(id);
+        this.pushCompletedChatReply(sessionId, message);
+    }
+
+    private pushCompletedChatReply(sessionId: string, message: AssistantMessage | undefined): void {
+        if (sessionId !== 'main' || message?.role !== 'assistant' || message.status !== 'done') return;
+        // Only legacy device registrations limit system notifications to task reports.
+        const kind = message.source === 'native_task_report' ? 'task' : 'chat';
+        this.chatSyncPush?.wakeDevices(message.id, message.content.trim() ? kind : undefined);
     }
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;
@@ -363,10 +371,11 @@ export class LvtianServer {
                 res.writeHead(400).end();
                 return;
             }
-            const taskNotification = registration.remove === true ? undefined : readTaskNotification(registration.taskNotification);
+            const systemNotification = registration.remove === true ? undefined : readSystemNotification(registration.taskNotification);
             if (registration.remove === true) this.chatSyncPush.unregister(registration.token);
-            else this.chatSyncPush.register(registration.token, taskNotification);
-            res.writeHead(204, taskNotification ? { [TASK_NOTIFICATION_HEADER]: '1' } : {}).end();
+            else this.chatSyncPush.register(registration.token, systemNotification);
+            const headers = systemNotification ? { [SYSTEM_NOTIFICATION_HEADER]: systemNotification.scope === 'chat' ? '2' : '1' } : {};
+            res.writeHead(204, headers).end();
             return;
         }
 
@@ -1192,7 +1201,7 @@ export class LvtianServer {
                         }
                     } catch { console.warn('[TaskReporting] Could not update model availability'); }
                 }
-                this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
+                const message = this.sessionManager.updateMessage(sessionId, assistantMessageId, (m) => {
                     m.status = status === 'done' ? 'done' : 'error';
                     if (completedAt) m.completedAt = completedAt;
                     if (payload?.code) m.errorMessage = payload.code;
@@ -1211,7 +1220,7 @@ export class LvtianServer {
                     completedAt,
                 });
 
-                if (completedAt && sessionId === 'main') this.chatSyncPush?.wakeDevices(assistantMessageId);
+                this.pushCompletedChatReply(sessionId, message);
                 // 本轮结束，检查会话排队队列并推进下一项
                 this.scheduleProcessQueue(sessionId);
             },
@@ -1334,18 +1343,16 @@ export class LvtianServer {
                 store.generated(report.id, text);
                 report.reply = text;
             }
-            if (!existing) {
-                this.sessionManager.addMessage(sessionId, {
-                    id: messageId, role: 'assistant', source: 'native_task_report', reportDeliveryId: report.result.delivery?.messageId ?? report.id,
-                    content: report.reply!, timestamp: Date.now(), completedAt: Date.now(), status: 'done',
-                });
-            }
+            const message = existing ?? this.sessionManager.addMessage(sessionId, {
+                id: messageId, role: 'assistant', source: 'native_task_report', reportDeliveryId: report.result.delivery?.messageId ?? report.id,
+                content: report.reply!, timestamp: Date.now(), completedAt: Date.now(), status: 'done',
+            });
             // A pre-generated handoff must not silently omit reports received after it was built.
-            this.appendPendingReport(sessionId, `[后台任务报告 ${report.id}]`, existing?.content ?? report.reply!);
+            this.appendPendingReport(sessionId, `[后台任务报告 ${report.id}]`, message.content);
             this.sessionManager.persistDurableMessage(sessionId, messageId);
             store.delivered(report.id);
             this.broadcastRecentMessage(sessionId, messageId);
-            this.chatSyncPush?.wakeDevices(messageId, true);
+            this.pushCompletedChatReply(sessionId, message);
             this.scheduleProcessQueue(sessionId);
             return true;
         } catch {

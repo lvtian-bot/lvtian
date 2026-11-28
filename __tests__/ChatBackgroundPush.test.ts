@@ -20,8 +20,8 @@ jest.mock('../src/services/chatNotifications', () => ({
     notifyPushedChatReplies: jest.fn(),
     chatServerIdentity: jest.fn(() => 'test-server'),
     ensureChatNotificationChannel: jest.fn(),
-    getTaskNotificationRoute: jest.fn().mockResolvedValue('ab'.repeat(16)),
-    setTaskNotificationEnrollment: jest.fn(),
+    getSystemNotificationRoute: jest.fn().mockResolvedValue('ab'.repeat(16)),
+    setSystemNotificationEnrollment: jest.fn(),
 }));
 jest.mock('../src/services/AssistantClient', () => ({
     AssistantClient: { getInstance: jest.fn(), toHttpUrl: (url: string) => url },
@@ -49,7 +49,7 @@ function mockAndroid(hasModules: boolean) {
         defineTask: jest.Mock;
     }>('expo-task-manager');
     const client = jest.requireMock<{ AssistantClient: { getInstance: jest.Mock } }>('../src/services/AssistantClient');
-    const notificationsService = jest.requireMock<{ setTaskNotificationEnrollment: jest.Mock }>('../src/services/chatNotifications');
+    const notificationsService = jest.requireMock<{ setSystemNotificationEnrollment: jest.Mock }>('../src/services/chatNotifications');
     const { useSettingsStore } = require('../src/store/useSettingsStore') as typeof import('../src/store/useSettingsStore');
     useSettingsStore.setState({ hasHydrated: true, chatNotificationsEnabled: false });
     const { startChatBackgroundPush } = require('../src/services/chatBackgroundPush') as
@@ -86,26 +86,26 @@ describe('Android chat background synchronization', () => {
         stop?.();
     });
 
-    it('registers system task notifications when enabled and removes that option without stopping silent sync', async () => {
+    it('registers system chat notifications when enabled and removes that option without stopping silent sync', async () => {
         const { startChatBackgroundPush, notifications, notificationsService, useSettingsStore } = mockAndroid(true);
         notifications.getDevicePushTokenAsync.mockResolvedValue({ type: 'android', data: 'test-device-token' });
         notifications.registerTaskAsync.mockRejectedValueOnce(new Error('Background task registration failed'));
         useSettingsStore.setState({ chatNotificationsEnabled: true });
         const fetch = jest.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
             const { taskNotification } = JSON.parse(String(init?.body));
-            return { ok: true, headers: { get: () => taskNotification ? '1' : null } } as unknown as Response;
+            return { ok: true, headers: { get: () => taskNotification ? '2' : null } } as unknown as Response;
         });
         const stop = startChatBackgroundPush();
         try {
             await flush();
             const initial = JSON.parse(String(fetch.mock.calls[0][1]?.body));
-            expect(initial.taskNotification).toEqual({ routeId: 'ab'.repeat(16), language: 'zh' });
-            expect(notificationsService.setTaskNotificationEnrollment).toHaveBeenCalledWith('test-server', true);
+            expect(initial.taskNotification).toEqual({ routeId: 'ab'.repeat(16), language: 'zh', scope: 'chat' });
+            expect(notificationsService.setSystemNotificationEnrollment).toHaveBeenCalledWith('test-server', '2');
             useSettingsStore.setState({ chatNotificationsEnabled: false });
             await flush();
             const disabled = JSON.parse(String(fetch.mock.calls[1][1]?.body));
             expect(disabled).toEqual({ token: 'test-device-token', remove: false });
-            expect(notificationsService.setTaskNotificationEnrollment).toHaveBeenLastCalledWith('test-server', false);
+            expect(notificationsService.setSystemNotificationEnrollment).toHaveBeenLastCalledWith('test-server', undefined);
             expect(notifications.registerTaskAsync).toHaveBeenCalledTimes(2);
         } finally {
             stop?.();

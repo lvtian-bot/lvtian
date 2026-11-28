@@ -7,7 +7,8 @@ import { createInstance } from 'i18next';
 const DEVICE_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 const MAX_DEVICES = 32;
 const INVALID_TOKEN = new Set(['messaging/registration-token-not-registered', 'messaging/invalid-registration-token']);
-export const TASK_NOTIFICATION_HEADER = 'X-Lvtian-Task-Notification';
+// Retain the original registration header for already installed clients.
+export const SYSTEM_NOTIFICATION_HEADER = 'X-Lvtian-Task-Notification';
 
 const i18n = createInstance();
 await i18n.init({
@@ -19,25 +20,26 @@ await i18n.init({
     initAsync: false,
 });
 
-interface TaskNotification {
+interface SystemNotification {
     routeId: string;
     language: 'zh' | 'en';
+    scope?: 'chat';
 }
 
 interface PushDevice {
     registeredAt: number;
-    taskNotification?: TaskNotification;
+    systemNotification?: SystemNotification;
 }
 
 export function isChatPushToken(value: unknown): value is string {
     return typeof value === 'string' && /^[A-Za-z0-9_:\-]{20,4096}$/.test(value);
 }
 
-export function readTaskNotification(value: unknown): TaskNotification | undefined {
+export function readSystemNotification(value: unknown): SystemNotification | undefined {
     if (typeof value !== 'object' || !value) return;
-    const { routeId, language } = value as Partial<Record<keyof TaskNotification, unknown>>;
+    const { routeId, language, scope } = value as Partial<Record<keyof SystemNotification, unknown>>;
     if (typeof routeId === 'string' && /^[a-f0-9]{32}$/.test(routeId) && (language === 'zh' || language === 'en')) {
-        return { routeId, language };
+        return { routeId, language, scope: scope === 'chat' ? scope : undefined };
     }
 }
 
@@ -55,7 +57,7 @@ export class ChatSyncPush {
             for (const row of raw.slice(-MAX_DEVICES)) {
                 if (Array.isArray(row) && isChatPushToken(row[0])
                     && typeof row[1] === 'number' && row[1] > Date.now() - DEVICE_TTL_MS) {
-                    this.devices.set(row[0], { registeredAt: row[1], taskNotification: readTaskNotification(row[2]) });
+                    this.devices.set(row[0], { registeredAt: row[1], systemNotification: readSystemNotification(row[2]) });
                 }
             }
         } catch (error) {
@@ -65,10 +67,10 @@ export class ChatSyncPush {
         }
     }
 
-    register(token: string, taskNotification?: TaskNotification): void {
+    register(token: string, systemNotification?: SystemNotification): void {
         const now = Date.now();
         const recent = this.activeDevices().filter(([saved]) => saved !== token);
-        this.save(new Map([...recent.slice(-(MAX_DEVICES - 1)), [token, { registeredAt: now, taskNotification }]]));
+        this.save(new Map([...recent.slice(-(MAX_DEVICES - 1)), [token, { registeredAt: now, systemNotification }]]));
     }
 
     unregister(token: string): void {
@@ -78,15 +80,18 @@ export class ChatSyncPush {
         this.save(devices);
     }
 
-    wakeDevices(messageId: string, taskReport = false): void {
-        if (taskReport) this.notifyTaskReport(messageId);
+    wakeDevices(messageId: string, notice?: 'chat' | 'task'): void {
+        if (notice) this.notifyReply(messageId, notice);
         this.pending.add(messageId);
+        this.drainPending();
+    }
+
+    private drainPending(): void {
         if (this.delivering) return;
         this.delivering = true;
         void this.drain().finally(() => {
             this.delivering = false;
-            const next = this.pending.values().next();
-            if (!next.done) this.wakeDevices(next.value);
+            if (this.pending.size) this.drainPending();
         });
     }
 
@@ -111,15 +116,15 @@ export class ChatSyncPush {
         return Array.from(this.devices).filter(([, device]) => device.registeredAt > cutoff);
     }
 
-    private notifyTaskReport(messageId: string): void {
+    private notifyReply(messageId: string, kind: 'chat' | 'task'): void {
         for (const registration of this.activeDevices()) {
-            const notice = registration[1].taskNotification;
-            if (!notice) continue;
-            const { routeId, language } = notice;
+            const notice = registration[1].systemNotification;
+            if (!notice || (notice.scope !== 'chat' && kind !== 'task')) continue;
+            const { routeId, language, scope } = notice;
             const translate = i18n.getFixedT(language);
             void this.send([registration], {
                 notification: { title: translate('title'), body: translate('body') },
-                data: { type: 'lvtian_task_report', messageId, routeId },
+                data: { type: scope === 'chat' ? 'lvtian_system_chat_reply' : 'lvtian_task_report', messageId, routeId },
                 android: {
                     priority: 'high',
                     ttl: 6 * 60 * 60 * 1000,
@@ -150,7 +155,7 @@ export class ChatSyncPush {
 
     private save(devices: Map<string, PushDevice>): void {
         const temporary = this.filename + '.tmp';
-        const rows = Array.from(devices, ([token, device]) => [token, device.registeredAt, device.taskNotification ?? null]);
+        const rows = Array.from(devices, ([token, device]) => [token, device.registeredAt, device.systemNotification ?? null]);
         fs.writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 });
         fs.renameSync(temporary, this.filename);
         this.devices = devices;
