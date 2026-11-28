@@ -68,6 +68,7 @@ import { chatServerIdentity, readNotificationReply } from '../services/chatNotif
 import { ConnectionConfigError } from '../services/connectionConfig';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+const TYPING_INDICATOR_DELAY_MS = 1000;
 
 /** 服务端稳定错误码 → i18n 键：按码本地化渲染，未知码与历史中文文案按原文兜底显示 */
 const ERROR_CODE_I18N_KEYS: Record<string, string> = {
@@ -196,6 +197,15 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
     const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
     const [submittedId, setSubmittedId] = useState<string>();
     const taskRunning = taskState === 'processing' || taskState === 'awaiting_approval';
+    const [showTypingIndicator, setShowTypingIndicator] = useState(false);
+    useEffect(() => {
+        if (!taskRunning) {
+            setShowTypingIndicator(false);
+            return;
+        }
+        const timer = setTimeout(() => setShowTypingIndicator(true), TYPING_INDICATOR_DELAY_MS);
+        return () => clearTimeout(timer);
+    }, [taskRunning]);
     const submittedStatus = submittedId ? messages.find(message => message.id === submittedId)?.status : undefined;
     const awaitingStart = Boolean(submittedId) && !taskRunning && connectionState === 'connected' && !isServerUpgrading
         && (submittedStatus === 'sending' || submittedStatus === 'sent');
@@ -866,7 +876,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                 windowSize={11}
                 renderScrollComponent={renderChatScrollComponent}
                 ListFooterComponent={renderListFooter}
-                ListHeaderComponent={taskRunning
+                ListHeaderComponent={taskRunning && showTypingIndicator
                     ? <TypingIndicator /> : undefined}
                 extraData={`${dateNow}-${chatI18n.language}`}
                 renderItem={({ item, index }) => {
