@@ -66,32 +66,40 @@ test('task reports send a generic Android system notification to opted-in device
     });
     const optedIn = 'test-fcm:opted-in-lvtian-token';
     const syncOnly = 'test-fcm:sync-only-lvtian-token';
+    const allReplies = 'test-fcm:all-chat-replies-lvtian-token';
     const routeId = 'ab'.repeat(16);
+    const allRepliesRoute = 'cd'.repeat(16);
     const title = '绿天';
     const body = '你有一条新消息';
     const registration = await register({ token: optedIn, taskNotification: { routeId, language: 'zh' } });
     assert.equal(registration.status, 204);
     assert.equal(registration.headers.get('X-Lvtian-Task-Notification'), '1');
     assert.equal((await register({ token: syncOnly })).headers.get('X-Lvtian-Task-Notification'), null);
+    assert.equal((await register({ token: allReplies, taskNotification: { routeId: allRepliesRoute, language: 'zh', scope: 'chat' } }))
+        .headers.get('X-Lvtian-Task-Notification'), '2');
     server.chatSyncPush = new ChatSyncPush(dataDir, sender);
     try {
         const report = enqueue(store);
         assert.equal(await server.reportNativeTask(report), true);
         const messageId = reportMessageId(report.id);
-        assert.equal(requests.length, 2);
+        assert.equal(requests.length, 3);
         assert.deepEqual(requests[0].tokens, [optedIn]);
         assert.deepEqual(requests[0].notification, { title, body });
         assert.deepEqual(requests[0].data, { type: 'lvtian_task_report', messageId, routeId });
         assert.equal(requests[0].android.priority, 'high');
         assert.equal(requests[0].android.notification.tag, messageId);
         assert(!JSON.stringify(requests).includes('私密任务汇报正文'));
-        assert.deepEqual(requests[1].tokens, [optedIn, syncOnly]);
-        assert.deepEqual(JSON.parse(requests[1].data.messageIds), [messageId]);
+        assert.deepEqual(requests[1].tokens, [allReplies]);
+        assert.deepEqual(requests[1].notification, { title, body });
+        assert.deepEqual(requests[1].data, { type: 'lvtian_system_chat_reply', messageId, routeId: allRepliesRoute });
+        assert.deepEqual(requests[2].tokens, [optedIn, syncOnly, allReplies]);
+        assert.deepEqual(JSON.parse(requests[2].data.messageIds), [messageId]);
 
         assert.equal((await register({ token: optedIn })).headers.get('X-Lvtian-Task-Notification'), null);
+        assert.equal((await register({ token: allReplies })).headers.get('X-Lvtian-Task-Notification'), null);
         assert.equal(await server.reportNativeTask(enqueue(store, 'next-delivery')), true);
-        assert.equal(requests.length, 3);
-        assert.equal(requests[2].notification, undefined);
+        assert.equal(requests.length, 4);
+        assert.equal(requests[3].notification, undefined);
     } finally {
         finishNotification();
     }

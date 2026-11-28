@@ -12,7 +12,8 @@ import { pushModules } from './chatPushModules';
 
 const CHANNEL = 'chat-messages';
 const TYPE = 'lvtian_chat_reply';
-const TASK_TYPE = 'lvtian_task_report';
+const SYSTEM_TYPE = 'lvtian_system_chat_reply';
+const LEGACY_SYSTEM_TYPE = 'lvtian_task_report';
 const HISTORY_LENGTH = 256;
 let isViewingChat = () => false;
 let delivery = Promise.resolve();
@@ -53,23 +54,24 @@ export const ensureChatNotificationChannel = () => pushModules?.notifications.se
     lockscreenVisibility: pushModules.notifications.AndroidNotificationVisibility.PRIVATE,
 });
 
-const taskRouteKey = (routeId: string) => 'lvtian-task-notification-route:' + routeId;
-const taskEnrollmentKey = (identity: string) => 'lvtian-task-notification-enrolled:' + identity;
+// Keep the persisted keys so notifications already in the tray still open their replies.
+const notificationRouteKey = (routeId: string) => 'lvtian-task-notification-route:' + routeId;
+const notificationEnrollmentKey = (identity: string) => 'lvtian-task-notification-enrolled:' + identity;
 
-export async function getTaskNotificationRoute(identity: string): Promise<string> {
+export async function getSystemNotificationRoute(identity: string): Promise<string> {
     const key = 'lvtian-task-notification-device:' + identity;
     const existing = await AsyncStorage.getItem(key);
     if (existing) return existing;
     const bytes = crypto.getRandomValues(new Uint8Array(16));
     const routeId = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
     // The push provider gets a random routing ID, never a value derived from connection credentials.
-    await AsyncStorage.multiSet([[key, routeId], [taskRouteKey(routeId), identity]]);
+    await AsyncStorage.multiSet([[key, routeId], [notificationRouteKey(routeId), identity]]);
     return routeId;
 }
 
-export async function setTaskNotificationEnrollment(identity: string, enabled: boolean): Promise<void> {
-    if (enabled) await AsyncStorage.setItem(taskEnrollmentKey(identity), '1');
-    else await AsyncStorage.removeItem(taskEnrollmentKey(identity));
+export async function setSystemNotificationEnrollment(identity: string, scope: '1' | '2' | undefined): Promise<void> {
+    if (scope) await AsyncStorage.setItem(notificationEnrollmentKey(identity), scope);
+    else await AsyncStorage.removeItem(notificationEnrollmentKey(identity));
 }
 
 export async function setChatNotificationPermission(enabled: boolean): Promise<void> {
@@ -106,6 +108,18 @@ function previewText(content: string): string {
     return characters.length > 110 ? characters.slice(0, 110).join('') + '…' : plainText;
 }
 
+function scheduleReplyNotification(messageId: string, serverIdentity: string, preview?: string) {
+    return pushModules?.notifications.scheduleNotificationAsync({
+        identifier: TYPE + ':' + serverIdentity + ':' + messageId,
+        content: {
+            title: i18n.t('chatNotifications.title'),
+            body: preview || i18n.t('chatNotifications.newMessage'),
+            data: { type: TYPE, messageId, serverIdentity },
+        },
+        trigger: { channelId: CHANNEL },
+    });
+}
+
 export function notifyChatReplies(messages: AssistantMessage[]): Promise<void> {
     const notifications = pushModules?.notifications;
     const serverIdentity = currentChatIdentity();
@@ -116,13 +130,13 @@ export function notifyChatReplies(messages: AssistantMessage[]): Promise<void> {
     delivery = delivery.then(async () => {
         await waitForSettings();
         if (!useSettingsStore.getState().chatNotificationsEnabled || serverIdentity !== currentChatIdentity()) return;
+        const systemScope = await AsyncStorage.getItem(notificationEnrollmentKey(serverIdentity));
+        if (systemScope === '2') return;
         const key = 'lvtian-chat-notifications-v1:' + serverIdentity;
         const raw: unknown = JSON.parse(await AsyncStorage.getItem(key) ?? '[]');
         const seen = new Set<string>(Array.isArray(raw) ? raw.filter(id => typeof id === 'string') : []);
-        const systemNotifiesTasks = replies.some(message => message.source === 'native_task_report')
-            && await AsyncStorage.getItem(taskEnrollmentKey(serverIdentity)) === '1';
         const unseen = replies.filter(message => !seen.has(message.id)
-            && !(systemNotifiesTasks && message.source === 'native_task_report'));
+            && !(systemScope === '1' && message.source === 'native_task_report'));
         if (!unseen.length) return;
         if (!readingWhenReceived && !isReadingChat()) {
             if (!(await notifications.getPermissionsAsync()).granted) return;
@@ -132,17 +146,9 @@ export function notifyChatReplies(messages: AssistantMessage[]): Promise<void> {
             const settings = useSettingsStore.getState();
             if (!settings.chatNotificationsEnabled || serverIdentity !== currentChatIdentity()) break;
             if (!readingWhenReceived && !isReadingChat()) {
-                const preview = settings.chatNotificationPreview && previewText(message.content);
+                const preview = settings.chatNotificationPreview ? previewText(message.content) : undefined;
                 try {
-                    await notifications.scheduleNotificationAsync({
-                        identifier: TYPE + ':' + serverIdentity + ':' + message.id,
-                        content: {
-                            title: i18n.t('chatNotifications.title'),
-                            body: preview || i18n.t('chatNotifications.newMessage'),
-                            data: { type: TYPE, messageId: message.id, serverIdentity },
-                        },
-                        trigger: { channelId: CHANNEL },
-                    });
+                    await scheduleReplyNotification(message.id, serverIdentity, preview);
                 } catch { continue; }
             }
             seen.add(message.id);
@@ -186,6 +192,7 @@ export async function notifyPushedChatReplies(ids: string[]): Promise<void> {
     await waitForSettings();
     const serverIdentity = currentChatIdentity();
     if (!serverIdentity || !useSettingsStore.getState().chatNotificationsEnabled) return;
+    if (await AsyncStorage.getItem(notificationEnrollmentKey(serverIdentity)).catch(() => null) === '2') return;
     const { messages } = useAssistantStore.getState();
     const byId = new Map(messages.map(message => [message.id, message]));
     const signal = new AbortController().signal;
@@ -202,8 +209,9 @@ export async function notifyPushedChatReplies(ids: string[]): Promise<void> {
 
 async function notificationIdentity(data: Record<string, unknown> | undefined): Promise<string | undefined> {
     if (data?.type === TYPE && typeof data.serverIdentity === 'string') return data.serverIdentity;
-    if (data?.type === TASK_TYPE && typeof data.routeId === 'string' && /^[a-f0-9]{32}$/.test(data.routeId)) {
-        return await AsyncStorage.getItem(taskRouteKey(data.routeId)) ?? undefined;
+    if ((data?.type === SYSTEM_TYPE || data?.type === LEGACY_SYSTEM_TYPE)
+        && typeof data.routeId === 'string' && /^[a-f0-9]{32}$/.test(data.routeId)) {
+        return await AsyncStorage.getItem(notificationRouteKey(data.routeId)) ?? undefined;
     }
 }
 
@@ -224,9 +232,22 @@ export function startChatNotifications(isChatVisible: () => boolean, openReply: 
     isViewingChat = isChatVisible;
     notifications.setNotificationHandler({
         handleNotification: async notification => {
-            const serverIdentity = await notificationIdentity(notification.request.content.data);
-            const show = Boolean(serverIdentity && serverIdentity === currentChatIdentity() && !isReadingChat()
-                && useSettingsStore.getState().chatNotificationsEnabled);
+            const data = notification.request.content.data;
+            const serverIdentity = await notificationIdentity(data);
+            const settings = useSettingsStore.getState();
+            let show = Boolean(serverIdentity && serverIdentity === currentChatIdentity() && !isReadingChat()
+                && settings.chatNotificationsEnabled);
+            if (show && serverIdentity && data?.type === SYSTEM_TYPE && typeof data.messageId === 'string'
+                && AppState.currentState === 'active' && settings.chatNotificationPreview) {
+                const reply = useAssistantStore.getState().messages.find(message =>
+                    message.id === data.messageId && isCompletedReply(message));
+                if (reply) {
+                    try {
+                        await scheduleReplyNotification(reply.id, serverIdentity, previewText(reply.content));
+                        show = false;
+                    } catch { /* Keep the original system notice if the preview could not be displayed. */ }
+                }
+            }
             return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };
         },
     });

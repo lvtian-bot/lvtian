@@ -2,8 +2,8 @@ import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NotificationResponse } from 'expo-notifications';
 import {
-    chatServerIdentity, getTaskNotificationRoute, notifyChatReplies, pushedReplyIds, setChatNotificationPermission,
-    setTaskNotificationEnrollment, startChatNotifications,
+    chatServerIdentity, getSystemNotificationRoute, notifyChatReplies, notifyPushedChatReplies, pushedReplyIds, setChatNotificationPermission,
+    setSystemNotificationEnrollment, startChatNotifications,
 } from '../src/services/chatNotifications';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { useSettingsStore } from '../src/store/useSettingsStore';
@@ -95,9 +95,9 @@ it('uses the system notification for enrolled task reports and opens the correct
     const routeId = 'ab'.repeat(16);
     await AsyncStorage.setItem('lvtian-task-notification-device:' + identity, routeId);
     await AsyncStorage.setItem('lvtian-task-notification-route:' + routeId, identity);
-    expect(await getTaskNotificationRoute(identity)).toBe(routeId);
+    expect(await getSystemNotificationRoute(identity)).toBe(routeId);
     const report: AssistantMessage = { ...reply('report'), source: 'native_task_report' };
-    await setTaskNotificationEnrollment(identity, true);
+    await setSystemNotificationEnrollment(identity, '1');
     await notifyChatReplies([report, reply('regular')]);
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     expect(mockSchedule.mock.calls[0][0].content.data.messageId).toBe('regular');
@@ -120,9 +120,55 @@ it('uses the system notification for enrolled task reports and opens the correct
     expect(open).toHaveBeenCalledWith({ messageId: report.id, serverIdentity: identity });
 
     viewingChat = false;
-    await setTaskNotificationEnrollment(identity, false);
+    await setSystemNotificationEnrollment(identity, undefined);
     await notifyChatReplies([report]);
     expect(mockSchedule).toHaveBeenCalledTimes(2);
+});
+
+it('lets the system own all completed replies while foreground notifications can show a cached preview', async () => {
+    const open = jest.fn();
+    let viewingChat = false;
+    stop = startChatNotifications(() => viewingChat, open);
+    const identity = chatServerIdentity('https://server.test', 'test-' + testAccount);
+    const routeId = 'cd'.repeat(16);
+    await AsyncStorage.setItem('lvtian-task-notification-route:' + routeId, identity);
+    await setSystemNotificationEnrollment(identity, '2');
+    const regular = reply('regular-system');
+    const report: AssistantMessage = { ...reply('task-system'), source: 'native_task_report' };
+    const job: AssistantMessage = { ...reply('job-system'), source: 'autonomous_job_reply' };
+    await notifyChatReplies([regular, report, job]);
+    const getReply = jest.spyOn(global, 'fetch');
+    try {
+        await notifyPushedChatReplies([regular.id, report.id, job.id]);
+        expect(getReply).not.toHaveBeenCalled();
+    } finally {
+        getReply.mockRestore();
+    }
+    expect(mockSchedule).not.toHaveBeenCalled();
+
+    const notification = {
+        date: Date.now(),
+        request: {
+            identifier: 'system-reply',
+            trigger: null,
+            content: { title: '绿天', body: '你有一条新消息', data: { type: 'lvtian_system_chat_reply', messageId: regular.id, routeId } },
+        },
+    };
+    const handler = mockSetHandler.mock.calls[0][0];
+    await expect(handler.handleNotification(notification)).resolves.toMatchObject({ shouldShowBanner: true });
+    useAssistantStore.setState({ messages: [regular] });
+    viewingChat = true;
+    await expect(handler.handleNotification(notification)).resolves.toMatchObject({ shouldShowBanner: false });
+    expect(mockSchedule).not.toHaveBeenCalled();
+    viewingChat = false;
+    await expect(handler.handleNotification(notification)).resolves.toMatchObject({ shouldShowBanner: false });
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    expect(mockSchedule.mock.calls[0][0].content.body).toBe('本周汇报 已经整理完毕。');
+
+    const onResponse = mockListenResponse.mock.calls[0][0];
+    onResponse({ actionIdentifier: 'default', notification });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(open).toHaveBeenCalledWith({ messageId: regular.id, serverIdentity: identity });
 });
 
 it('suppresses replies read in open chat and hides text when previews are off', async () => {
