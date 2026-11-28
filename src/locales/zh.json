@@ -3,6 +3,7 @@
     "chat": "主聊天",
     "timeline": "闪念",
     "todo": "任务",
+    "moments": "动态",
     "files": "系统文件",
     "browser": "笔记",
     "settings": "设置",
@@ -39,6 +40,10 @@
     "retryAttachmentFailed": "附件原文件已失效，无法重新发送",
     "previewImage": "预览图片",
     "resend": "重发"
+  },
+  "moments": {
+    "regenerateSummary": "重新生成摘要",
+    "deleteSummary": "删除摘要"
   },
   "about": {
     "title": "关于",

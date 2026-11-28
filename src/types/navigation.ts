@@ -9,6 +9,7 @@ export type MainTabParamList = {
     Chat: NavigatorScreenParams<ChatStackParamList> | undefined;
     Flash: undefined;
     Todo: undefined;
+    Moments: undefined;
     Me: undefined;
 };
 
