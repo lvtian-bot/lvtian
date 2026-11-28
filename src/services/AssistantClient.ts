@@ -816,10 +816,12 @@ export class AssistantClient {
             attachments,
         };
 
-        store.addOrUpdateMessage(localMessage);
-
         this.sendRetries.delete(messageId);
-        store.addToPendingSendQueue({ sessionId: 'main', messageId, content, attachments, attempted: false });
+        store.addToPendingSendQueue({
+            sessionId: 'main', messageId, content, attachments, attempted: false,
+            submittedOnline: isConnected && !store.isServerUpgrading ? true : undefined,
+        });
+        store.addOrUpdateMessage(localMessage);
         if (isConnected) this.flushPendingSendQueue();
         else if (!this.ws || this.ws.readyState === WebSocket.CLOSED) this.connect();
         return messageId;
@@ -1600,7 +1602,7 @@ export class AssistantClient {
                     this.releaseSendLock();
                     store.setIsServerUpgrading(true);
                     this.reconnectAttempts = 0;
-                    if (pendingItem?.withdrawal) break;
+                    if (pendingItem?.withdrawal || pendingItem?.failed) break;
                     store.addOrUpdateMessage({
                         id: msg.messageId,
                         seq: msg.seq,
@@ -1615,7 +1617,7 @@ export class AssistantClient {
                         messageId: msg.messageId,
                         content: existing ? existing.content : (msg.content || ''),
                         attachments: existing?.attachments,
-                        failed: undefined,
+                        attempted: true,
                     });
                     break;
                 }
