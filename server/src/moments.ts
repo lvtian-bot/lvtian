@@ -10,14 +10,26 @@ const monthPattern = /^(0[1-9]|1[0-2])$/;
 const filePattern = /^[^/\\:\u0000-\u001f\u007f]+\.md$/;
 const pageSize = 20;
 
-export type SummaryAction = 'regenerate' | 'delete';
-export type UploadResult = 'uploaded' | 'upload_failed';
+type UploadResult = 'uploaded' | 'upload_failed';
+type DeleteResult = 'deleted' | 'delete_failed';
 export interface Moment {
     id: string;
     title: string;
+    sourceUrl?: string;
     clippedAt: number;
     summary: string;
     revision: string;
+}
+
+function publicSource(source: string): string | undefined {
+    try {
+        const url = new URL(source);
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return;
+        // 与 Web Clipper 发往 Telegram 的原文链接一致。
+        url.search = '';
+        url.hash = '';
+        return url.href;
+    } catch { /* 无效的旧来源仍可展示摘要。 */ }
 }
 
 export function isMomentId(value: unknown): value is string {
@@ -50,6 +62,7 @@ function parseMoment(id: string, content: string, fallback: number): Moment | nu
         id,
         // 剪藏的 YAML 没有标题字段，转换器已将文章标题用于文件名。
         title: path.posix.basename(id, '.md'),
+        sourceUrl: publicSource(metadata.source),
         clippedAt: captureTime('created' in metadata ? metadata.created : undefined, fallback),
         summary: section.slice(0, separator.index).trim(),
         revision: createHash('sha256').update(content).digest('hex'),
@@ -163,26 +176,34 @@ export class ClipperMomentsClient {
             if (!['http:', 'https:'].includes(origin.protocol)
                 || !['127.0.0.1', '[::1]'].includes(origin.hostname)
                 || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/') return;
-            this.url = new URL('/api/moments/summary', origin);
+            this.url = origin;
         } catch { /* 没有有效配对配置时仍可浏览归档。 */ }
     }
 
     get configured(): boolean { return this.url !== undefined; }
 
-    async update(id: string, revision: string, action: SummaryAction): Promise<UploadResult | null> {
+    private async request(endpoint: string, body: object): Promise<unknown> {
         if (!this.url) return null;
-        const response = await fetch(this.url, {
+        const response = await fetch(new URL(endpoint, this.url), {
             method: 'POST', redirect: 'error', signal: AbortSignal.timeout(180_000),
             headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, revision, action }),
+            body: JSON.stringify(body),
         });
         if (!response.ok) {
             await response.body?.cancel();
             return null;
         }
-        const body: unknown = await response.json();
-        if (body && typeof body === 'object' && 'status' in body
-            && (body.status === 'uploaded' || body.status === 'upload_failed')) return body.status;
-        return null;
+        const result: unknown = await response.json();
+        return result && typeof result === 'object' && 'status' in result ? result.status : null;
+    }
+
+    async rewrite(id: string, revision: string): Promise<UploadResult | null> {
+        const status = await this.request('/api/moments/summary', { id, revision, action: 'regenerate' });
+        return status === 'uploaded' || status === 'upload_failed' ? status : null;
+    }
+
+    async delete(id: string, revision: string): Promise<DeleteResult | null> {
+        const status = await this.request('/api/moments/delete', { id, revision });
+        return status === 'deleted' || status === 'delete_failed' ? status : null;
     }
 }

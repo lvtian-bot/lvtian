@@ -42,8 +42,12 @@
     "resend": "重发"
   },
   "moments": {
-    "regenerateSummary": "重新生成摘要",
-    "deleteSummary": "删除摘要"
+    "rewrite": "重写",
+    "justNow": "刚刚",
+    "minutesAgo_other": "{{count}} 分钟前",
+    "hoursAgo_other": "{{count}} 小时前",
+    "daysAgo_other": "{{count}} 天前",
+    "cloudDeleteFailed": "工作区文件已删除，坚果云文件删除失败。"
   },
   "about": {
     "title": "关于",

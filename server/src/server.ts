@@ -300,7 +300,7 @@ export class LvtianServer {
             return;
         }
 
-        if (pathname === '/api/moments' || pathname === '/api/moments/summary') {
+        if (pathname === '/api/moments' || pathname === '/api/moments/summary' || pathname === '/api/moments/delete') {
             await handleMomentsHttp(req, res, urlObj, this.moments, this.clipperMoments,
                 () => this.readJsonBody<unknown>(req, 8 * 1024), this.isDraining);
             return;

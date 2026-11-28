@@ -17,18 +17,25 @@ export async function handleMomentsHttp(
             json(res, 200, { ...page, canEditSummary: clipper.configured });
             return;
         }
-        if (url.pathname === '/api/moments/summary' && req.method === 'POST') {
-            if (draining || !clipper.configured) { json(res, 503, { code: 'summary_unavailable' }); return; }
+        const rewrite = url.pathname === '/api/moments/summary';
+        if ((rewrite || url.pathname === '/api/moments/delete') && req.method === 'POST') {
+            if (draining || !clipper.configured) { json(res, 503, { code: 'moments_unavailable' }); return; }
             const body = await readBody().catch(() => null);
             if (!body || typeof body !== 'object' || !('id' in body) || !isMomentId(body.id)
                 || !('revision' in body) || typeof body.revision !== 'string' || !/^[a-f0-9]{64}$/.test(body.revision)
-                || !('action' in body) || (body.action !== 'regenerate' && body.action !== 'delete')) {
+                || (rewrite && (!('action' in body) || body.action !== 'regenerate'))) {
                 json(res, 400, { code: 'invalid_input' }); return;
             }
             const current = await archive.read(body.id);
             if (!current) { json(res, 404, { code: 'clip_not_found' }); return; }
             if (current.revision !== body.revision) { json(res, 409, { code: 'clip_changed' }); return; }
-            const status = await clipper.update(body.id, body.revision, body.action);
+            if (!rewrite) {
+                const status = await clipper.delete(body.id, body.revision);
+                if (!status) { json(res, 502, { code: 'delete_failed' }); return; }
+                json(res, 200, { status });
+                return;
+            }
+            const status = await clipper.rewrite(body.id, body.revision);
             if (!status) { json(res, 502, { code: 'summary_failed' }); return; }
             const item = await archive.read(body.id);
             if (!item) { json(res, 404, { code: 'clip_not_found' }); return; }

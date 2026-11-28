@@ -42,8 +42,15 @@
     "resend": "Resend"
   },
   "moments": {
-    "regenerateSummary": "Regenerate summary",
-    "deleteSummary": "Delete summary"
+    "rewrite": "Rewrite",
+    "justNow": "Just now",
+    "minutesAgo_one": "{{count}} minute ago",
+    "minutesAgo_other": "{{count}} minutes ago",
+    "hoursAgo_one": "{{count}} hour ago",
+    "hoursAgo_other": "{{count}} hours ago",
+    "daysAgo_one": "{{count}} day ago",
+    "daysAgo_other": "{{count}} days ago",
+    "cloudDeleteFailed": "The workspace file was deleted. The Nutstore file could not be deleted."
   },
   "about": {
     "title": "About",
