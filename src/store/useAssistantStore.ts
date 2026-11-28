@@ -13,6 +13,8 @@ import {
 import {
     AssistantMessage,
     ConnectionState,
+    ConnectionPhase,
+    ConnectionErrorKind,
     TaskExecutionState,
     ApprovalRequest,
     ToolCallState,
@@ -100,6 +102,9 @@ interface AssistantState {
     serverToken: string;
     connectionState: ConnectionState;
     connectionError: string | null;
+    connectionErrorKind: ConnectionErrorKind | null;
+    connectionPhase: ConnectionPhase | null;
+    isNetworkOffline: boolean;
     messages: AssistantMessage[];
     taskState: TaskExecutionState;
     /** 待审批队列：同一会话并发多个工具各自请求审批时按序展示与应答 */
@@ -132,7 +137,9 @@ interface AssistantState {
     setSkills: (skills: AgentSkill[]) => void;
     setServerConfig: (url: string, token: string) => Promise<void>;
     loadSavedCredentials: () => Promise<{ url: string; token: string }>;
-    setConnectionState: (state: ConnectionState, error?: string | null) => void;
+    setConnectionState: (state: ConnectionState, error?: string | null, errorKind?: ConnectionErrorKind | null) => void;
+    setConnectionPhase: (phase: ConnectionPhase | null) => void;
+    setIsNetworkOffline: (offline: boolean) => void;
     setMessages: (messages: AssistantMessage[]) => void;
     addOrUpdateMessage: (message: AssistantMessage) => void;
     removeMessage: (messageId: string) => void;
@@ -162,6 +169,9 @@ export const useAssistantStore = create<AssistantState>()(
                 serverToken: '',
                 connectionState: 'disconnected',
                 connectionError: null,
+                connectionErrorKind: null,
+                connectionPhase: null,
+                isNetworkOffline: false,
                 messages: [],
                 taskState: 'idle',
                 pendingApprovals: [],
@@ -272,8 +282,20 @@ export const useAssistantStore = create<AssistantState>()(
                     }
                 }),
 
-                setConnectionState: (connectionState, connectionError = null) =>
-                    set({ connectionState, connectionError }),
+                setConnectionState: (connectionState, connectionError = null, connectionErrorKind = null) =>
+                    set((state) => ({
+                        connectionState,
+                        connectionError,
+                        connectionErrorKind,
+                        connectionPhase:
+                            connectionState === 'connected' || connectionState === 'disconnected' || connectionState === 'error'
+                                ? null
+                                : state.connectionPhase,
+                    })),
+
+                setConnectionPhase: (connectionPhase) => set({ connectionPhase }),
+
+                setIsNetworkOffline: (isNetworkOffline) => set({ isNetworkOffline }),
 
                 setMessages: (messages) => set({ messages }),
 

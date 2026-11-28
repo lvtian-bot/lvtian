@@ -416,16 +416,22 @@ describe('AssistantClient connection recovery', () => {
 
     it('respects explicit disconnect and invalid credentials across lifecycle and network changes', async () => {
         await client.connect();
+        expect(useAssistantStore.getState().connectionPhase).toBe('handshake');
         TestSocket.instances[0].open();
+        expect(useAssistantStore.getState().connectionPhase).toBe('authentication');
         TestSocket.instances[0].receive({ type: 'auth_result', success: false, error: 'invalid' });
         appChange('background');
         jest.advanceTimersByTime(5000);
         appChange('active');
         networkChange(offline);
+        expect(useAssistantStore.getState().isNetworkOffline).toBe(true);
         networkChange(wifi);
+        expect(useAssistantStore.getState().isNetworkOffline).toBe(false);
         jest.advanceTimersByTime(60000);
         expect(TestSocket.instances).toHaveLength(1);
         expect(useAssistantStore.getState().connectionState).toBe('error');
+        expect(useAssistantStore.getState().connectionErrorKind).toBe('auth');
+        expect(useAssistantStore.getState().connectionPhase).toBeNull();
         await client.connect();
         expect(TestSocket.instances).toHaveLength(2);
     });

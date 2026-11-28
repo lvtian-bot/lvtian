@@ -13,6 +13,7 @@ import {
     AssistantMessage,
     ChatAttachment,
     ChatHistoryPage,
+    ConnectionPhase,
     ToolCallState,
     AgentSkill,
     AgentModelOption,
@@ -27,7 +28,6 @@ const STALE_CONNECTION_MS = 30000;
 const MAX_AUTO_SEND_RETRIES = 3;
 const SEND_ACK_TIMEOUTS_MS = [6000, 6000, 8000, 10000] as const;
 const SEND_RETRY_DELAYS_MS = [3000, 6000, 10000] as const;
-type ConnectionPhase = keyof typeof PHASE_TIMEOUT_MS;
 type ChatSyncResult = Extract<ServerMessage, { type: 'sync_result' }>;
 
 export class AssistantClient {
@@ -117,6 +117,7 @@ export class AssistantClient {
             this.networkSubscription = Network.addNetworkStateListener((state) => {
                 const previous = this.networkState;
                 this.networkState = state;
+                useAssistantStore.getState().setIsNetworkOffline(state.isConnected === false);
                 const type = state.type;
                 const knownOnline = state.isConnected === true && type !== undefined && type !== 'UNKNOWN' && type !== 'NONE';
                 const switched = knownOnline && this.lastKnownNetworkType !== undefined && type !== this.lastKnownNetworkType;
@@ -157,6 +158,16 @@ export class AssistantClient {
                     this.scheduleReconnect();
                 }
             });
+            if (typeof Network.getNetworkStateAsync === 'function') {
+                Network.getNetworkStateAsync().then((state) => {
+                    if (!state || this.networkState !== null) return;
+                    this.networkState = state;
+                    const type = state.type;
+                    const knownOnline = state.isConnected === true && type !== undefined && type !== 'UNKNOWN' && type !== 'NONE';
+                    if (knownOnline) this.lastKnownNetworkType = type;
+                    useAssistantStore.getState().setIsNetworkOffline(state.isConnected === false);
+                }).catch(() => {});
+            }
         } catch {
             console.warn('[AssistantClient:connection] network_listener_unavailable');
         }
@@ -225,12 +236,14 @@ export class AssistantClient {
         if (this.phaseTimer) clearTimeout(this.phaseTimer);
         this.phaseTimer = null;
         this.connectionPhase = null;
+        useAssistantStore.getState().setConnectionPhase(null);
     }
 
     private startPhaseTimeout(ws: WebSocket, phase: ConnectionPhase): void {
         this.clearPhaseTimeout();
         this.connectionPhase = phase;
         this.phaseStartedAt = Date.now();
+        useAssistantStore.getState().setConnectionPhase(phase);
         this.phaseTimer = setTimeout(() => {
             if (this.ws !== ws) return;
             this.logConnection('timeout', this.nativeReceiveDetails());
@@ -564,6 +577,7 @@ export class AssistantClient {
         store = useAssistantStore.getState();
         if (this.isExplicitlyClosed || request !== this.connectionRequest) return;
         if (this.networkState?.isConnected === false) {
+            store.setIsNetworkOffline(true);
             store.setConnectionState('disconnected');
             return;
         }
@@ -656,7 +670,7 @@ export class AssistantClient {
         } catch (err: unknown) {
             this.logConnection('socket_setup_failed');
             const msg = err instanceof Error ? err.message : String(err);
-            store.setConnectionState('error', msg);
+            store.setConnectionState('error', msg, 'other');
             this.scheduleReconnect();
         }
     }
@@ -1545,7 +1559,7 @@ export class AssistantClient {
                     this.fetchSkills().catch(() => {});
                 } else {
                     this.logConnection('authentication_failed');
-                    store.setConnectionState('error', msg.error || '认证失败，请检查访问令牌');
+                    store.setConnectionState('error', msg.error || null, 'auth');
                     this.isExplicitlyClosed = true;
                     this.stopPing();
                     if (this.reconnectTimer) {

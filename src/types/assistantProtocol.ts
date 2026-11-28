@@ -1,5 +1,9 @@
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
+export type ConnectionPhase = 'handshake' | 'authentication' | 'sync';
+
+export type ConnectionErrorKind = 'auth' | 'other';
+
 export type TaskExecutionState = 'idle' | 'processing' | 'awaiting_approval' | 'stopped' | 'completed' | 'error';
 
 export interface ToolCallState {
