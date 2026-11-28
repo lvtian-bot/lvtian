@@ -13,7 +13,8 @@ jest.mock('react-native-reanimated', () => {
     useAnimatedStyle: (fn) => fn(),
     useReducedMotion: () => false,
     interpolate: (_value, _input, output) => output[0] ?? 0,
-    withTiming: (value) => value,
+    Easing: { bezier: () => (value) => value },
+    withTiming: jest.fn((value) => value),
   };
 });
 

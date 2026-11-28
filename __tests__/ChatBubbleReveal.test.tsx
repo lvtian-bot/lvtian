@@ -1,7 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
-import * as Reanimated from 'react-native-reanimated';
 import { ChatBubbleReveal } from '../src/components/ChatBubbleReveal';
 import { ChatBubbleText } from '../src/components/ChatBubbleText';
 import { ChatMarkdownBubble } from '../src/components/ChatMarkdownBubble';
@@ -76,57 +75,41 @@ describe('bubble measurement reveal', () => {
         expect(StyleSheet.flatten(host().props.style).flexDirection).toBe('row');
         expect(StyleSheet.flatten(clock().props.style).position).toBeUndefined();
     });
-    it('starts the measured entrance only once, including its date and preserving the body', async () => {
-        const consumeEntrance = jest.fn();
-        const animate = jest.spyOn(Reanimated, 'withTiming');
-        const render = (consume?: () => void, time = '12:05') => (
+    it('releases the complete outgoing row once, including its date and original body', async () => {
+        const onEntranceReady = jest.fn();
+        const render = (onReady?: () => void, time = '12:05') => (
             <ChatBubbleReveal layoutKey="sent-message" style={{ marginBottom: 12 }}
-                dateSeparator={<View testID="send-date" />} consumeEntrance={consume}>
+                dateSeparator={<View testID="send-date" />} onEntranceReady={onReady}>
                 <ChatBubbleText text="好" time={time} textStyle={{ lineHeight: 24 }} />
             </ChatBubbleReveal>
         );
-        try {
-            await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(render(consumeEntrance)); });
-            const originalBody = body();
-            expect(consumeEntrance).toHaveBeenCalledTimes(1);
-            expect(StyleSheet.flatten(row().props.style)).toMatchObject({ height: 0, overflow: 'scroll' });
-            const measureContent = () => renderer.root.findAllByType(View).find(view => view.props.onLayout)!;
-            expect(measureContent().findAllByProps({ testID: 'send-date' }).length).toBeGreaterThan(0);
-            await ReactTestRenderer.act(async () => {
-                measureContent().props.onLayout({ nativeEvent: { layout: { height: 84 } } });
-            });
-            expect(animate).not.toHaveBeenCalled();
+        await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(render(onEntranceReady)); });
+        const originalBody = body();
+        expect(row().findAllByProps({ testID: 'send-date' }).length).toBeGreaterThan(0);
+        expect(StyleSheet.flatten(row().props.style)).toMatchObject({ height: 0, overflow: 'scroll' });
+        expect(onEntranceReady).not.toHaveBeenCalled();
 
-            await textLayout([18]);
-            expect(animate).toHaveBeenCalledTimes(1);
-            expect(animate.mock.calls[0][0]).toBe(1);
+        await textLayout([18]);
+        expect(StyleSheet.flatten(row().props.style)?.height).toBeUndefined();
+        expect(onEntranceReady).toHaveBeenCalledTimes(1);
 
-            await ReactTestRenderer.act(async () => renderer.update(render(undefined, '12:06')));
-            expect(body()).toBe(originalBody);
-            expect(clock().props.children).toBe('12:06');
-            expect(StyleSheet.flatten(row().props.style).height).toBeUndefined();
-            expect(animate).toHaveBeenCalledTimes(1);
-        } finally {
-            animate.mockRestore();
-        }
+        await ReactTestRenderer.act(async () => renderer.update(render(undefined, '12:06')));
+        expect(body()).toBe(originalBody);
+        expect(clock().props.children).toBe('12:06');
+        expect(onEntranceReady).toHaveBeenCalledTimes(1);
     });
 
-    it('releases the entrance wrapper if measuring the whole row never reports a height', async () => {
-        jest.useFakeTimers();
-        try {
-            const render = () => (
-                <ChatBubbleReveal layoutKey="attachment" style={{}} consumeEntrance={() => {}}>
+    it('releases an outgoing attachment without requiring a text measurement', async () => {
+        const onReady = jest.fn();
+        await ReactTestRenderer.act(async () => {
+            renderer = ReactTestRenderer.create(
+                <ChatBubbleReveal layoutKey="attachment" style={{}} onEntranceReady={onReady}>
                     <View />
-                </ChatBubbleReveal>
+                </ChatBubbleReveal>,
             );
-            await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(render()); });
-            expect(StyleSheet.flatten(row().props.style).height).toBe(0);
-            await ReactTestRenderer.act(async () => { jest.advanceTimersByTime(200); });
-            await ReactTestRenderer.act(async () => renderer.update(render()));
-            expect(StyleSheet.flatten(row().props.style).height).toBeUndefined();
-        } finally {
-            jest.useRealTimers();
-        }
+        });
+        expect(StyleSheet.flatten(row().props.style)?.height).toBeUndefined();
+        expect(onReady).toHaveBeenCalledTimes(1);
     });
     it('does not gate streamed prose or remount its selectable text on token/time updates', async () => {
         await ReactTestRenderer.act(async () => { renderer = ReactTestRenderer.create(element('first', true, true)); });

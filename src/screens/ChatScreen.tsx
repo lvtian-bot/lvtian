@@ -41,7 +41,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import { fsService } from '../services/FileSystemService';
 import Icon from '@expo/vector-icons/MaterialIcons';
 import { ChatMarkdownBubble } from '../components/ChatMarkdownBubble';
-import { ChatBubbleReveal } from '../components/ChatBubbleReveal';
+import { CHAT_BUBBLE_MEASURE_TIMEOUT_MS, ChatBubbleReveal } from '../components/ChatBubbleReveal';
+import { CHAT_SEND_SLIDE_MS, ChatMessageCell, ChatSendSlideContext } from '../components/ChatMessageCell';
 import { ImageViewerModal } from '../components/ImageViewerModal';
 import { TabBarHeightContext } from '../navigation/TabBarHeightContext';
 import { textInputColors, theme } from '../utils/theme';
@@ -70,6 +71,8 @@ import { ConnectionConfigError } from '../services/connectionConfig';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 const TYPING_INDICATOR_DELAY_MS = 1000;
+// Allow the reveal's native layout commit to arrive before removing cell transitions.
+const CHAT_SEND_LAYOUT_GRACE_MS = 50;
 
 /** 服务端稳定错误码 → i18n 键：按码本地化渲染，未知码与历史中文文案按原文兜底显示 */
 const ERROR_CODE_I18N_KEYS: Record<string, string> = {
@@ -127,10 +130,37 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
     const chatInputRef = useRef<ComponentRef<typeof TextInput>>(null);
     const contentInsetsRef = useRef<{ top: number; bottom: number }>({ top: 0, bottom: 0 });
     const scrollOffset = useRef<number | undefined>(undefined);
-    const entranceMessageId = useRef<string | undefined>(undefined);
+    const [sendSlides, setSendSlides] = useState<ReadonlyMap<string, 'measuring' | 'sliding'>>(() => new Map());
+    const sendSlideTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
     const reduceMotion = useReducedMotion();
     const extraContentPadding = useSharedValue(0);
     const composerHeight = useSharedValue(60);
+
+    const expireSendSlide = useCallback((id: string, delay: number) => {
+        const timers = sendSlideTimers.current;
+        clearTimeout(timers.get(id));
+        timers.set(id, setTimeout(() => {
+            timers.delete(id);
+            setSendSlides(previous => {
+                const next = new Map(previous);
+                next.delete(id);
+                return next;
+            });
+        }, delay));
+    }, []);
+
+    const handleSendSlideReady = useCallback((id: string) => {
+        setSendSlides(previous => previous.has(id) ? new Map(previous).set(id, 'sliding') : previous);
+        expireSendSlide(id, CHAT_SEND_SLIDE_MS + CHAT_SEND_LAYOUT_GRACE_MS);
+    }, [expireSendSlide]);
+
+    useEffect(() => {
+        const timers = sendSlideTimers.current;
+        return () => {
+            timers.forEach(timer => clearTimeout(timer));
+            timers.clear();
+        };
+    }, []);
 
     // 监听应用切回前台（热启动）：彻底阻止软键盘误触自动弹出（前台重连由 AssistantClient 统一守护）
     useEffect(() => {
@@ -696,7 +726,10 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
         const distance = getInvertedDistanceFromBottom(scrollOffset.current ?? targetOffset, top);
         const atBottom = distance <= 1;
         const messageId = AssistantClient.getInstance().sendMessage(text, attachments.length > 0 ? attachments : undefined);
-        entranceMessageId.current = atBottom && !reduceMotion ? messageId : undefined;
+        if (atBottom && !reduceMotion) {
+            setSendSlides(previous => new Map(previous).set(messageId, 'measuring'));
+            expireSendSlide(messageId, CHAT_BUBBLE_MEASURE_TIMEOUT_MS + CHAT_SEND_SLIDE_MS + CHAT_SEND_LAYOUT_GRACE_MS);
+        }
         setSubmittedId(taskRunning ? undefined : messageId);
         finishComposer();
         if (!atBottom) flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: true });
@@ -861,9 +894,11 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
               倒序列表的 ListHeaderComponent 落在视觉最底部，正好承载“正在工作”指示：
               它随列表滚动、不进消息数据、不参与排序，直到整轮工作结束才消失。
             */}
+            <ChatSendSlideContext.Provider value={sendSlides}>
             <FlatList
                 ref={flatListRef}
                 data={displayMessages}
+                CellRendererComponent={ChatMessageCell}
                 inverted={true}
                 keyExtractor={(item) => item.timelineKey ?? item.id}
                 contentContainerStyle={styles.messageList}
@@ -1043,9 +1078,8 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                             layoutKey={JSON.stringify([item.id, metrics])}
                             dateSeparator={dateSeparator}
                             streaming={!isUser && item.status === 'processing'}
-                            consumeEntrance={isUser && entranceMessageId.current === item.id ? () => {
-                                if (entranceMessageId.current === item.id) entranceMessageId.current = undefined;
-                            } : undefined}
+                            onEntranceReady={isUser && sendSlides.get(item.id) === 'measuring'
+                                ? () => handleSendSlideReady(item.id) : undefined}
                             style={[
                                 styles.messageRow,
                                 isUser ? styles.userRow : styles.assistantRow,
@@ -1074,6 +1108,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                     );
                 }}
             />
+            </ChatSendSlideContext.Provider>
 
             {/* 向上滚动时出现的快速回到底部悬浮小圆钮：置于主容器内保证触摸响应边界完整，并跟随键盘与输入框高度平滑位移 */}
             {showScrollBottom && (
