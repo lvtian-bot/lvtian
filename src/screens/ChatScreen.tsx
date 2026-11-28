@@ -65,6 +65,7 @@ import { ChatStackParamList, RootStackParamList } from '../types/navigation';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { getFontSizeMetrics, auxFontSizes } from '../utils/fontSize';
 import i18n from '../i18n';
+import { useChatConnectionPresentation } from '../hooks/useChatConnectionPresentation';
 import { connectionErrorKey } from '../utils/connectionErrorPresentation';
 import { chatServerIdentity, readNotificationReply } from '../services/chatNotifications';
 import { ConnectionConfigError } from '../services/connectionConfig';
@@ -215,7 +216,6 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
         credentialsError,
         loadSavedCredentials,
         connectionState,
-        connectionError,
         isServerUpgrading,
         messages,
         clearedSeq,
@@ -225,6 +225,7 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
         skills,
         setServerConfig,
     } = useAssistantStore();
+    const { banner, retryConnection } = useChatConnectionPresentation();
 
     const [inputContent, setInputContent] = useState('');
     const [retryingStorage, setRetryingStorage] = useState(false);
@@ -857,32 +858,35 @@ export const ChatScreen = ({ route }: { route?: RouteProp<ChatStackParamList, 'C
                     </View>
                 </View>
             )}
-            {/* 服务端升级中温和提示横幅；升级期间隐藏普通未连接条，消除断网误解 */}
-            {isServerUpgrading ? (
+            {/* 顶部异常状态横幅：日常建连由顶栏静默/轻量承载，仅在升级、鉴权失败或长时间无法连通时展开 */}
+            {banner.kind === 'upgrading' ? (
                 <View style={styles.upgradingBanner}>
                     <Text style={styles.upgradingBannerText}>
                         {t('assistant.serverUpgradingBanner', '⚡ 服务端正在升级新版本，稍候数秒自动恢复')}
                     </Text>
                 </View>
-            ) : connectionState !== 'connected' ? (
-                <View style={styles.statusBar}>
-                    <View
-                        style={[
-                            styles.statusDot,
-                            connectionState === 'connecting' || connectionState === 'reconnecting'
-                                ? styles.dotConnecting
-                                : styles.dotDisconnected,
-                        ]}
-                    />
-                    <Text style={styles.statusText}>
-                        {connectionState === 'connecting' || connectionState === 'reconnecting'
-                            ? t('assistant.statusConnecting', '正在连接...')
-                            : connectionError || t('assistant.statusDisconnected', '服务未连接')}
+            ) : banner.kind === 'auth_error' ? (
+                <View style={styles.authErrorBanner} testID="chat-auth-error-banner">
+                    <Icon name="error-outline" size={16} color={theme.colors.dangerText} style={styles.bannerIcon} />
+                    <Text style={styles.authErrorBannerText}>
+                        {banner.message || t('assistant.authTokenInvalid', '访问令牌已失效，请重新配置')}
                     </Text>
-
+                    <TouchableOpacity
+                        style={styles.authSettingsBtn}
+                        onPress={() => navigation.navigate('AssistantConfig')}
+                    >
+                        <Text style={styles.authSettingsBtnText}>{t('assistant.goToSettings', '去设置')}</Text>
+                    </TouchableOpacity>
+                </View>
+            ) : banner.kind === 'unreachable' ? (
+                <View style={styles.statusBar} testID="chat-unreachable-banner">
+                    <Icon name="cloud-off" size={16} color={theme.colors.warnText} style={styles.bannerIcon} />
+                    <Text style={styles.statusText}>
+                        {t('assistant.statusUnreachable', '暂时无法连接服务')}
+                    </Text>
                     <TouchableOpacity
                         style={styles.reconnectBtn}
-                        onPress={() => AssistantClient.getInstance().connect()}
+                        onPress={retryConnection}
                     >
                         <Text style={styles.reconnectBtnText}>{t('browser.retry', '重试')}</Text>
                     </TouchableOpacity>
@@ -1478,23 +1482,41 @@ const styles = StyleSheet.create({
     statusBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: theme.colors.warnBgStrong,
+        backgroundColor: theme.colors.warnBg,
         paddingHorizontal: 16,
         paddingVertical: 8,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.warnBorder,
     },
-    statusDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
+    authErrorBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: theme.colors.dangerBg,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#FFCDD2',
+    },
+    bannerIcon: {
         marginRight: 8,
     },
-    dotConnecting: {
-        backgroundColor: theme.colors.warnText,
+    authErrorBannerText: {
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.dangerText,
+        flex: 1,
     },
-    dotDisconnected: {
-        backgroundColor: theme.colors.textSecondary,
+    authSettingsBtn: {
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        backgroundColor: theme.colors.surface,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#FFCDD2',
+    },
+    authSettingsBtnText: {
+        fontSize: auxFontSizes.caption,
+        color: theme.colors.dangerText,
+        fontWeight: '600',
     },
     statusText: {
         fontSize: auxFontSizes.caption,

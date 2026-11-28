@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatScreen } from '../screens/ChatScreen';
+import { ChatHeaderTitle } from '../components/ChatHeaderTitle';
 import { WorkRecordsScreen } from '../screens/WorkRecordsScreen';
 import { FlashScreen } from '../screens/FlashScreen';
 import { TodoScreen } from '../screens/TodoScreen';
@@ -54,6 +55,8 @@ const ChatStackScreen = () => {
                 component={ChatScreen}
                 options={({ navigation }) => ({
                     title: t('tabs.chat'),
+                    // eslint-disable-next-line react/no-unstable-nested-components -- headerTitle 是导航渲染回调，不是组件定义
+                    headerTitle: () => <ChatHeaderTitle />,
                     // eslint-disable-next-line react/no-unstable-nested-components -- headerRight 是导航渲染回调，不是组件定义
                     headerRight: () => (
                         <WorkRecordsHeaderButton
