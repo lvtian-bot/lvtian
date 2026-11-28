@@ -3,6 +3,7 @@
     "chat": "Chat",
     "timeline": "Flash",
     "todo": "Tasks",
+    "moments": "Moments",
     "files": "Files",
     "browser": "Notes",
     "settings": "Settings",
@@ -39,6 +40,10 @@
     "retryAttachmentFailed": "Attachment file is no longer available, cannot resend",
     "previewImage": "Preview image",
     "resend": "Resend"
+  },
+  "moments": {
+    "regenerateSummary": "Regenerate summary",
+    "deleteSummary": "Delete summary"
   },
   "about": {
     "title": "About",

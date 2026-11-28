@@ -16,6 +16,8 @@ import { AcpEngineManager, EngineStatusPayload, type EngineFailure } from './acp
 import { FileManager, FileManagerError } from './fileManager.js';
 import { SkillManager } from './skillManager.js';
 import { ContextConsolidator } from './contextConsolidator.js';
+import { ClipperMomentsClient, MomentsArchive } from './moments.js';
+import { handleMomentsHttp } from './momentsHttp.js';
 import { handleNativeTaskHttp, isNativeTaskPath } from './nativeTaskHttp.js';
 import type { NativeTaskRuntime } from './nativeTaskRuntime.js';
 import { GOOGLE_CALENDAR_CALLBACK, loadGoogleCalendarConfig } from './googleCalendarConfig.js';
@@ -112,6 +114,10 @@ export class LvtianServer {
     private taskReporting?: NativeTaskReporting;
     private taskReportStore?: TaskReportStore;
     private readonly googleCalendar: GoogleCalendarConnector;
+    private readonly moments: MomentsArchive;
+    private readonly clipperMoments = new ClipperMomentsClient(
+        process.env.LVTIAN_WEB_CLIPPER_API_URL, process.env.LVTIAN_WEB_CLIPPER_API_TOKEN,
+    );
 
     constructor(
         config: ServerConfig,
@@ -132,6 +138,7 @@ export class LvtianServer {
         this.acpEngine = acpEngine;
         this.acpEngine.onAutonomousJobReply = (sessionId, reply) => this.publishAutonomousJobReply(sessionId, reply);
         this.fileManager = fileManager || new FileManager(config.workspace);
+        this.moments = new MomentsArchive(config.workspace);
         this.skillManager = skillManager || new SkillManager(config.workspace);
         this.contextConsolidator = contextConsolidator || new ContextConsolidator(sessionManager);
         const { allowedRoot, workspaceDir } = this.fileManager.getSystemInfo();
@@ -290,6 +297,12 @@ export class LvtianServer {
 
         if (isGoogleCalendarApiPath(pathname)) {
             await handleGoogleCalendarApi(req, res, urlObj, this.googleCalendar, this.isDraining);
+            return;
+        }
+
+        if (pathname === '/api/moments' || pathname === '/api/moments/summary') {
+            await handleMomentsHttp(req, res, urlObj, this.moments, this.clipperMoments,
+                () => this.readJsonBody<unknown>(req, 8 * 1024), this.isDraining);
             return;
         }
 
