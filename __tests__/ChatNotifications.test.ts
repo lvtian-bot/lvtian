@@ -2,8 +2,9 @@ import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NotificationResponse } from 'expo-notifications';
 import {
-    chatServerIdentity, getSystemNotificationRoute, notifyChatReplies, notifyPushedChatReplies, pushedReplyIds, setChatNotificationPermission,
-    setSystemNotificationEnrollment, startChatNotifications,
+    CHAT_NOTIFICATION_CHANNEL, chatServerIdentity, clearVisibleChatNotifications, getSystemNotificationRoute,
+    notifyChatReplies, notifyPushedChatReplies, pushedReplyIds, removeLegacyChatNotificationChannel,
+    setChatNotificationPermission, setSystemNotificationEnrollment, startChatNotifications,
 } from '../src/services/chatNotifications';
 import { useAssistantStore } from '../src/store/useAssistantStore';
 import { useSettingsStore } from '../src/store/useSettingsStore';
@@ -14,6 +15,8 @@ const mockSchedule = jest.fn();
 const mockGetPermissions = jest.fn();
 const mockRequestPermissions = jest.fn();
 const mockSetChannel = jest.fn();
+const mockDeleteChannel = jest.fn();
+const mockDismissAll = jest.fn();
 const mockClearResponse = jest.fn();
 const mockListenResponse = jest.fn();
 const mockSetHandler = jest.fn();
@@ -23,8 +26,9 @@ jest.mock('../src/services/chatPushModules', () => ({
         notifications: {
             DEFAULT_ACTION_IDENTIFIER: 'default',
             AndroidImportance: { HIGH: 4 },
-            AndroidNotificationVisibility: { PRIVATE: 0 },
             setNotificationChannelAsync: (...args: unknown[]) => mockSetChannel(...args),
+            deleteNotificationChannelAsync: (...args: unknown[]) => mockDeleteChannel(...args),
+            dismissAllNotificationsAsync: () => mockDismissAll(),
             getPermissionsAsync: () => mockGetPermissions(),
             requestPermissionsAsync: () => mockRequestPermissions(),
             scheduleNotificationAsync: (...args: unknown[]) => mockSchedule(...args),
@@ -51,6 +55,9 @@ beforeEach(async () => {
         serverToken: 'test-' + ++testAccount, connectionState: 'connected', messages: [], currentSeq: 0 });
     useSettingsStore.setState({ hasHydrated: true, chatNotificationsEnabled: true, chatNotificationPreview: true });
     mockGetPermissions.mockResolvedValue({ granted: true });
+    mockDeleteChannel.mockResolvedValue(undefined);
+    mockSetChannel.mockResolvedValue(undefined);
+    mockDismissAll.mockResolvedValue(undefined);
     mockListenResponse.mockReturnValue({ remove: jest.fn() });
 });
 afterEach(() => { stop?.(); stop = undefined; });
@@ -78,7 +85,16 @@ it('displays one preview when push and live synchronization deliver the same fin
     const request = mockSchedule.mock.calls[0][0];
     expect(request.content.body).toBe('本周汇报 已经整理完毕。');
     expect(request.content.title).toBe(i18n.t('chatNotifications.title'));
-    expect(mockSetChannel).toHaveBeenCalledWith('chat-messages', expect.objectContaining({ lockscreenVisibility: 0 }));
+    expect(request.trigger).toEqual({ channelId: CHAT_NOTIFICATION_CHANNEL });
+    expect(mockDeleteChannel).not.toHaveBeenCalled();
+    expect(mockSetChannel).toHaveBeenCalledWith(CHAT_NOTIFICATION_CHANNEL, {
+        name: i18n.t('chatNotifications.enabled'),
+        importance: 4,
+        enableVibrate: true,
+        showBadge: true,
+    });
+    await removeLegacyChatNotificationChannel();
+    expect(mockDeleteChannel).toHaveBeenCalledWith('chat-messages');
     const onResponse = mockListenResponse.mock.calls[0][0] as (response: NotificationResponse) => void;
     onResponse({ actionIdentifier: 'default', notification: { date: Date.now(), request } });
     await Promise.resolve();
@@ -165,10 +181,60 @@ it('lets the system own all completed replies while foreground notifications can
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     expect(mockSchedule.mock.calls[0][0].content.body).toBe('本周汇报 已经整理完毕。');
 
+    const previewNotice = {
+        date: Date.now(),
+        request: {
+            identifier: 'system-reply-preview',
+            trigger: null,
+            content: {
+                title: '绿天',
+                body: '本周汇报 已经整理完毕。',
+                data: { type: 'lvtian_system_chat_reply', messageId: regular.id, routeId },
+            },
+        },
+    };
+    await expect(handler.handleNotification(previewNotice)).resolves.toMatchObject({ shouldShowBanner: true });
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+
+    useSettingsStore.setState({ chatNotificationPreview: false });
+    await expect(handler.handleNotification(previewNotice)).resolves.toMatchObject({ shouldShowBanner: false });
+    expect(mockSchedule).toHaveBeenCalledTimes(2);
+    expect(mockSchedule.mock.calls[1][0].content.body).toBe(i18n.t('chatNotifications.newMessage'));
+    useSettingsStore.setState({ chatNotificationPreview: true });
+
     const onResponse = mockListenResponse.mock.calls[0][0];
     onResponse({ actionIdentifier: 'default', notification });
     for (let i = 0; i < 4; i += 1) await Promise.resolve();
     expect(open).toHaveBeenCalledWith({ messageId: regular.id, serverIdentity: identity });
+});
+
+it('dismisses tray notifications only when the app is active on main chat', async () => {
+    let viewingChat = true;
+    const listeners: Array<(state: string) => void> = [];
+    const addListener = jest.spyOn(AppState, 'addEventListener').mockImplementation((_type, handler) => {
+        listeners.push(handler as (state: string) => void);
+        return { remove: jest.fn() } as unknown as ReturnType<typeof AppState.addEventListener>;
+    });
+    try {
+        stop = startChatNotifications(() => viewingChat, jest.fn());
+        expect(mockDismissAll).toHaveBeenCalledTimes(1);
+
+        Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'background' });
+        await clearVisibleChatNotifications();
+        expect(mockDismissAll).toHaveBeenCalledTimes(1);
+
+        Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'active' });
+        viewingChat = false;
+        await clearVisibleChatNotifications();
+        expect(mockDismissAll).toHaveBeenCalledTimes(1);
+
+        viewingChat = true;
+        listeners.forEach(listener => listener('active'));
+        await Promise.resolve();
+        expect(mockDismissAll).toHaveBeenCalledTimes(2);
+    } finally {
+        addListener.mockRestore();
+    }
 });
 
 it('suppresses replies read in open chat and hides text when previews are off', async () => {

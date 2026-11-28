@@ -9,7 +9,10 @@ import { createRequire } from 'node:module';
 import type WebSocket from 'ws';
 import type { WebSocketServer } from 'ws';
 import { ServerConfig } from './config.js';
-import { ChatSyncPush, createChatSyncPush, isChatPushToken, readSystemNotification, SYSTEM_NOTIFICATION_HEADER } from './chatSyncPush.js';
+import {
+    ChatSyncPush, createChatSyncPush, isChatPushToken, NOTIFICATION_CHANNEL_HEADER,
+    readSystemNotification, SYSTEM_NOTIFICATION_HEADER,
+} from './chatSyncPush.js';
 import { SessionManager } from './sessionManager.js';
 import { MemoryManager } from './memoryManager.js';
 import { AcpEngineManager, EngineStatusPayload, type EngineFailure } from './acpEngineManager.js';
@@ -96,7 +99,7 @@ export class LvtianServer {
         if (sessionId !== 'main' || message?.role !== 'assistant' || message.status !== 'done') return;
         // Only legacy device registrations limit system notifications to task reports.
         const kind = message.source === 'native_task_report' ? 'task' : 'chat';
-        this.chatSyncPush?.wakeDevices(message.id, message.content.trim() ? kind : undefined);
+        this.chatSyncPush?.wakeDevices(message.id, message.content.trim() ? { kind, content: message.content } : undefined);
     }
     private sessionManager: SessionManager;
     private memoryManager: MemoryManager;
@@ -387,7 +390,11 @@ export class LvtianServer {
             const systemNotification = registration.remove === true ? undefined : readSystemNotification(registration.taskNotification);
             if (registration.remove === true) this.chatSyncPush.unregister(registration.token);
             else this.chatSyncPush.register(registration.token, systemNotification);
-            const headers = systemNotification ? { [SYSTEM_NOTIFICATION_HEADER]: systemNotification.scope === 'chat' ? '2' : '1' } : {};
+            const headers: Record<string, string> = {};
+            if (systemNotification) {
+                headers[SYSTEM_NOTIFICATION_HEADER] = systemNotification.scope === 'chat' ? '2' : '1';
+                if (systemNotification.channelId) headers[NOTIFICATION_CHANNEL_HEADER] = systemNotification.channelId;
+            }
             res.writeHead(204, headers).end();
             return;
         }

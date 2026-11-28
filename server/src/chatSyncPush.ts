@@ -7,8 +7,17 @@ import { createInstance } from 'i18next';
 const DEVICE_TTL_MS = 60 * 24 * 60 * 60 * 1000;
 const MAX_DEVICES = 32;
 const INVALID_TOKEN = new Set(['messaging/registration-token-not-registered', 'messaging/invalid-registration-token']);
+export const CHAT_NOTIFICATION_CHANNEL = 'chat-messages-v2';
+const LEGACY_NOTIFICATION_CHANNEL = 'chat-messages';
 // Retain the original registration header for already installed clients.
 export const SYSTEM_NOTIFICATION_HEADER = 'X-Lvtian-Task-Notification';
+export const NOTIFICATION_CHANNEL_HEADER = 'X-Lvtian-Notification-Channel';
+
+function previewText(content: string): string {
+    const plainText = content.trim().replace(/^#{1,6}\s+/gm, '').replace(/\s+/g, ' ');
+    const characters = Array.from(plainText);
+    return characters.length > 110 ? characters.slice(0, 110).join('') + '…' : plainText;
+}
 
 const i18n = createInstance();
 await i18n.init({
@@ -24,6 +33,8 @@ interface SystemNotification {
     routeId: string;
     language: 'zh' | 'en';
     scope?: 'chat';
+    preview?: boolean;
+    channelId?: string;
 }
 
 interface PushDevice {
@@ -37,9 +48,15 @@ export function isChatPushToken(value: unknown): value is string {
 
 export function readSystemNotification(value: unknown): SystemNotification | undefined {
     if (typeof value !== 'object' || !value) return;
-    const { routeId, language, scope } = value as Partial<Record<keyof SystemNotification, unknown>>;
+    const { routeId, language, scope, preview, channelId } = value as Partial<Record<keyof SystemNotification, unknown>>;
     if (typeof routeId === 'string' && /^[a-f0-9]{32}$/.test(routeId) && (language === 'zh' || language === 'en')) {
-        return { routeId, language, scope: scope === 'chat' ? scope : undefined };
+        return {
+            routeId,
+            language,
+            scope: scope === 'chat' ? scope : undefined,
+            preview: typeof preview === 'boolean' ? preview : undefined,
+            channelId: channelId === CHAT_NOTIFICATION_CHANNEL ? CHAT_NOTIFICATION_CHANNEL : undefined,
+        };
     }
 }
 
@@ -80,8 +97,11 @@ export class ChatSyncPush {
         this.save(devices);
     }
 
-    wakeDevices(messageId: string, notice?: 'chat' | 'task'): void {
-        if (notice) this.notifyReply(messageId, notice);
+    wakeDevices(messageId: string, notice?: 'chat' | 'task' | { kind: 'chat' | 'task'; content?: string }): void {
+        if (notice) {
+            const target = typeof notice === 'string' ? { kind: notice } : notice;
+            this.notifyReply(messageId, target.kind, target.content);
+        }
         this.pending.add(messageId);
         this.drainPending();
     }
@@ -116,19 +136,20 @@ export class ChatSyncPush {
         return Array.from(this.devices).filter(([, device]) => device.registeredAt > cutoff);
     }
 
-    private notifyReply(messageId: string, kind: 'chat' | 'task'): void {
+    private notifyReply(messageId: string, kind: 'chat' | 'task', content?: string): void {
         for (const registration of this.activeDevices()) {
             const notice = registration[1].systemNotification;
             if (!notice || (notice.scope !== 'chat' && kind !== 'task')) continue;
-            const { routeId, language, scope } = notice;
+            const { routeId, language, scope, preview, channelId } = notice;
             const translate = i18n.getFixedT(language);
+            const body = (preview === true && content ? previewText(content) : '') || translate('body');
             void this.send([registration], {
-                notification: { title: translate('title'), body: translate('body') },
+                notification: { title: translate('title'), body },
                 data: { type: scope === 'chat' ? 'lvtian_system_chat_reply' : 'lvtian_task_report', messageId, routeId },
                 android: {
                     priority: 'high',
                     ttl: 6 * 60 * 60 * 1000,
-                    notification: { channelId: 'chat-messages', tag: messageId, visibility: 'private' },
+                    notification: { channelId: channelId ?? LEGACY_NOTIFICATION_CHANNEL, tag: messageId },
                 },
             });
         }

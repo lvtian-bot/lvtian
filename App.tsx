@@ -13,7 +13,7 @@ import { useSettingsStore } from './src/store/useSettingsStore';
 import { cloudService } from './src/services/CloudService';
 
 import { ChatNotificationTarget, RootStackParamList } from './src/types/navigation';
-import { startChatNotifications } from './src/services/chatNotifications';
+import { clearVisibleChatNotifications, startChatNotifications } from './src/services/chatNotifications';
 import { startChatBackgroundPush } from './src/services/chatBackgroundPush';
 
 
@@ -51,7 +51,12 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
   const handleNavigationReady = useCallback(() => {
     openPendingReply();
     openPendingShare();
+    clearVisibleChatNotifications().catch(() => undefined);
   }, [openPendingReply, openPendingShare]);
+  const handleNavigationStateChange = useCallback(() => {
+    openPendingShare();
+    clearVisibleChatNotifications().catch(() => undefined);
+  }, [openPendingShare]);
 
   // Logic to initialize cloud service based on settings
   const { webDavConfig, cloudProvider, hasHydrated } = useSettingsStore();
@@ -95,7 +100,7 @@ function App(props: { sharedText?: string }): React.JSX.Element | null {
         {/* edge-to-edge 下状态栏透明，底色由各页头部背景透出 */}
         <StatusBar barStyle="dark-content" />
         <SafeAreaProvider>
-          <NavigationContainer ref={navigationRef} onReady={handleNavigationReady} onStateChange={openPendingShare}>
+          <NavigationContainer ref={navigationRef} onReady={handleNavigationReady} onStateChange={handleNavigationStateChange}>
             <AppNavigator />
           </NavigationContainer>
 

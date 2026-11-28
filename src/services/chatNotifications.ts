@@ -10,7 +10,8 @@ import { AssistantClient } from './AssistantClient';
 import { stableHash } from '../utils/identityHash';
 import { pushModules } from './chatPushModules';
 
-const CHANNEL = 'chat-messages';
+export const CHAT_NOTIFICATION_CHANNEL = 'chat-messages-v2';
+const LEGACY_CHANNEL = 'chat-messages';
 const TYPE = 'lvtian_chat_reply';
 const SYSTEM_TYPE = 'lvtian_system_chat_reply';
 const LEGACY_SYSTEM_TYPE = 'lvtian_task_report';
@@ -48,11 +49,20 @@ export function pushedReplyIds(value: unknown): string[] {
     }
 }
 
-export const ensureChatNotificationChannel = () => pushModules?.notifications.setNotificationChannelAsync(CHANNEL, {
-    name: i18n.t('chatNotifications.enabled'),
-    importance: pushModules.notifications.AndroidImportance.HIGH,
-    lockscreenVisibility: pushModules.notifications.AndroidNotificationVisibility.PRIVATE,
-});
+export async function ensureChatNotificationChannel(): Promise<void> {
+    const notifications = pushModules?.notifications;
+    if (!notifications) return;
+    await notifications.setNotificationChannelAsync(CHAT_NOTIFICATION_CHANNEL, {
+        name: i18n.t('chatNotifications.enabled'),
+        importance: notifications.AndroidImportance.HIGH,
+        enableVibrate: true,
+        showBadge: true,
+    });
+}
+
+export async function removeLegacyChatNotificationChannel(): Promise<void> {
+    await pushModules?.notifications.deleteNotificationChannelAsync?.(LEGACY_CHANNEL).catch(() => undefined);
+}
 
 // Keep the persisted keys so notifications already in the tray still open their replies.
 const notificationRouteKey = (routeId: string) => 'lvtian-task-notification-route:' + routeId;
@@ -116,8 +126,16 @@ function scheduleReplyNotification(messageId: string, serverIdentity: string, pr
             body: preview || i18n.t('chatNotifications.newMessage'),
             data: { type: TYPE, messageId, serverIdentity },
         },
-        trigger: { channelId: CHANNEL },
+        trigger: { channelId: CHAT_NOTIFICATION_CHANNEL },
     });
+}
+
+export async function clearVisibleChatNotifications(): Promise<void> {
+    const notifications = pushModules?.notifications;
+    if (!notifications?.dismissAllNotificationsAsync || !isReadingChat()) return;
+    try {
+        await notifications.dismissAllNotificationsAsync();
+    } catch { /* Ignore tray cleanup errors if the native presenter is unavailable. */ }
 }
 
 export function notifyChatReplies(messages: AssistantMessage[]): Promise<void> {
@@ -226,6 +244,13 @@ async function handleNotification(response: NotificationResponse, openReply: (ta
     openReply({ messageId: data.messageId, serverIdentity });
 }
 
+function isGenericNoticeBody(body: unknown): boolean {
+    return typeof body === 'string' && (
+        body === i18n.t('chatNotifications.newMessage', { lng: 'zh' })
+        || body === i18n.t('chatNotifications.newMessage', { lng: 'en' })
+    );
+}
+
 export function startChatNotifications(isChatVisible: () => boolean, openReply: (target: ChatNotificationTarget) => void) {
     const notifications = pushModules?.notifications;
     if (!notifications) return;
@@ -237,15 +262,25 @@ export function startChatNotifications(isChatVisible: () => boolean, openReply: 
             const settings = useSettingsStore.getState();
             let show = Boolean(serverIdentity && serverIdentity === currentChatIdentity() && !isReadingChat()
                 && settings.chatNotificationsEnabled);
-            if (show && serverIdentity && data?.type === SYSTEM_TYPE && typeof data.messageId === 'string'
-                && AppState.currentState === 'active' && settings.chatNotificationPreview) {
-                const reply = useAssistantStore.getState().messages.find(message =>
-                    message.id === data.messageId && isCompletedReply(message));
-                if (reply) {
-                    try {
-                        await scheduleReplyNotification(reply.id, serverIdentity, previewText(reply.content));
+            if (show && serverIdentity && (data?.type === SYSTEM_TYPE || data?.type === LEGACY_SYSTEM_TYPE)
+                && typeof data.messageId === 'string') {
+                const body = notification.request.content.body;
+                if (!settings.chatNotificationPreview) {
+                    if (!isGenericNoticeBody(body)) {
+                        try {
+                            await scheduleReplyNotification(data.messageId, serverIdentity);
+                        } catch { /* Do not expose preview text when the local preview setting is off. */ }
                         show = false;
-                    } catch { /* Keep the original system notice if the preview could not be displayed. */ }
+                    }
+                } else if (data?.type === SYSTEM_TYPE && AppState.currentState === 'active' && isGenericNoticeBody(body)) {
+                    const reply = useAssistantStore.getState().messages.find(message =>
+                        message.id === data.messageId && isCompletedReply(message));
+                    if (reply) {
+                        try {
+                            await scheduleReplyNotification(reply.id, serverIdentity, previewText(reply.content));
+                            show = false;
+                        } catch { /* Keep the original system notice if the preview could not be displayed. */ }
+                    }
                 }
             }
             return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };
@@ -258,7 +293,11 @@ export function startChatNotifications(isChatVisible: () => boolean, openReply: 
     const response = notifications.addNotificationResponseReceivedListener(onResponse);
     const last = notifications.getLastNotificationResponse();
     if (last) onResponse(last);
+    clearVisibleChatNotifications().catch(() => undefined);
 
+    const appState = AppState.addEventListener?.('change', state => {
+        if (state === 'active') clearVisibleChatNotifications().catch(() => undefined);
+    });
     const unsubscribe = useAssistantStore.subscribe((state, before) => {
         if (state.messages === before.messages || state.serverUrl !== before.serverUrl
             || state.serverToken !== before.serverToken || !useSettingsStore.getState().chatNotificationsEnabled) return;
@@ -279,6 +318,7 @@ export function startChatNotifications(isChatVisible: () => boolean, openReply: 
         isViewingChat = () => false;
         notifications.setNotificationHandler(null);
         response.remove();
+        appState?.remove();
         unsubscribe();
     };
 }
